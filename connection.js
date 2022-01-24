@@ -1,5 +1,5 @@
 module.exports = {
-    url: 'mongodb+srv://dt187:dt187@cluster0.6uzwm.mongodb.net/test',
+    url: 'mongodb+srv://dt187:dt187@cluster0.6uzwm.mongodb.net/myFirstDatabase?retryWrites=true&w=majority',
     params: {
         useNewUrlParser: true,
         useUnifiedTopology: true
