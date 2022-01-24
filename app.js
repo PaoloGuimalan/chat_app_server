@@ -11,7 +11,7 @@ const Message = require("./schemas/messages");
 const Contact = require("./schemas/contacts");
 
 const app = express();
-const port = process.env.port || 5000
+const port = process.env.PORT || 5000
 
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
