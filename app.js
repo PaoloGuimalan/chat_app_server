@@ -6,7 +6,7 @@ const mongoose = require("mongoose");
 
 const connection = require("./connection");
 
-const Register = require("./schemas/schemas");
+const Register = require("./schemas");
 const Message = require("./schemas/messages");
 const Contact = require("./schemas/contacts");
 
@@ -16,7 +16,11 @@ const port = process.env.PORT || 3001
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
 
-app.use(cors());
+app.use(cors({
+    origin:'*', 
+    credentials:true,            //access-control-allow-credentials:true
+    optionSuccessStatus:200,
+ }));
 app.use(express.json());
 
 async function connectToMongoDB(){
