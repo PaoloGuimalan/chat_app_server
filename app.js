@@ -53,13 +53,13 @@ app.post('/userregister', (req, res) => {
         password: req.body.password
     }, (err, result) => {
         if(err){
-            res.send([{error: "Unable to Register!", registered: false}]);
+            
         }else{
             res.send([{prompt: "Register Successfull", registered: true}]);
         }
     });
 
-    newRegister.save();
+    newRegister.save().then(() => res.send([{prompt: "Register Successfull", registered: true}])).catch((err) => res.send([{error: "Unable to Register!", registered: false}]));
 })
 
 app.post('/userlogin', (req, res) => {
@@ -74,7 +74,7 @@ app.post('/userlogin', (req, res) => {
     //     })
     // })
     // const id = mongoose.Types.ObjectId(req.body.email)
-    Register.findOne({email: req.body.email, password: req.body.password},{username: true} , (err, results) => {
+    Register.findOne({email: req.body.email, password: req.body.password},{username: true, email: true, password: true} , (err, results) => {
         // console.log(results);
         if(err){
             res.send([{error: "Unable to Log In!", logged: false}]);
