@@ -77,12 +77,12 @@ app.post('/userlogin', (req, res) => {
     Register.findOne({email: req.body.email, password: req.body.password},{username: true} , (err, results) => {
         // console.log(results);
         if(err){
-            res.send([{error: "Unable to Log In!", logged: true}]);
+            res.send([{error: "Unable to Log In!", logged: false}]);
         }else if(results.length == 0){
-            res.send([{error: "Unable to Log In!", logged: true}]);
+            res.send([{error: "Unable to Log In!", logged: false}]);
         }
         else{
-            res.send([{...results, logged: true}]);
+            res.send([{...results, message: "Logged In!" ,logged: true}]);
         };
     })
 })
