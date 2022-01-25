@@ -82,7 +82,7 @@ app.post('/userlogin', (req, res) => {
             res.send([{error: "No Existing Account!", logged: false}]);
         }
         else{
-            res.send([{...results, message: "Logged In!" ,logged: true}]);
+            res.send([{...results._doc, message: "Logged In!" ,logged: true}]);
         };
     })
 })
