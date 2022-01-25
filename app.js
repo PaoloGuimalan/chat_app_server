@@ -79,7 +79,7 @@ app.post('/userlogin', (req, res) => {
         if(err){
             res.send([{error: "Unable to Log In!", logged: false}]);
         }else if(results.length == 0){
-            res.send([{error: "Unable to Log In!", logged: false}]);
+            res.send([{error: "No Existing Account!", logged: false}]);
         }
         else{
             res.send([{...results, message: "Logged In!" ,logged: true}]);
