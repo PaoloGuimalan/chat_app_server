@@ -9,6 +9,7 @@ const connection = require("./connection");
 const Register = require("./schemas");
 const Message = require("./schemas/messages");
 const Contact = require("./schemas/contacts");
+const Notifs = require("./schemas/notifications")
 
 const app = express();
 const port = process.env.PORT || 3001
@@ -218,6 +219,40 @@ app.post('/tonotif', (req, res) => {
     //         };
     //     })
     // })
+
+    Notifs.count({}, async (err, result) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+
+            var today = await new Date();
+            var dd = await String(today.getDate()).padStart(2, '0');
+            var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+            var yyyy = await today.getFullYear();
+
+            var today_fixed = await mm + '/' + dd + '/' + yyyy;
+
+            const newNotifs = await new Notifs({
+                notif_id: result + 1,
+                notif_description: req.body.desco,
+                notif_to: req.body.usero,
+                notif_date: today_fixed,
+                notif_type: "contact_sender"
+            })
+
+            newNotifs.save().then(async() => {
+                const secNewNotifs = await new Notifs({
+                    notif_id: result + 2,
+                    notif_description: req.body.desct,
+                    notif_to: req.body.usert,
+                    notif_date: today_fixed,
+                    notif_type: "contact_receiver"
+                })
+                secNewNotifs.save();
+            }).catch((err) => console.log);;
+        }
+    })
 })
 
 app.get('/contact/:userna', (req, res) => {
@@ -248,6 +283,15 @@ app.get('/notifications/:iduse', (req, res) => {
     //         else res.send(rows);
     //     })
     // })
+
+    Notifs.find({notif_to: req.params.iduse}, (err, result) => {
+        if(err){
+            console.log(err)
+        }
+        else{
+            res.send(result);
+        }
+    })
 })
 
 
