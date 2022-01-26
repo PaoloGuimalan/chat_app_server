@@ -121,7 +121,7 @@ app.get('/conversation/:conid', async (req, res) => {
     //         else res.send(rows);
     //     })
     // })
-    await Message.find({$and: [{$or: [{who_sent: idconv[0], sent_to: idconv[1]}, {$or: [{who_sent: idconv[1], sent_to: idconv[0]}]}]}]}, null, {limit: 10, sort: {message_id: -1}}, (err, result) => {
+    await Message.find({$and: [{$or: [{who_sent: idconv[0], sent_to: idconv[1]}, {$or: [{who_sent: idconv[1], sent_to: idconv[0]}]}]}]}, (err, result) => {
         if(err){
             console.log(err);
         }else{
