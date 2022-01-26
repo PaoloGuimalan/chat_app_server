@@ -284,7 +284,7 @@ app.get('/notifications/:iduse', (req, res) => {
     //     })
     // })
 
-    Notifs.find({notif_to: req.params.iduse}, (err, result) => {
+    Notifs.find({notif_to: req.params.iduse}, null, {sort: {notif_id: -1}}, (err, result) => {
         if(err){
             console.log(err)
         }
