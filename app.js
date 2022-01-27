@@ -294,6 +294,17 @@ app.get('/notifications/:iduse', (req, res) => {
     })
 })
 
+app.get('/getallconvo/:username', (req, res) => {
+    Message.count({sent_to: req.params.username}, (err, result) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+            res.send([{convoCount: result}]);
+        }
+    })
+})
+
 
 connectToMongoDB()
     .then(app.listen(port, () => console.log(`Port ongoing! Port: ${port}`)))
