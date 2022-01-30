@@ -101,9 +101,17 @@ app.get('/messages/:username', (req, res) => {
     //     })
     // })
 
-    // Message.find({sent_to: req.params.username}, (err, result) => {
-    //     res.send([result]);
-    // })
+    Message.aggregate([{$group: { _id: "$conversation_id",
+    conversation_id: {
+      $last: "$conversation_id"
+    },
+    message_id: {$last: "$message_id"},
+    message: {$last: "$message"},
+    who_sent: {$last: "$who_sent"},
+    sent_to: {$last: "$sent_to"}}},{$match: {$or: [{who_sent: req.params.username}, {sent_to: req.params.username}]}}, {$sort: {message_id: -1}}], (err, result) => {
+        res.send(result);
+        // console.log(result);
+    })
 })
 
 app.get('/conversation/:conid', async (req, res) => {
