@@ -159,7 +159,8 @@ app.post('/sendto', (req, res) => {
             conversation_id: req.body.id,
             message: req.body.txt,
             who_sent: req.body.from,
-            sent_to: req.body.to
+            sent_to: req.body.to,
+            type: "conversation"
         })
     
         newMessage.save();
@@ -320,14 +321,86 @@ app.get('/getallconvo/:username', (req, res) => {
 
 app.post('/accept_req', (req, res) => {
     const id = req.body.notif_id;
+    const usersend = req.body.release_from;
+    const userrec = req.body.release_to;
+    const conv = `${usersend}&${userrec}`;
 
-    Notifs.findOneAndUpdate({notif_id: id}, {$set: {notif_status: true}}, (err) => {
+    Notifs.updateOne({notif_id: id}, {$set: {notif_status: true}}, async (err) => {
         if(err){
             console.log(err);
         }
-    }).then(() => {
-        // Contact.findOneAndUpdate()
-    })
+    }).clone().catch(err => console.log(err));
+
+    Contact.updateOne({list_from: usersend, contact_username: userrec}, {$set: {status: "connected"}}, (err) => {
+        if(err){
+            console.log(err);
+        }
+    }).clone().then(() => {
+        Contact.count({}, async (err, results) => {
+            // console.log(results + 1);
+            const confContact = await new Contact({
+                contact_id: results + 1,
+                list_from: userrec,
+                contact_username: usersend,
+                status: 'connected'
+            })
+        
+            confContact.save().then(() => {
+                Notifs.count({}, async (err, result) => {
+                    if(err){
+                        console.log(err);
+                    }
+                    else{
+
+                        var today = await new Date();
+                        var dd = await String(today.getDate()).padStart(2, '0');
+                        var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+                        var yyyy = await today.getFullYear();
+
+                        var today_fixed = await mm + '/' + dd + '/' + yyyy;
+
+                        const confNotifs = new Notifs({
+                            notif_id: result + 1,
+                            notif_description: `${usersend} has accepted your request!`,
+                            notif_to: userrec,
+                            notif_from: usersend,
+                            notif_date: today_fixed,
+                            notif_type: "acceptance_notif",
+                            notif_status: false
+                        })
+
+                        confNotifs.save(async () => {
+                            Message.count({}, async (err, results) => {
+                                // await console.log(results);
+                                const newMessage = await new Message({
+                                    message_id: results + 1,
+                                    conversation_id: conv,
+                                    message: `${userrec} requested connection.`,
+                                    who_sent: userrec,
+                                    sent_to: usersend,
+                                    type: "initiator"
+                                })
+                            
+                                await newMessage.save().catch((err) => console.log(err));;
+
+                                const new2Message = await new Message({
+                                    message_id: results + 2,
+                                    conversation_id: conv,
+                                    message: `${usersend} is now connected.`,
+                                    who_sent: usersend,
+                                    sent_to: userrec,
+                                    type: "initiator"
+                                })
+                            
+                                await new2Message.save().catch((err) => console.log(err));;
+                            }).clone().catch(err => console.log(err));
+                        })
+                    }
+                }).clone().catch(err => console.log(err));
+            })
+        }).clone().catch(err => console.log(err));
+    }).catch(err => console.log(err));
+
 })
 
 
