@@ -200,7 +200,8 @@ app.post('/addcontact', (req, res) => {
                 const newContact = await new Contact({
                     contact_id: results + 1,
                     list_from: req.body.usern,
-                    contact_username: req.body.user
+                    contact_username: req.body.user,
+                    status: 'pending'
                 })
             
                 newContact.save().then(res.send(`${req.body.usern} has been added to your contacts.`)).catch((err) => console.log(err));
@@ -246,7 +247,8 @@ app.post('/tonotif', (req, res) => {
                 notif_description: req.body.desco,
                 notif_to: req.body.usero,
                 notif_date: today_fixed,
-                notif_type: "contact_sender"
+                notif_type: "contact_sender",
+                notif_status: false
             })
 
             newNotifs.save().then(async() => {
@@ -255,7 +257,8 @@ app.post('/tonotif', (req, res) => {
                     notif_description: req.body.desct,
                     notif_to: req.body.usert,
                     notif_date: today_fixed,
-                    notif_type: "contact_receiver"
+                    notif_type: "contact_receiver",
+                    notif_status: false
                 })
                 secNewNotifs.save();
             }).catch((err) => console.log);;
