@@ -246,6 +246,7 @@ app.post('/tonotif', (req, res) => {
                 notif_id: result + 1,
                 notif_description: req.body.desco,
                 notif_to: req.body.usero,
+                notif_from: req.body.usert,
                 notif_date: today_fixed,
                 notif_type: "contact_sender",
                 notif_status: false
@@ -256,6 +257,7 @@ app.post('/tonotif', (req, res) => {
                     notif_id: result + 2,
                     notif_description: req.body.desct,
                     notif_to: req.body.usert,
+                    notif_from: req.body.usero,
                     notif_date: today_fixed,
                     notif_type: "contact_receiver",
                     notif_status: false
@@ -313,6 +315,18 @@ app.get('/getallconvo/:username', (req, res) => {
         else{
             res.send([{convoCount: result}]);
         }
+    })
+})
+
+app.post('/accept_req', (req, res) => {
+    const id = req.body.notif_id;
+
+    Notifs.findOneAndUpdate({notif_id: id}, {$set: {notif_status: true}}, (err) => {
+        if(err){
+            console.log(err);
+        }
+    }).then(() => {
+        // Contact.findOneAndUpdate()
     })
 })
 
