@@ -193,7 +193,7 @@ app.post('/addcontact', (req, res) => {
 
     Register.findOne({username: req.body.usern}, (err, result) => {
         if(result == null){
-            res.send(`No User such ${req.body.usern} found.`)
+            res.send({message: `No User such ${req.body.usern} found.`, resp: false})
         }
         else{
             Contact.count({}, async (err, results) => {
@@ -205,7 +205,7 @@ app.post('/addcontact', (req, res) => {
                     status: 'pending'
                 })
             
-                newContact.save().then(res.send(`${req.body.usern} has been added to your contacts.`)).catch((err) => console.log(err));
+                newContact.save().then(res.send({message: `${req.body.usern} has been added to your contacts.`, resp: true})).catch((err) => console.log(err));
             })
         }
     })
