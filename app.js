@@ -432,6 +432,17 @@ app.post('/postfeed', (req, res) => {
     })
 })
 
+app.get('/allposts', (req, res) => {
+    Feed.find({}, (err, result) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+            res.send(result);
+        }
+    })
+})
+
 
 connectToMongoDB()
     .then(app.listen(port, () => console.log(`Port ongoing! Port: ${port}`)))
