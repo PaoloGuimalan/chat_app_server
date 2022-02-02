@@ -10,6 +10,7 @@ const Register = require("./schemas");
 const Message = require("./schemas/messages");
 const Contact = require("./schemas/contacts");
 const Notifs = require("./schemas/notifications")
+const Feed = require('./schemas/feed');
 
 const app = express();
 const port = process.env.PORT || 3001
@@ -401,6 +402,34 @@ app.post('/accept_req', (req, res) => {
         }).clone().catch(err => console.log(err));
     }).catch(err => console.log(err));
 
+})
+
+app.post('postfeed', (req, res) => {
+    Feed.count({} , async (err, resss) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+            var today = await new Date();
+            var dd = await String(today.getDate()).padStart(2, '0');
+            var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+            var yyyy = await today.getFullYear();
+
+            var today_fixed = await mm + '/' + dd + '/' + yyyy;
+
+            const newFeed = await new Feed({
+                post_id: result + 1,
+                username: {type: mongoose.Schema.Types.Mixed, required: true},
+                feed: {type: mongoose.Schema.Types.Mixed, required: true},
+                privacy: {type: String, required: true},
+                allowmapfeed: {type: Boolean, required: true},
+                date: today_fixed,
+                coordinates: {type: Array, required: true}
+            })
+
+            newFeed.save();
+        }
+    })
 })
 
 
