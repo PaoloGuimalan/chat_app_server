@@ -404,7 +404,7 @@ app.post('/accept_req', (req, res) => {
 
 })
 
-app.post('postfeed', (req, res) => {
+app.post('/postfeed', (req, res) => {
     Feed.count({} , async (err, resss) => {
         if(err){
             console.log(err);
@@ -418,13 +418,13 @@ app.post('postfeed', (req, res) => {
             var today_fixed = await mm + '/' + dd + '/' + yyyy;
 
             const newFeed = await new Feed({
-                post_id: result + 1,
-                username: {type: mongoose.Schema.Types.Mixed, required: true},
-                feed: {type: mongoose.Schema.Types.Mixed, required: true},
-                privacy: {type: String, required: true},
-                allowmapfeed: {type: Boolean, required: true},
+                post_id: resss + 1,
+                username: req.body.username,
+                feed: req.body.feed,
+                privacy: req.body.privacy,
+                allowmapfeed: req.body.allowmapfeed,
                 date: today_fixed,
-                coordinates: {type: Array, required: true}
+                coordinates: req.body.coordinates
             })
 
             newFeed.save();
