@@ -433,7 +433,7 @@ app.post('/postfeed', (req, res) => {
 })
 
 app.get('/allposts', (req, res) => {
-    Feed.find({}, (err, result) => {
+    Feed.find({}, null, {sort: {post_id: -1}}, (err, result) => {
         if(err){
             console.log(err);
         }
