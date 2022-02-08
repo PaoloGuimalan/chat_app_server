@@ -136,10 +136,11 @@ app.get('/conversation/:conid', async (req, res) => {
             console.log(err);
         }else{
             if(result.length == 0){
-                res.send({result: result, convodata: true});
+                res.send({result: result, convodata: false});
             }
             else{
-                res.send({result: result, convodata: false});
+                res.send({result: result, convodata: true});
+                // console.log(result.length)
             }
         }
         // console.log(result);
