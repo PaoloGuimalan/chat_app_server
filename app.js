@@ -17,23 +17,23 @@ const Status = require('./schemas/accStatus');
 const app = express();
 const port = process.env.PORT || 3001
 
-const server = require("http").createServer(app)
-const io = require("socket.io")(server, {cors: {
+const server = require("http").Server(app)
+const io = require("socket.io")(3002, {cors: {
     origin: "*",
     methods: "*",
     allowedHeaders: ["my-custom-header"],
     credentials: true
   }});
 
-server.use(bodyparser.urlencoded({ extended: false }));
-server.use(bodyparser.json());
+app.use(bodyparser.urlencoded({ extended: false }));
+app.use(bodyparser.json());
 
-server.use(cors({
+app.use(cors({
     origin:'*', 
     credentials:true,            //access-control-allow-credentials:true
     optionSuccessStatus:200,
  }));
-server.use(express.json());
+app.use(express.json());
 
 async function connectToMongoDB(){
     return mongoose.connect(connection.url, connection.params);
@@ -482,30 +482,30 @@ app.get('/userstatus/:userID', (req, res) => {
     })
 })
 
+io.on("connection", async socket => {
+    const userID = cookie.parse(socket.handshake.headers.cookie).userID
+    var today = await new Date();
+    var dd = await String(today.getDate()).padStart(2, '0');
+    var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+    var yyyy = await today.getFullYear();
+
+    var today_fixed = await mm + '/' + dd + '/' + yyyy;
+
+    socket.on("connected", () => {
+        // console.log(`Connected: ${userID}`);
+        Status.updateOne({userID: userID}, {$set: {onlineStatus: "Online"}}).clone().catch(err => console.log(err));
+    })
+
+    socket.on("disconnect", () => {
+        // console.log(`Disconnected: ${userID}`);
+        Status.updateOne({userID: userID}, {$set: {onlineStatus: "Offline", offlineStatusDate: today_fixed}}).clone().catch(err => console.log(err));
+    })
+})
+
 connectToMongoDB()
-    .then(server.listen(port, 
+    .then(app.listen(port, 
         () => {
             console.log(`Port ongoing! Port: ${port}`);
         }
     ))
     .catch(err => console.log(err));
-
-    io.on("connection", async socket => {
-        const userID = cookie.parse(socket.handshake.headers.cookie).userID
-        var today = await new Date();
-        var dd = await String(today.getDate()).padStart(2, '0');
-        var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
-        var yyyy = await today.getFullYear();
-    
-        var today_fixed = await mm + '/' + dd + '/' + yyyy;
-    
-        socket.on("connected", () => {
-            // console.log(`Connected: ${userID}`);
-            Status.updateOne({userID: userID}, {$set: {onlineStatus: "Online"}}).clone().catch(err => console.log(err));
-        })
-    
-        socket.on("disconnect", () => {
-            // console.log(`Disconnected: ${userID}`);
-            Status.updateOne({userID: userID}, {$set: {onlineStatus: "Offline", offlineStatusDate: today_fixed}}).clone().catch(err => console.log(err));
-        })
-    })
