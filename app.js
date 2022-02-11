@@ -3,6 +3,7 @@ const bodyparser = require("body-parser");
 const mysql = require("mysql");
 const cors = require("cors");
 const mongoose = require("mongoose");
+var cookie = require("cookie")
 
 const connection = require("./connection");
 
@@ -11,9 +12,13 @@ const Message = require("./schemas/messages");
 const Contact = require("./schemas/contacts");
 const Notifs = require("./schemas/notifications")
 const Feed = require('./schemas/feed');
+const Status = require('./schemas/accStatus');
 
 const app = express();
 const port = process.env.PORT || 3001
+
+const server = require("http").Server(app)
+const io = require("socket.io")(server);
 
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
@@ -61,7 +66,19 @@ app.post('/userregister', (req, res) => {
         }
     });
 
-    newRegister.save().then(() => res.send([{prompt: "Register Successfull", registered: true}])).catch((err) => res.send([{error: "Unable to Register!", registered: false}]));
+    newRegister.save().then(
+        () => {
+            const newStatus = new Status({
+                userID: req.body.username,
+                accountStatus: "Activated",
+                onlineStatus: "Offline",
+                offlineStatusDate: "no_appear"
+            })
+
+            newStatus.save();
+            res.send([{prompt: "Register Successfull", registered: true}]);
+        }
+        ).catch((err) => res.send([{error: "Unable to Register!", registered: false}]));
 })
 
 app.post('/userlogin', (req, res) => {
@@ -449,7 +466,41 @@ app.get('/allposts', (req, res) => {
     })
 })
 
+app.get('/userstatus/:userID', (req, res) => {
+    Status.findOne({userID: req.params.userID}, (err, result) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+            res.send([result]);
+        }
+    })
+})
+
+io.on("connection", async socket => {
+    const userID = cookie.parse(socket.handshake.headers.cookie).userID
+    var today = await new Date();
+    var dd = await String(today.getDate()).padStart(2, '0');
+    var mm = await String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+    var yyyy = await today.getFullYear();
+
+    var today_fixed = await mm + '/' + dd + '/' + yyyy;
+
+    socket.on("connected", () => {
+        // console.log(`Connected: ${userID}`);
+        Status.updateOne({userID: userID}, {$set: {onlineStatus: "Online"}}).clone().catch(err => console.log(err));
+    })
+
+    socket.on("disconnect", () => {
+        // console.log(`Disconnected: ${userID}`);
+        Status.updateOne({userID: userID}, {$set: {onlineStatus: "Offline", offlineStatusDate: today_fixed}}).clone().catch(err => console.log(err));
+    })
+})
 
 connectToMongoDB()
-    .then(app.listen(port, () => console.log(`Port ongoing! Port: ${port}`)))
+    .then(app.listen(port, 
+        () => {
+            console.log(`Port ongoing! Port: ${port}`);
+        }
+    ))
     .catch(err => console.log(err));
