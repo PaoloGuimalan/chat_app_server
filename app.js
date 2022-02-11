@@ -25,15 +25,15 @@ const io = require("socket.io")(server, {cors: {
     credentials: true
   }});
 
-app.use(bodyparser.urlencoded({ extended: false }));
-app.use(bodyparser.json());
+server.use(bodyparser.urlencoded({ extended: false }));
+server.use(bodyparser.json());
 
-app.use(cors({
+server.use(cors({
     origin:'*', 
     credentials:true,            //access-control-allow-credentials:true
     optionSuccessStatus:200,
  }));
-app.use(express.json());
+server.use(express.json());
 
 async function connectToMongoDB(){
     return mongoose.connect(connection.url, connection.params);
