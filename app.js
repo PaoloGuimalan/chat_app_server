@@ -18,7 +18,7 @@ const app = express();
 const port = process.env.PORT || 3001
 
 const server = require("https").Server(app)
-const io = require("socket.io")(server);
+const io = require("socket.io")(3002);
 
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
