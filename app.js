@@ -17,8 +17,13 @@ const Status = require('./schemas/accStatus');
 const app = express();
 const port = process.env.PORT || 3001
 
-const server = require("https").Server(app)
-const io = require("socket.io")(3002);
+const server = require("http").Server(app)
+const io = require("socket.io")(3002, {cors: {
+    origin: "*",
+    methods: "*",
+    allowedHeaders: ["my-custom-header"],
+    credentials: true
+  }});
 
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
