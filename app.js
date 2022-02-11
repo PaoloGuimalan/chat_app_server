@@ -14,11 +14,11 @@ const Notifs = require("./schemas/notifications")
 const Feed = require('./schemas/feed');
 const Status = require('./schemas/accStatus');
 
-const app = require("express")();
+const app = express();
 const port = process.env.PORT || 3001
 
-const server = require("http").createServer(app)
-const io = require("socket.io")(server, {cors: {
+const server = require("http").Server(app)
+const io = require("socket.io")(3002, {cors: {
     origin: "*",
     methods: "*",
     allowedHeaders: ["my-custom-header"],
@@ -503,7 +503,7 @@ io.on("connection", async socket => {
 })
 
 connectToMongoDB()
-    .then(server.listen(port, 
+    .then(app.listen(port, 
         () => {
             console.log(`Port ongoing! Port: ${port}`);
         }
