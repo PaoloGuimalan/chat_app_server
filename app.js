@@ -475,7 +475,6 @@ app.get('/userstatus/:userID', (req, res) => {
 })
 
 app.post('/changestatus', (req, res) => {
-    const userID = cookie.parse(socket.handshake.headers.cookie).userID
     var today = new Date();
     var dd = String(today.getDate()).padStart(2, '0');
     var mm = String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
@@ -484,6 +483,7 @@ app.post('/changestatus', (req, res) => {
     var today_fixed = mm + '/' + dd + '/' + yyyy;
 
     const statusr = req.body.statusr;
+    const userID = req.body.userID;
 
     Status.updateOne({userID: userID}, {$set: {onlineStatus: statusr, offlineStatusDate: today_fixed}}).clone().catch(err => console.log(err))
 })
