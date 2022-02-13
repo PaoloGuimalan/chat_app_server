@@ -485,7 +485,7 @@ app.post('/changestatus', (req, res) => {
     const statusr = req.body.statusr;
     const userID = req.body.userID;
 
-    Status.updateOne({userID: userID}, {$set: {onlineStatus: statusr, offlineStatusDate: today_fixed}}).clone().catch(err => console.log(err))
+    Status.updateOne({userID: userID}, {$set: {onlineStatus: statusr, offlineStatusDate: today_fixed}}).catch(err => console.log(err))
 })
 
 connectToMongoDB()
