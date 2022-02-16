@@ -493,6 +493,19 @@ app.post('/changestatus', (req, res) => {
     .catch(err => console.log(err))
 })
 
+app.get('/mystatus/:userID', (req, res) => {
+    const user = req.params.userID;
+
+    Status.findOne({userID: user}, {onlineStatus: true} , (err, result) => {
+        if(err){
+            console.log(err);
+        }
+        else{
+            res.send(result);
+        }
+    })
+})
+
 connectToMongoDB()
     .then(app.listen(port, 
         () => {
