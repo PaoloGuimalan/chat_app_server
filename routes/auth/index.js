@@ -5,6 +5,10 @@ const jwt = require("jsonwebtoken")
 
 const UserAccount = require("../../schema/auth/useraccount")
 
+const jwtchecker = () => {
+    
+}
+
 router.use((req, res, next) => {
     next()
 })
