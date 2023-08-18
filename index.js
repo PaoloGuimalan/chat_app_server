@@ -29,6 +29,10 @@ app.use(cors({
 
 app.use('/auth', Auth)
 
+app.get('/', (req, res) => {
+    res.send("Welcome to ChatterLoop V2 API!")
+})
+
 app.listen(PORT, () => {
     console.log(`Server Running: ${PORT}`)
     connectMongo().then(() => {
