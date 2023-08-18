@@ -8,7 +8,13 @@ const useraccount = mongoose.Schema({
         lastName: {type: mongoose.Schema.Types.Mixed, require: true}
     },
     email: {type: mongoose.Schema.Types.Mixed, require: true},
-    password: {type: mongoose.Schema.Types.Mixed, require: true}
+    password: {type: mongoose.Schema.Types.Mixed, require: true},
+    dateCreated: {
+        date: {type: mongoose.Schema.Types.Mixed, require: true},
+        time: {type: mongoose.Schema.Types.Mixed, require: true}
+    },
+    isActivated: Boolean,
+    isVerified: Boolean
 })
 
 module.exports = mongoose.model("UserAccount", useraccount, "useraccount");
