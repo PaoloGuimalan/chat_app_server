@@ -14,12 +14,13 @@ const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
+const JWT_SECRET = process.env.JWT_SECRET
 
 const jwtchecker = (req, res, next) => {
     const token = req.headers["x-access-token"]
 
     if(token){
-        jwt.verify(token, process.env.JWT_SECRET, (err, decode) => {
+        jwt.verify(token, JWT_SECRET, (err, decode) => {
             if(err){
                 console.log(err)
                 res.send({ status: false, message: err.message })
@@ -135,46 +136,57 @@ const checkEmailExisting = async (email) => {
 }
 
 router.post('/register', async (req, res) => {
-    const firstName = req.body.fullname.firstName;
-    const middleName = req.body.fullname.middleName && req.body.fullname.middleName.trim() != ""? req.body.fullname.middleName : "N/A";
-    const lastName = req.body.fullname.lastName;
-    const email = req.body.email;
-    const password = req.body.password;
+    const token = req.body.token;
+    
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
 
-    const userID = await checkUserIDExisting(firstName.trim().toLowerCase(), makeID(10))
-    const date = dateGetter()
-    const time = timeGetter()
-    const isActivated = true;
-    const isVerified = false;
+        const firstName = decodeToken.fullname.firstName;
+        const middleName = decodeToken.fullname.middleName && decodeToken.fullname.middleName.trim() != ""? decodeToken.fullname.middleName : "N/A";
+        const lastName = decodeToken.fullname.lastName;
+        const email = decodeToken.email;
+        const password = decodeToken.password;
 
-    const newUser = new UserAccount({
-        userID: userID,
-        fullname: {
-            firstName: firstName,
-            middleName: middleName,
-            lastName: lastName
-        },
-        email: email,
-        password: encode(password),
-        dateCreated: {
-            date: date,
-            time: time
-        },
-        isActivated: isActivated,
-        isVerified: isVerified
-    })
+        const userID = await checkUserIDExisting(firstName.trim().toLowerCase(), makeID(10))
+        const date = dateGetter()
+        const time = timeGetter()
+        const isActivated = true;
+        const isVerified = false;
 
-    if(await checkEmailExisting(email)){
-        res.send({status: false, message: "Email already in use"})
-    }
-    else{
-        newUser.save().then(() => {
-            sendEmailVerCode("ChatterLoop", email, "Verification Code", userID)
-            res.send({status: true, message: "You have been registered"})
-        }).catch((err) => {
-            console.log(err)
-            res.send({status: false, message: "Error registering account!"})
-        })
+        const payload = {
+            userID: userID,
+            fullname: {
+                firstName: firstName,
+                middleName: middleName,
+                lastName: lastName
+            },
+            email: email,
+            password: encode(password),
+            dateCreated: {
+                date: date,
+                time: time
+            },
+            isActivated: isActivated,
+            isVerified: isVerified
+        }
+
+        const newUser = new UserAccount(payload)
+
+        if(await checkEmailExisting(email)){
+            res.send({status: false, message: "Email already in use"})
+        }
+        else{
+            newUser.save().then(() => {
+                sendEmailVerCode("ChatterLoop", email, "Verification Code", userID)
+                res.send({status: true, message: "You have been registered"})
+            }).catch((err) => {
+                console.log(err)
+                res.send({status: false, message: "Error registering account!"})
+            })
+        }
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Token invalid!"})
     }
 })
 
