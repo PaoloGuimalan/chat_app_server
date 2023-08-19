@@ -218,13 +218,24 @@ router.post('/login', async (req, res) => {
                 const checkPass = decode(password, result.password)
                 
                 if(checkPass){
-                    const token = jwt.sign({ 
+                    const usertoken = jwt.sign({
+                        ...result._doc,
+                        password: null 
+                        // userID: result.userID
+                    }, JWT_SECRET, {
+                        expiresIn: 60 * 60 * 24 * 7
+                    })
+
+                    const authtoken = jwt.sign({
                         userID: result.userID
                     }, JWT_SECRET, {
                         expiresIn: 60 * 60 * 24 * 7
                     })
 
-                    res.send({ status: true, result: token})
+                    res.send({ status: true, result: {
+                        usertoken: usertoken,
+                        authtoken: authtoken
+                    }})
                 }
                 else{
                     res.send({ status: false, message: "Wrong email or password" })
@@ -241,6 +252,12 @@ router.post('/login', async (req, res) => {
         console.log(ex)
         res.send({status: false, message: "Token invalid!"})
     }
+})
+
+router.get('/jwtchecker', jwtchecker, (req, res) => {
+    const userID = req.params.userID;
+
+    res.send({ status: true, result: userID })
 })
 
 module.exports = router;
