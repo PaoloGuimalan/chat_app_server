@@ -146,6 +146,10 @@ router.post('/register', async (req, res) => {
         const lastName = decodeToken.fullname.lastName;
         const email = decodeToken.email;
         const password = decodeToken.password;
+        const birthday = decodeToken.birthdate.day;
+        const birthmonth = decodeToken.birthdate.month;
+        const birthyear = decodeToken.birthdate.year;
+        const gender = decodeToken.gender;
 
         const userID = await checkUserIDExisting(firstName.trim().toLowerCase(), makeID(10))
         const date = dateGetter()
@@ -160,6 +164,12 @@ router.post('/register', async (req, res) => {
                 middleName: middleName,
                 lastName: lastName
             },
+            birthdate:{
+                month: birthmonth,
+                day: birthday,
+                year: birthyear
+            },
+            gender: gender,
             email: email,
             password: encode(password),
             dateCreated: {
@@ -192,6 +202,45 @@ router.post('/register', async (req, res) => {
 
 router.post('/emailverify', (req, res) => {
 
+})
+
+router.post('/login', async (req, res) => {
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+
+        const emailOrUsername = decodeToken.email_username;
+        const password = decodeToken.password;
+
+        await UserAccount.findOne({ $or: [ { userID: emailOrUsername }, { email: emailOrUsername } ]}).then((result) => {
+            if(result){
+                const checkPass = decode(password, result.password)
+                
+                if(checkPass){
+                    const token = jwt.sign({ 
+                        userID: result.userID
+                    }, JWT_SECRET, {
+                        expiresIn: 60 * 60 * 24 * 7
+                    })
+
+                    res.send({ status: true, result: token})
+                }
+                else{
+                    res.send({ status: false, message: "Wrong email or password" })
+                }
+            }
+            else{
+                res.send({ status: false, message: "Account do not exist" })
+            }
+        }).catch((err) => {
+            console.log(err)
+            res.send({ status: false, message: "Error Logging In!" })
+        })
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Token invalid!"})
+    }
 })
 
 module.exports = router;
