@@ -20,15 +20,25 @@ const jwtchecker = (req, res, next) => {
     const token = req.headers["x-access-token"]
 
     if(token){
-        jwt.verify(token, JWT_SECRET, (err, decode) => {
+        jwt.verify(token, JWT_SECRET, async (err, decode) => {
             if(err){
                 console.log(err)
                 res.send({ status: false, message: err.message })
             }
             else{
                 const id = decode.userID;
-                req.params.userID = id;
-                next()
+                await UserAccount.findOne({ userID: id }).then((result) => {
+                    if(result){
+                        req.params.userID = result.userID;
+                        next()
+                    }
+                    else{
+                        res.send({ status: false, message: "Cannot verify user!"})
+                    }
+                }).catch((err) => {
+                    console.log(err)
+                    res.send({ status: false, message: "Error verifying user!"})
+                })
             }
         })
     }
@@ -254,10 +264,26 @@ router.post('/login', async (req, res) => {
     }
 })
 
-router.get('/jwtchecker', jwtchecker, (req, res) => {
+router.get('/jwtchecker', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
 
-    res.send({ status: true, result: userID })
+    await UserAccount.findOne({ userID: userID }).then((result) => {
+        if(result){
+            const usertoken = jwt.sign({
+                ...result._doc,
+                password: null 
+            }, JWT_SECRET, {
+                expiresIn: 60 * 60 * 24 * 7
+            })
+
+            res.send({ status: true, result: {
+                usertoken: usertoken
+            }})
+        }
+    }).catch((err) => {
+        console.log(err)
+        res.send({ status: false, message: "Cannot fetch user!" })
+    })
 })
 
 module.exports = router;
