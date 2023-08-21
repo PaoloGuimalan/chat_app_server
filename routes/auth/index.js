@@ -198,7 +198,22 @@ router.post('/register', async (req, res) => {
         else{
             newUser.save().then(() => {
                 sendEmailVerCode("ChatterLoop", email, "Verification Code", userID)
-                res.send({status: true, message: "You have been registered"})
+                const usertoken = jwt.sign({
+                    ...payload,
+                    password: null 
+                }, JWT_SECRET, {
+                    expiresIn: 60 * 60 * 24 * 7
+                })
+
+                const authtoken = jwt.sign({
+                    userID: payload.userID
+                }, JWT_SECRET, {
+                    expiresIn: 60 * 60 * 24 * 7
+                })
+                res.send({status: true, message: "You have been registered", result: {
+                    usertoken: usertoken,
+                    authtoken: authtoken
+                }})
             }).catch((err) => {
                 console.log(err)
                 res.send({status: false, message: "Error registering account!"})
