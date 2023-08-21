@@ -225,8 +225,64 @@ router.post('/register', async (req, res) => {
     }
 })
 
-router.post('/emailverify', (req, res) => {
+const updateVerCodeStatus = async (verID) => {
+    await UserVerification.updateOne({verID: verID}, {isUsed: true})
+}
 
+const verifyCodeUserId = async (userIDProp, code) => {
+    return await UserVerification.findOne({userID: userIDProp, verCode: code}).then((result) => {
+        if(result){
+           if(!result.isUsed){
+               updateVerCodeStatus(result.verID)
+               return true
+           }
+        }
+        else{
+            return false;
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+const setUserVerified = async (userIDProp) => {
+    return await UserAccount.updateOne({userID: userIDProp}, {isVerified: true}).then((result) => {
+        if(result.modifiedCount){
+            return true;
+        }
+        else{
+            return false;
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+router.post('/emailverify', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+        const verificationcode = decodeToken.code;
+
+        if(await verifyCodeUserId(userID, verificationcode)){
+            if(await setUserVerified(userID)){
+                res.send({status: true, message: "Account has been verified"})
+            }
+            else{
+                res.send({status: false, message: "Error verifying account."})
+            }
+        }
+        else{
+            res.send({status: false, message: "Invalid verification code"})
+        }
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Error verifying code"})
+    }
 })
 
 router.post('/login', async (req, res) => {
