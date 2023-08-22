@@ -12,6 +12,7 @@ const useraccount = mongoose.Schema({
         day: {type: mongoose.Schema.Types.Mixed, require: true},
         year: {type: mongoose.Schema.Types.Mixed, require: true}
     },
+    profile: {type: mongoose.Schema.Types.Mixed, require: true},
     gender: {type: mongoose.Schema.Types.Mixed, require: true},
     email: {type: mongoose.Schema.Types.Mixed, require: true},
     password: {type: mongoose.Schema.Types.Mixed, require: true},

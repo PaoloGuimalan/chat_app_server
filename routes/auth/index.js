@@ -179,6 +179,7 @@ router.post('/register', async (req, res) => {
                 day: birthday,
                 year: birthyear
             },
+            profile: "none",
             gender: gender,
             email: email,
             password: encode(password),
