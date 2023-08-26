@@ -8,6 +8,7 @@ const Axios = require("axios")
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
 const UserContacts = require("../../schema/users/contacts")
+const UserNotifications = require("../../schema/users/notifications")
 
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
@@ -203,13 +204,33 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
     }
 })
 
+const sendNotification = async (params) => {
+    const newNotif = new UserNotifications(params)
+    
+    newNotif.save().then(() => {}).catch((err) => { console.log(err) })
+}
+
 const checkContactID = async (cnctID) => {
     return await UserContacts.find({contactID: cnctID}).then((result) => {
         if(result.length){
-            checkContactID(makeID(20))
+            checkContactID(`${makeID(20)}`)
         }
         else{
             return cnctID;
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+const checkNotifID = async (ntfID) => {
+    return await UserNotifications.find({notificationID: ntfID}).then((result) => {
+        if(result.length){
+            checkNotifID(`NTF_${makeID(20)}`)
+        }
+        else{
+            return ntfID;
         }
     }).catch((err) => {
         console.log(err)
@@ -224,7 +245,7 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
     try{
         const decodeToken = jwt.verify(token, JWT_SECRET)
 
-        const contactID = await checkContactID(makeID(20))
+        const contactID = await checkContactID(`${makeID(20)}`)
         const addUserID = decodeToken.addUserID
 
         const payload = {
@@ -247,7 +268,27 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
 
         const newContact = new UserContacts(payload)
 
-        newContact.save().then(() => {
+        newContact.save().then(async () => {
+            const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`)
+            const notifParams = {
+                notificationID: awaitNotifID,
+                referenceID: contactID,
+                refereceStatus: false,
+                toUserID: addUserID,
+                fromUserID: userID,
+                content: {
+                    headline: `Contact Request`,
+                    details: `${userID} have sent a contact request for you.`,
+                },
+                date: {
+                    date: dateGetter(),
+                    time: timeGetter()
+                },
+                type: "contact_request"
+            }
+
+            sendNotification(notifParams)
+
             res.send({ status: true, message: `You have sent a contact request to @${addUserID}` })
         }).catch((err) => {
             res.send({ status: false, message: "Contact request encountered an error!" })
@@ -257,6 +298,23 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
         res.send({ status: false, message: "Contact request encountered an error!" })
         console.log(ex)
     }
+})
+
+router.get('/getNotifications', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+
+    await UserNotifications.find({toUserID: userID}).then((result) => {
+        var encodedResult = jwt.sign({
+            notifications: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        res.send({status: true, result: encodedResult})
+    }).catch((err) => {
+        console.log(err)
+        res.send({status: false, message: "Error retrieving notifications"})
+    })
 })
 
 module.exports = router;
