@@ -161,7 +161,7 @@ router.post('/register', async (req, res) => {
         const birthyear = decodeToken.birthdate.year;
         const gender = decodeToken.gender;
 
-        const userID = await checkUserIDExisting(firstName.trim().toLowerCase(), makeID(10))
+        const userID = await checkUserIDExisting(firstName.replace(/\s/g, "").toLowerCase(), makeID(10))
         const date = dateGetter()
         const time = timeGetter()
         const isActivated = true;
