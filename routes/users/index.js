@@ -55,7 +55,13 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
             isActivated: 0,
             isVerified: 0
         }).then((result) => {
-            res.send({status: true, result: result})
+            var encodedResult = jwt.sign({
+                searchresults: result
+            }, JWT_SECRET, {
+                expiresIn: 60 * 60 * 24 * 7
+            })
+
+            res.send({status: true, result: encodedResult})
         }).catch((err) => {
             console.log(err)
             res.send({status: false, message: `Error searching for ${searchdata}`})
@@ -74,7 +80,13 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
             isActivated: 0,
             isVerified: 0
         }).then((result) => {
-            res.send({status: true, result: result})
+            var encodedResult = jwt.sign({
+                searchresults: result
+            }, JWT_SECRET, {
+                expiresIn: 60 * 60 * 24 * 7
+            })
+
+            res.send({status: true, result: encodedResult})
         }).catch((err) => {
             console.log(err)
             res.send({status: false, message: `Error searching for ${searchdata}`})
