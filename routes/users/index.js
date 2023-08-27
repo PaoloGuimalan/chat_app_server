@@ -303,7 +303,35 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
 router.get('/getNotifications', jwtchecker, async (req, res) => {
     const userID = req.params.userID
 
-    await UserNotifications.find({toUserID: userID}).then((result) => {
+    await UserNotifications.aggregate([
+        {
+            $match:{
+                toUserID: userID
+            }
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "fromUserID",
+                foreignField: "userID",
+                as: "fromUser"
+            }
+        },{
+            $unwind:{
+                path: "$fromUser",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $project:{
+                "fromUser._id": 0,
+                "fromUser.birthdate": 0,
+                "fromUser.gender": 0,
+                "fromUser.email": 0,
+                "fromUser.password": 0,
+                "fromUser.dateCreated": 0
+            }
+        }
+    ]).then((result) => {
+        // console.log(result)
         var encodedResult = jwt.sign({
             notifications: result
         }, JWT_SECRET, {
