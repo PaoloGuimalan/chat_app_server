@@ -88,57 +88,59 @@ const jwtssechecker = (req, res, next) => {
 const sseNotificationstrigger = async (id, details) => {
     const sseWithUserID = sseNotificationsWaiters[id]
 
-    await UserNotifications.aggregate([
-        {
-            $match:{
-                toUserID: id
+    if(sseWithUserID){
+        await UserNotifications.aggregate([
+            {
+                $match:{
+                    toUserID: id
+                }
+            },{
+                $lookup:{
+                    from: "useraccount",
+                    localField: "fromUserID",
+                    foreignField: "userID",
+                    as: "fromUser"
+                }
+            },{
+                $unwind:{
+                    path: "$fromUser",
+                    preserveNullAndEmptyArrays: true
+                }
+            },{
+                $sort: {_id: -1}
+            },{
+                $project:{
+                    "fromUser._id": 0,
+                    "fromUser.birthdate": 0,
+                    "fromUser.gender": 0,
+                    "fromUser.email": 0,
+                    "fromUser.password": 0,
+                    "fromUser.dateCreated": 0
+                }
             }
-        },{
-            $lookup:{
-                from: "useraccount",
-                localField: "fromUserID",
-                foreignField: "userID",
-                as: "fromUser"
-            }
-        },{
-            $unwind:{
-                path: "$fromUser",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $sort: {_id: -1}
-        },{
-            $project:{
-                "fromUser._id": 0,
-                "fromUser.birthdate": 0,
-                "fromUser.gender": 0,
-                "fromUser.email": 0,
-                "fromUser.password": 0,
-                "fromUser.dateCreated": 0
-            }
-        }
-    ]).then((result) => {
-        // console.log(result)
-        var encodedResult = jwt.sign({
-            notifications: result
-        }, JWT_SECRET, {
-            expiresIn: 60 * 60 * 24 * 7
+        ]).then((result) => {
+            // console.log(result)
+            var encodedResult = jwt.sign({
+                notifications: result
+            }, JWT_SECRET, {
+                expiresIn: 60 * 60 * 24 * 7
+            })
+    
+            sseWithUserID.sse(`notifications`, {
+                status: true,
+                auth: true,
+                message: details,
+                result: encodedResult
+            })
+        }).catch((err) => {
+            console.log(err)
+            sseWithUserID.sse(`notifications`, {
+                status: false,
+                auth: true,
+                message: "Error retrieving notifications"
+            })
         })
-
-        sseWithUserID.sse(`notifications`, {
-            status: true,
-            auth: true,
-            message: details,
-            result: encodedResult
-        })
-    }).catch((err) => {
-        console.log(err)
-        sseWithUserID.sse(`notifications`, {
-            status: false,
-            auth: true,
-            message: "Error retrieving notifications"
-        })
-    })
+    }
 }
 
 router.get('/search/:searchdata', jwtchecker, async (req, res) => {
