@@ -106,6 +106,8 @@ const sseNotificationstrigger = async (id, details) => {
                 preserveNullAndEmptyArrays: true
             }
         },{
+            $sort: {_id: -1}
+        },{
             $project:{
                 "fromUser._id": 0,
                 "fromUser.birthdate": 0,
@@ -298,10 +300,15 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
 const sendNotification = async (params) => {
     const sendToUser = params.toUserID
     const sendToDetails = params.content.details
+    const sendFromUser = params.fromUserID
+    const type = params.type
     const newNotif = new UserNotifications(params)
     
     newNotif.save().then(() => {
         sseNotificationstrigger(sendToUser, sendToDetails)
+        if(type == "info"){
+            sseNotificationstrigger(sendFromUser, "You declined a contact request")
+        }
     }).catch((err) => { console.log(err) })
 }
 
@@ -333,6 +340,20 @@ const checkNotifID = async (ntfID) => {
     })
 }
 
+const checkContactRequest = async (requesterID, responderID) => {
+    return await UserContacts.find({ "users.userID": { $all: [requesterID, responderID] } }).then((result) => {
+        if(result.length > 0){
+            return false
+        }
+        else{
+            return true
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false
+    })
+}
+
 router.post('/requestContact', jwtchecker, async (req, res) => {
     const userID = req.params.userID
     const token = req.body.token;
@@ -361,34 +382,36 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
             ]
         }
 
-        const newContact = new UserContacts(payload)
+        if(await checkContactRequest(userID, addUserID)){
+            const newContact = new UserContacts(payload)
 
-        newContact.save().then(async () => {
-            const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`)
-            const notifParams = {
-                notificationID: awaitNotifID,
-                referenceID: contactID,
-                refereceStatus: false,
-                toUserID: addUserID,
-                fromUserID: userID,
-                content: {
-                    headline: `Contact Request`,
-                    details: `${userID} have sent a contact request for you.`,
-                },
-                date: {
-                    date: dateGetter(),
-                    time: timeGetter()
-                },
-                type: "contact_request"
-            }
+            newContact.save().then(async () => {
+                const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`)
+                const notifParams = {
+                    notificationID: awaitNotifID,
+                    referenceID: contactID,
+                    referenceStatus: false,
+                    toUserID: addUserID,
+                    fromUserID: userID,
+                    content: {
+                        headline: `Contact Request`,
+                        details: `${userID} have sent a contact request for you.`,
+                    },
+                    date: {
+                        date: dateGetter(),
+                        time: timeGetter()
+                    },
+                    type: "contact_request"
+                }
 
-            sendNotification(notifParams)
+                sendNotification(notifParams)
 
-            res.send({ status: true, message: `You have sent a contact request to @${addUserID}` })
-        }).catch((err) => {
-            res.send({ status: false, message: "Contact request encountered an error!" })
-            console.log(err)
-        })
+                res.send({ status: true, message: `You have sent a contact request to @${addUserID}` })
+            }).catch((err) => {
+                res.send({ status: false, message: "Contact request encountered an error!" })
+                console.log(err)
+            })
+        }
     }catch(ex){
         res.send({ status: false, message: "Contact request encountered an error!" })
         console.log(ex)
@@ -416,6 +439,8 @@ router.get('/getNotifications', jwtchecker, async (req, res) => {
                 preserveNullAndEmptyArrays: true
             }
         },{
+            $sort: {_id: -1}
+        },{
             $project:{
                 "fromUser._id": 0,
                 "fromUser.birthdate": 0,
@@ -438,6 +463,59 @@ router.get('/getNotifications', jwtchecker, async (req, res) => {
         console.log(err)
         res.send({status: false, message: "Error retrieving notifications"})
     })
+})
+
+const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fromUserID) => {
+    await UserNotifications.updateOne({ notificationID: notificationID }, { referenceStatus: true }).then(async (result) => {
+        const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`)
+        const notifParams = {
+            notificationID: awaitNotifID,
+            referenceID: referenceID,
+            referenceStatus: true,
+            toUserID: toUserID,
+            fromUserID: fromUserID,
+            content: {
+                headline: `Declined Request`,
+                details: `${fromUserID} declined your request`,
+            },
+            date: {
+                date: dateGetter(),
+                time: timeGetter()
+            },
+            type: "info"
+        }
+        sendNotification(notifParams)
+    }).catch((err) => {
+        console.log(err)
+        res.send({status: false, message: "Error encountered in notifications"})
+    })
+}
+
+router.post('/declineContactRequest', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET)
+
+        const type = decodedToken.type;
+        const notificationID = decodedToken.notificationID;
+        const referenceID = decodedToken.referenceID;
+        const toUserID = decodedToken.toUserID;
+        const fromUserID = decodedToken.fromUserID;
+
+        await UserContacts.deleteOne({ contactID: referenceID }).then(async (result) => {
+            if(type == "contact_request"){
+                await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID)
+            }
+        }).catch((err) => {
+            console.log(err)
+            res.send({status: false, message: "Error verifying decline request"})
+        })
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Error declining request"})
+    }
 })
 
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {

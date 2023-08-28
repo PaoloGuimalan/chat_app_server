@@ -3,7 +3,7 @@ const mongoose = require("mongoose")
 const usernotifications = mongoose.Schema({
     notificationID: { type: mongoose.Schema.Types.Mixed, require: true },
     referenceID: { type: mongoose.Schema.Types.Mixed, require: true },
-    refereceStatus: { type: Boolean, require: true },
+    referenceStatus: { type: Boolean, require: true },
     toUserID: { type: mongoose.Schema.Types.Mixed, require: true },
     fromUserID: { type: mongoose.Schema.Types.Mixed, require: true },
     content: {
