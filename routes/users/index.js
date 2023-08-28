@@ -174,14 +174,14 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
                                 // },
                                 {
                                   $and: [
-                                    { $eq: [userID, "$actionBy"] }, // Assuming userID is defined
+                                    { $eq: [userID, "$actionBy"] },
                                     { $in: ["$$actionByUserID", "$users.userID"] }
                                   ]
                                 },
                                 {
                                   $and: [
                                     { $eq: ["$$actionByUserID", "$actionBy"] },
-                                    { $in: [userID, "$users.userID"] } // Assuming userID is defined
+                                    { $in: [userID, "$users.userID"] }
                                   ]
                                 }
                               ]
@@ -258,14 +258,14 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
                                 // },
                                 {
                                   $and: [
-                                    { $eq: [userID, "$actionBy"] }, // Assuming userID is defined
+                                    { $eq: [userID, "$actionBy"] },
                                     { $in: ["$$actionByUserID", "$users.userID"] }
                                   ]
                                 },
                                 {
                                   $and: [
                                     { $eq: ["$$actionByUserID", "$actionBy"] },
-                                    { $in: [userID, "$users.userID"] } // Assuming userID is defined
+                                    { $in: [userID, "$users.userID"] }
                                   ]
                                 }
                               ]
@@ -566,6 +566,134 @@ router.post('/acceptContactRequest', jwtchecker, async (req, res) => {
         console.log(ex)
         res.send({status: false, message: "Error accepting request"})
     }
+})
+
+router.get('/getContacts', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+
+    await UserContacts.aggregate([
+        {
+            $match:{
+                $and:[
+                    {
+                        $or:[
+                            { actionBy: userID },
+                            { "users.userID": userID }
+                        ]
+                    },
+                    {
+                        status: true
+                    }
+                ]
+            }
+        },{
+            $lookup:{
+                from: "contacts",
+                localField: "contactID",
+                foreignField: "contactID",
+                let: { 
+                    firstUserID: { $arrayElemAt: ['$users.userID', 0] },
+                    secondUserID: { $arrayElemAt: ['$users.userID', 1] } 
+                },
+                pipeline: [
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$firstUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "userone"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$userone",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    },
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$secondUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "usertwo"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$usertwo",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    }
+                ],
+                as: "userdetails"
+            }
+        },{
+            $unwind:{
+                path: "$userdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $project:{
+                "userdetails.actionBy": 0,
+                "userdetails.actionDate": 0,
+                "userdetails.contactID": 0,
+                "userdetails.status": 0,
+                "userdetails.users": 0,
+                "users": 0,
+                "userdetails.userone.birthdate": 0,
+                "userdetails.userone.dateCreated": 0,
+                "userdetails.userone.email": 0,
+                "userdetails.userone.gender": 0,
+                "userdetails.userone.isActivated": 0,
+                "userdetails.userone.isVerified": 0,
+                "userdetails.userone.password": 0,
+                "userdetails.usertwo.birthdate": 0,
+                "userdetails.usertwo.dateCreated": 0,
+                "userdetails.usertwo.email": 0,
+                "userdetails.usertwo.gender": 0,
+                "userdetails.usertwo.isActivated": 0,
+                "userdetails.usertwo.isVerified": 0,
+                "userdetails.usertwo.password": 0
+            }
+        },{
+            $sort: {_id: -1}
+        }
+    ]).then((result) => {
+        // console.log(result)
+        const encodedResult = jwt.sign({
+            contacts: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        res.send({ status: true, result: encodedResult })
+
+    }).catch((err) => {
+        console.log(err)
+        res.send({ status: false, message: "Error fetching contacts list" })
+    })
 })
 
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
