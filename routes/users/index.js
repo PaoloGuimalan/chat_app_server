@@ -505,6 +505,7 @@ router.post('/declineContactRequest', jwtchecker, async (req, res) => {
         const fromUserID = decodedToken.fromUserID;
 
         await UserContacts.deleteOne({ contactID: referenceID }).then(async (result) => {
+            res.send({status: true, message: "Contact has been deleted"})
             if(type == "contact_request"){
                 await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID)
             }
