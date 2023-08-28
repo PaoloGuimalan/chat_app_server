@@ -4,6 +4,7 @@ const router = express.Router()
 const mongoose = require("mongoose")
 const jwt = require("jsonwebtoken")
 const Axios = require("axios")
+const sse = require("sse-express")
 
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
@@ -16,6 +17,8 @@ const makeID = require("../../reusables/hooks/makeID")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
+
+let sseNotificationsWaiters = Object.create(null)
 
 const jwtchecker = (req, res, next) => {
     const token = req.headers["x-access-token"]
@@ -46,6 +49,94 @@ const jwtchecker = (req, res, next) => {
     else{
         res.send({ status: false, message: "Cannot verify user!"})
     }
+}
+
+const jwtssechecker = (req, res, next) => {
+    const decodedToken = jwt.verify(req.params.token, JWT_SECRET)
+
+    const token = decodedToken.token
+    const type = decodedToken.type
+
+    if(token){
+        jwt.verify(token, JWT_SECRET, async (err, decode) => {
+            if(err){
+                console.log(err)
+                res.sse(type, { status: false, auth: false, message: err.message })
+            }
+            else{
+                const id = decode.userID;
+                await UserAccount.findOne({ userID: id }).then((result) => {
+                    if(result){
+                        req.params.userID = result.userID;
+                        next()
+                    }
+                    else{
+                        res.sse(type, { status: false, auth: false, message: "Cannot verify user!"})
+                    }
+                }).catch((err) => {
+                    console.log(err)
+                    res.sse(type, { status: false, auth: false, message: "Error verifying user!"})
+                })
+            }
+        })
+    }
+    else{
+        res.send(type, { status: false, auth: false, message: "Cannot verify user!"})
+    }
+}
+
+const sseNotificationstrigger = async (id, details) => {
+    const sseWithUserID = sseNotificationsWaiters[id]
+
+    await UserNotifications.aggregate([
+        {
+            $match:{
+                toUserID: id
+            }
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "fromUserID",
+                foreignField: "userID",
+                as: "fromUser"
+            }
+        },{
+            $unwind:{
+                path: "$fromUser",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $project:{
+                "fromUser._id": 0,
+                "fromUser.birthdate": 0,
+                "fromUser.gender": 0,
+                "fromUser.email": 0,
+                "fromUser.password": 0,
+                "fromUser.dateCreated": 0
+            }
+        }
+    ]).then((result) => {
+        // console.log(result)
+        var encodedResult = jwt.sign({
+            notifications: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        sseWithUserID.sse(`notifications`, {
+            status: true,
+            auth: true,
+            message: details,
+            result: encodedResult
+        })
+    }).catch((err) => {
+        console.log(err)
+        sseWithUserID.sse(`notifications`, {
+            status: false,
+            auth: true,
+            message: "Error retrieving notifications"
+        })
+    })
 }
 
 router.get('/search/:searchdata', jwtchecker, async (req, res) => {
@@ -205,9 +296,13 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
 })
 
 const sendNotification = async (params) => {
+    const sendToUser = params.toUserID
+    const sendToDetails = params.content.details
     const newNotif = new UserNotifications(params)
     
-    newNotif.save().then(() => {}).catch((err) => { console.log(err) })
+    newNotif.save().then(() => {
+        sseNotificationstrigger(sendToUser, sendToDetails)
+    }).catch((err) => { console.log(err) })
 }
 
 const checkContactID = async (cnctID) => {
@@ -343,6 +438,16 @@ router.get('/getNotifications', jwtchecker, async (req, res) => {
         console.log(err)
         res.send({status: false, message: "Error retrieving notifications"})
     })
+})
+
+router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
+    const userID = req.params.userID
+
+    sseNotificationsWaiters[userID] = res
+})
+
+router.get('/sselogout', jwtchecker, (req, res) => {
+    
 })
 
 module.exports = router;
