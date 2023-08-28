@@ -195,6 +195,13 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
                   preserveNullAndEmptyArrays: true
                 }
             },{
+                $lookup:{
+                    from: "notifications",
+                    localField: "contacts.contactID",
+                    foreignField: "referenceID",
+                    as: "notification"
+                }
+            },{
                 $project:{
                     password: 0,
                     birthdate: 0,
@@ -272,6 +279,13 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
                   preserveNullAndEmptyArrays: true
                 }
             },{
+                $lookup:{
+                    from: "notifications",
+                    localField: "contacts.contactID",
+                    foreignField: "referenceID",
+                    as: "notification"
+                }
+            },{
                 $project:{
                     password: 0,
                     birthdate: 0,
@@ -297,7 +311,7 @@ router.get('/search/:searchdata', jwtchecker, async (req, res) => {
     }
 })
 
-const sendNotification = async (params) => {
+const sendNotification = async (params, actionlog) => {
     const sendToUser = params.toUserID
     const sendToDetails = params.content.details
     const sendFromUser = params.fromUserID
@@ -307,7 +321,7 @@ const sendNotification = async (params) => {
     newNotif.save().then(() => {
         sseNotificationstrigger(sendToUser, sendToDetails)
         if(type == "info"){
-            sseNotificationstrigger(sendFromUser, "You declined a contact request")
+            sseNotificationstrigger(sendFromUser, actionlog)
         }
     }).catch((err) => { console.log(err) })
 }
@@ -404,7 +418,7 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
                     type: "contact_request"
                 }
 
-                sendNotification(notifParams)
+                sendNotification(notifParams, "You have sent a contact request")
 
                 res.send({ status: true, message: `You have sent a contact request to @${addUserID}` })
             }).catch((err) => {
@@ -465,7 +479,7 @@ router.get('/getNotifications', jwtchecker, async (req, res) => {
     })
 })
 
-const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fromUserID) => {
+const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, actionlog) => {
     await UserNotifications.updateOne({ notificationID: notificationID }, { referenceStatus: true }).then(async (result) => {
         const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`)
         const notifParams = {
@@ -475,8 +489,8 @@ const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fr
             toUserID: toUserID,
             fromUserID: fromUserID,
             content: {
-                headline: `Declined Request`,
-                details: `${fromUserID} declined your request`,
+                headline: notifHeadline,
+                details: notifContent,
             },
             date: {
                 date: dateGetter(),
@@ -484,7 +498,7 @@ const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fr
             },
             type: "info"
         }
-        sendNotification(notifParams)
+        sendNotification(notifParams, actionlog)
     }).catch((err) => {
         console.log(err)
         res.send({status: false, message: "Error encountered in notifications"})
@@ -507,7 +521,10 @@ router.post('/declineContactRequest', jwtchecker, async (req, res) => {
         await UserContacts.deleteOne({ contactID: referenceID }).then(async (result) => {
             res.send({status: true, message: "Contact has been deleted"})
             if(type == "contact_request"){
-                await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID)
+                const notifHeadline = `Declined Request`
+                const notifContent = `${fromUserID} declined your request`
+                
+                await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You declined a contact request")
             }
         }).catch((err) => {
             console.log(err)
@@ -516,6 +533,36 @@ router.post('/declineContactRequest', jwtchecker, async (req, res) => {
     }catch(ex){
         console.log(ex)
         res.send({status: false, message: "Error declining request"})
+    }
+})
+
+router.post('/acceptContactRequest', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET)
+
+        const type = decodedToken.type;
+        const notificationID = decodedToken.notificationID;
+        const referenceID = decodedToken.referenceID;
+        const toUserID = decodedToken.toUserID;
+        const fromUserID = decodedToken.fromUserID
+
+        await UserContacts.updateOne({ contactID: referenceID }, { status: true }).then(async (result) => {
+            res.send({status: true, message: "Contact has been accepted"})
+            const notifHeadline = `Accepted Request`
+            const notifContent = `${fromUserID} accepted your request`
+                
+            await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You accepted a contact request")
+        }).catch((err) => {
+            res.send({status: false, message: "Error verifying accept request"})
+            console.log(err)
+        })
+        
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Error accepting request"})
     }
 })
 
