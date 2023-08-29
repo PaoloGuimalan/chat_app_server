@@ -10,6 +10,7 @@ const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
 const UserContacts = require("../../schema/users/contacts")
 const UserNotifications = require("../../schema/users/notifications")
+const UserMessage = require('../../schema/messages/message')
 
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
@@ -868,6 +869,70 @@ router.get('/getContacts', jwtchecker, async (req, res) => {
         console.log(err)
         res.send({ status: false, message: "Error fetching contacts list" })
     })
+})
+
+const checkExistingMessageID = async (messageID) => {
+    return await UserMessage.find({ messageID: messageID }).then((result) => {
+        if(result.length > 0){
+            checkExistingMessageID(makeID(30))
+        }
+        else{
+            return messageID
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+router.post('/sendMessage', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const token = req.body.token;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET)
+
+        const messageID = await checkExistingMessageID(makeID(30));
+        const conversationID = decodedToken.conversationID;
+        const sender = userID;
+        const receivers = decodedToken.receivers; //Array
+        const seeners = decodedToken.seeners; //Array
+        const content = decodedToken.content;
+        const messageDate = {
+            date: dateGetter(),
+            time: timeGetter()
+        };
+        const isReply = decodedToken.isReply;
+        const messageType = decodedToken.messageType;
+        const conversationType = decodedToken.conversationType;
+
+        const payload = {
+            messageID: messageID,
+            conversationID: conversationID,
+            sender: sender,
+            receivers: receivers,
+            seeners: seeners,
+            content: content,
+            messageDate: messageDate,
+            isReply: isReply,
+            messageType: messageType,
+            conversationType: conversationType
+        }
+
+        const newMessage = new UserMessage(payload)
+
+        newMessage.save().then(() => {
+            res.send({status: true, message: "Message Sent"})
+        }).catch((err) => {
+            console.log(err)
+            res.send({status: false, message: "Error checking message"})
+        })
+
+    }catch(ex){
+        console.log(ex)
+        res.send({status: false, message: "Failed to send message"})
+    }
+
 })
 
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
