@@ -885,6 +885,85 @@ const checkExistingMessageID = async (messageID) => {
     })
 }
 
+const messagesTrigger = async (id, sseWithUserID, details) => {
+    const userID = id;
+
+    await UserMessage.aggregate([
+        {
+            $match:{
+                receivers: { $in: [userID] }
+            }
+        },{
+            $group: {
+                _id: "$conversationID",
+                sortID: { "$last": "$_id" },
+                conversationID: { "$last": "$conversationID" },
+                messageID: { "$last": "$messageID" },
+                conversationID: { "$last": "$conversationID" },
+                sender: { "$last": "$sender" },
+                receivers: { "$last": "$receivers" },
+                seeners: { "$last": "$seeners" },
+                content: { "$last": "$content" },
+                messageDate: { "$last": "$messageDate" },
+                isReply: { "$last": "$isReply" },
+                messageType: { "$last": "$messageType" },
+                conversationType: { "$last": "$conversationType" }
+            }
+        },{
+            $sort: {
+                sortID: -1
+            }
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "receivers",
+                foreignField: "userID",
+                as: "users"
+            }
+        },{
+            $project:{
+                "users.birthdate": 0,
+                "users.dateCreated": 0,
+                "users.email": 0,
+                "users.gender": 0,
+                "users.isActivated": 0,
+                "users.isVerified": 0,
+                "users.password": 0
+            }
+        }
+    ]).then((result) => {
+        const encodedResult = jwt.sign({
+            conversationslist: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        sseWithUserID.sse(`messages_list`, {
+            status: true,
+            auth: true,
+            message: details,
+            result: encodedResult
+        })
+    }).catch((err) => {
+        console.log(err)
+        sseWithUserID.sse(`messages_list`, {
+            status: false,
+            auth: true,
+            message: "Error generating conversations list"
+        })
+    })
+}
+
+const sseMessageNotification = async (type, id, details) => {
+    const sseWithUserID = sseNotificationsWaiters[id]
+
+    if(sseWithUserID){
+        if(type == "messages_list"){
+            messagesTrigger(id, sseWithUserID, details)
+        }
+    }
+}
+
 router.post('/sendMessage', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
     const token = req.body.token;
@@ -923,6 +1002,9 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
 
         newMessage.save().then(() => {
             res.send({status: true, message: "Message Sent"})
+            receivers.map((rcvs, i) => {
+                sseMessageNotification("messages_list", rcvs, sender)
+            })
         }).catch((err) => {
             console.log(err)
             res.send({status: false, message: "Error checking message"})
@@ -933,6 +1015,84 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         res.send({status: false, message: "Failed to send message"})
     }
 
+})
+
+router.get('/initConversationList', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+
+    await UserMessage.aggregate([
+        {
+            $match:{
+                receivers: { $in: [userID] }
+            }
+        },{
+            $group: {
+                _id: "$conversationID",
+                sortID: { "$last": "$_id" },
+                conversationID: { "$last": "$conversationID" },
+                messageID: { "$last": "$messageID" },
+                conversationID: { "$last": "$conversationID" },
+                sender: { "$last": "$sender" },
+                receivers: { "$last": "$receivers" },
+                seeners: { "$last": "$seeners" },
+                content: { "$last": "$content" },
+                messageDate: { "$last": "$messageDate" },
+                isReply: { "$last": "$isReply" },
+                messageType: { "$last": "$messageType" },
+                conversationType: { "$last": "$conversationType" }
+            }
+        },{
+            $sort: {
+                sortID: -1
+            }
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "receivers",
+                foreignField: "userID",
+                as: "users"
+            }
+        },{
+            $project:{
+                "users.birthdate": 0,
+                "users.dateCreated": 0,
+                "users.email": 0,
+                "users.gender": 0,
+                "users.isActivated": 0,
+                "users.isVerified": 0,
+                "users.password": 0
+            }
+        }
+    ]).then((result) => {
+        const encodedResult = jwt.sign({
+            conversationslist: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        res.send({status: true, message: "OK", result: encodedResult})
+    }).catch((err) => {
+        console.log(err)
+        res.send({status: false, message: "Error generating conversations list"})
+    })
+})
+
+router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const conversationID = req.params.conversationID;
+
+    await UserMessage.find({ conversationID: conversationID }).then((result) => {
+        const encodedResult = jwt.sign({
+            messages: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        res.send({ status: true, message: "OK", result: encodedResult })
+    }).catch((err) => {
+        console.log(err)
+        res.send({ status: false, message: "Error generating conversation" })
+    })
 })
 
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
