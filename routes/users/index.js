@@ -85,61 +85,231 @@ const jwtssechecker = (req, res, next) => {
     }
 }
 
-const sseNotificationstrigger = async (id, details) => {
-    const sseWithUserID = sseNotificationsWaiters[id]
-
-    if(sseWithUserID){
-        await UserNotifications.aggregate([
-            {
-                $match:{
-                    toUserID: id
-                }
-            },{
-                $lookup:{
-                    from: "useraccount",
-                    localField: "fromUserID",
-                    foreignField: "userID",
-                    as: "fromUser"
-                }
-            },{
-                $unwind:{
-                    path: "$fromUser",
-                    preserveNullAndEmptyArrays: true
-                }
-            },{
-                $sort: {_id: -1}
-            },{
-                $project:{
-                    "fromUser._id": 0,
-                    "fromUser.birthdate": 0,
-                    "fromUser.gender": 0,
-                    "fromUser.email": 0,
-                    "fromUser.password": 0,
-                    "fromUser.dateCreated": 0
-                }
+const notificicationTrigger = async (type, id, details, sseWithUserID) => {
+    await UserNotifications.aggregate([
+        {
+            $match:{
+                toUserID: id
             }
-        ]).then((result) => {
-            // console.log(result)
-            var encodedResult = jwt.sign({
-                notifications: result
-            }, JWT_SECRET, {
-                expiresIn: 60 * 60 * 24 * 7
-            })
-    
-            sseWithUserID.sse(`notifications`, {
-                status: true,
-                auth: true,
-                message: details,
-                result: encodedResult
-            })
-        }).catch((err) => {
-            console.log(err)
-            sseWithUserID.sse(`notifications`, {
-                status: false,
-                auth: true,
-                message: "Error retrieving notifications"
-            })
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "fromUserID",
+                foreignField: "userID",
+                as: "fromUser"
+            }
+        },{
+            $unwind:{
+                path: "$fromUser",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $sort: {_id: -1}
+        },{
+            $project:{
+                "fromUser._id": 0,
+                "fromUser.birthdate": 0,
+                "fromUser.gender": 0,
+                "fromUser.email": 0,
+                "fromUser.password": 0,
+                "fromUser.dateCreated": 0
+            }
+        }
+    ]).then((result) => {
+        // console.log(result)
+        var encodedResult = jwt.sign({
+            notifications: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
         })
+
+        sseWithUserID.sse(`notifications`, {
+            status: true,
+            auth: true,
+            message: details,
+            result: encodedResult
+        })
+    }).catch((err) => {
+        console.log(err)
+        sseWithUserID.sse(`notifications`, {
+            status: false,
+            auth: true,
+            message: "Error retrieving notifications"
+        })
+    })
+}
+
+const contactListTrigger = async (type, id, details, sseWithUserID) => {
+    const userID = id
+
+    await UserContacts.aggregate([
+        {
+            $match:{
+                $and:[
+                    {
+                        $or:[
+                            { actionBy: userID },
+                            { "users.userID": userID }
+                        ]
+                    },
+                    {
+                        status: true
+                    }
+                ]
+            }
+        },{
+            $lookup:{
+                from: "contacts",
+                localField: "contactID",
+                foreignField: "contactID",
+                let: { 
+                    firstUserID: { $arrayElemAt: ['$users.userID', 0] },
+                    secondUserID: { $arrayElemAt: ['$users.userID', 1] } 
+                },
+                pipeline: [
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$firstUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "userone"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$userone",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    },
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$secondUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "usertwo"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$usertwo",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    }
+                ],
+                as: "userdetails"
+            }
+        },{
+            $unwind:{
+                path: "$userdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $project:{
+                "userdetails.actionBy": 0,
+                "userdetails.actionDate": 0,
+                "userdetails.contactID": 0,
+                "userdetails.status": 0,
+                "userdetails.users": 0,
+                "users": 0,
+                "userdetails.userone.birthdate": 0,
+                "userdetails.userone.dateCreated": 0,
+                "userdetails.userone.email": 0,
+                "userdetails.userone.gender": 0,
+                "userdetails.userone.isActivated": 0,
+                "userdetails.userone.isVerified": 0,
+                "userdetails.userone.password": 0,
+                "userdetails.usertwo.birthdate": 0,
+                "userdetails.usertwo.dateCreated": 0,
+                "userdetails.usertwo.email": 0,
+                "userdetails.usertwo.gender": 0,
+                "userdetails.usertwo.isActivated": 0,
+                "userdetails.usertwo.isVerified": 0,
+                "userdetails.usertwo.password": 0
+            }
+        },{
+            $sort: {_id: -1}
+        }
+    ]).then((result) => {
+        // console.log(result)
+        const encodedResult = jwt.sign({
+            contacts: result
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
+        })
+
+        sseWithUserID.sse(`contactslist`, {
+            status: true,
+            auth: true,
+            message: details,
+            result: encodedResult
+        })
+
+        // res.send({ status: true, result: encodedResult })
+
+    }).catch((err) => {
+        console.log(err)
+        sseWithUserID.sse(`contactslist`, {
+            status: false,
+            auth: true,
+            message: "Error fetching contacts list"
+        })
+
+        // res.send({ status: false, message: "Error fetching contacts list" })
+    })
+}
+
+const sseNotificationstrigger = async (type, ids, details) => {
+    const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser]
+    const sseWithUserIDRes = sseNotificationsWaiters[ids.sendToUser]
+
+    if(ids.sendFromUser){
+        // console.log(ids.sendFromUser)
+        if(type == "info_contact_decline"){
+            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+        }
+        else if(type == "info_contact_accept"){
+            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+            contactListTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+        }
+        else if(type == "contact_request"){
+            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+        }
+    }
+
+    if(ids.sendToUser){
+        // console.log(ids.sendToUser)
+        if(type == "info_contact_decline"){
+            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+        }
+        else if(type == "info_contact_accept"){
+            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+            contactListTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+        }
+        else if(type == "contact_request"){
+            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+        }
     }
 }
 
@@ -321,10 +491,14 @@ const sendNotification = async (params, actionlog) => {
     const newNotif = new UserNotifications(params)
     
     newNotif.save().then(() => {
-        sseNotificationstrigger(sendToUser, sendToDetails)
-        if(type == "info"){
-            sseNotificationstrigger(sendFromUser, actionlog)
-        }
+        sseNotificationstrigger(type, {
+            sendToUser: sendToUser,
+            sendFromUser: sendFromUser
+        }, {
+            sendToDetails: sendToDetails,
+            actionlog: actionlog
+        })
+        // sseNotificationstrigger(type, sendFromUser, actionlog)
     }).catch((err) => { console.log(err) })
 }
 
@@ -498,7 +672,7 @@ const updateNotifStatus = async (type, referenceID, notificationID, toUserID, fr
                 date: dateGetter(),
                 time: timeGetter()
             },
-            type: "info"
+            type: type
         }
         sendNotification(notifParams, actionlog)
     }).catch((err) => {
@@ -526,7 +700,7 @@ router.post('/declineContactRequest', jwtchecker, async (req, res) => {
                 const notifHeadline = `Declined Request`
                 const notifContent = `${fromUserID} declined your request`
                 
-                await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You declined a contact request")
+                await updateNotifStatus("info_contact_decline", referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You declined a contact request")
             }
         }).catch((err) => {
             console.log(err)
@@ -556,7 +730,7 @@ router.post('/acceptContactRequest', jwtchecker, async (req, res) => {
             const notifHeadline = `Accepted Request`
             const notifContent = `${fromUserID} accepted your request`
                 
-            await updateNotifStatus(type, referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You accepted a contact request")
+            await updateNotifStatus("info_contact_accept", referenceID, notificationID, toUserID, fromUserID, notifHeadline, notifContent, "You accepted a contact request")
         }).catch((err) => {
             res.send({status: false, message: "Error verifying accept request"})
             console.log(err)
