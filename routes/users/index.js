@@ -124,18 +124,22 @@ const notificicationTrigger = async (type, id, details, sseWithUserID) => {
             expiresIn: 60 * 60 * 24 * 7
         })
 
-        sseWithUserID.sse(`notifications`, {
-            status: true,
-            auth: true,
-            message: details,
-            result: encodedResult
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`notifications`, {
+                status: true,
+                auth: true,
+                message: details,
+                result: encodedResult
+            })
         })
     }).catch((err) => {
         console.log(err)
-        sseWithUserID.sse(`notifications`, {
-            status: false,
-            auth: true,
-            message: "Error retrieving notifications"
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`notifications`, {
+                status: false,
+                auth: true,
+                message: "Error retrieving notifications"
+            })
         })
     })
 }
@@ -260,21 +264,25 @@ const contactListTrigger = async (type, id, details, sseWithUserID) => {
             expiresIn: 60 * 60 * 24 * 7
         })
 
-        sseWithUserID.sse(`contactslist`, {
-            status: true,
-            auth: true,
-            message: details,
-            result: encodedResult
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`contactslist`, {
+                status: true,
+                auth: true,
+                message: details,
+                result: encodedResult
+            })
         })
 
         // res.send({ status: true, result: encodedResult })
 
     }).catch((err) => {
         console.log(err)
-        sseWithUserID.sse(`contactslist`, {
-            status: false,
-            auth: true,
-            message: "Error fetching contacts list"
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`contactslist`, {
+                status: false,
+                auth: true,
+                message: "Error fetching contacts list"
+            })
         })
 
         // res.send({ status: false, message: "Error fetching contacts list" })
@@ -938,18 +946,22 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
             expiresIn: 60 * 60 * 24 * 7
         })
 
-        sseWithUserID.sse(`messages_list`, {
-            status: true,
-            auth: true,
-            message: details,
-            result: encodedResult
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`messages_list`, {
+                status: true,
+                auth: true,
+                message: details,
+                result: encodedResult
+            })
         })
     }).catch((err) => {
         console.log(err)
-        sseWithUserID.sse(`messages_list`, {
-            status: false,
-            auth: true,
-            message: "Error generating conversations list"
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`messages_list`, {
+                status: false,
+                auth: true,
+                message: "Error generating conversations list"
+            })
         })
     })
 }
@@ -1097,8 +1109,23 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
 
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
     const userID = req.params.userID
+    const sseWithUserID = sseNotificationsWaiters[userID]
 
-    sseNotificationsWaiters[userID] = res
+    if(sseWithUserID){
+        sseNotificationsWaiters[userID] = {
+            response: [
+                ...sseWithUserID.response,
+                res
+            ]
+        }
+    }
+    else{
+        sseNotificationsWaiters[userID] = {
+            response: [
+                res
+            ]
+        }
+    }
 })
 
 router.get('/sselogout', jwtchecker, (req, res) => {
