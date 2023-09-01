@@ -293,31 +293,35 @@ const sseNotificationstrigger = async (type, ids, details) => {
     const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser]
     const sseWithUserIDRes = sseNotificationsWaiters[ids.sendToUser]
 
-    if(ids.sendFromUser){
-        // console.log(ids.sendFromUser)
-        if(type == "info_contact_decline"){
-            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-        }
-        else if(type == "info_contact_accept"){
-            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-            contactListTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-        }
-        else if(type == "contact_request"){
-            notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+    if(sseWithUserID){
+        if(ids.sendFromUser){
+            // console.log(ids.sendFromUser)
+            if(type == "info_contact_decline"){
+                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+            }
+            else if(type == "info_contact_accept"){
+                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+                contactListTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+            }
+            else if(type == "contact_request"){
+                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
+            }
         }
     }
 
-    if(ids.sendToUser){
-        // console.log(ids.sendToUser)
-        if(type == "info_contact_decline"){
-            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-        }
-        else if(type == "info_contact_accept"){
-            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-            contactListTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-        }
-        else if(type == "contact_request"){
-            notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+    if(sseWithUserIDRes){
+        if(ids.sendToUser){
+            // console.log(ids.sendToUser)
+            if(type == "info_contact_decline"){
+                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+            }
+            else if(type == "info_contact_accept"){
+                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+                contactListTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+            }
+            else if(type == "contact_request"){
+                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
+            }
         }
     }
 }
