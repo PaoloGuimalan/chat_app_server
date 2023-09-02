@@ -8,6 +8,7 @@ const usercontacts = mongoose.Schema({
         time: {type: mongoose.Schema.Types.Mixed, require: true}
     },
     status: { type: Boolean, require: true },
+    type: { type: mongoose.Schema.Types.Mixed, require: true },
     users: [
         {
             userID: { type: mongoose.Schema.Types.Mixed, require: true }

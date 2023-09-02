@@ -11,6 +11,7 @@ const UserVerification = require("../../schema/auth/userverification")
 const UserContacts = require("../../schema/users/contacts")
 const UserNotifications = require("../../schema/users/notifications")
 const UserMessage = require('../../schema/messages/message')
+const UserGroups = require("../../schema/users/groups")
 
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
@@ -228,6 +229,18 @@ const contactListTrigger = async (type, id, details, sseWithUserID) => {
         },{
             $unwind:{
                 path: "$userdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $lookup:{
+                from: "groups",
+                localField: "contactID",
+                foreignField: "groupID",
+                as: "groupdetails"
+            }
+        },{
+            $unwind:{
+                path: "$groupdetails",
                 preserveNullAndEmptyArrays: true
             }
         },{
@@ -575,6 +588,7 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
                 time: timeGetter()
             },
             status: false,
+            type: "single",
             users: [
                 {
                     userID: userID
@@ -839,6 +853,18 @@ router.get('/getContacts', jwtchecker, async (req, res) => {
         },{
             $unwind:{
                 path: "$userdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $lookup:{
+                from: "groups",
+                localField: "contactID",
+                foreignField: "groupID",
+                as: "groupdetails"
+            }
+        },{
+            $unwind:{
+                path: "$groupdetails",
                 preserveNullAndEmptyArrays: true
             }
         },{
