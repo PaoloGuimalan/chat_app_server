@@ -959,6 +959,18 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
                 as: "users"
             }
         },{
+            $lookup:{
+                from: "groups",
+                localField: "conversationID",
+                foreignField: "groupID",
+                as: "groupdetails"
+            }
+        },{
+            $unwind:{
+                path: "$groupdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
             $project:{
                 "users.birthdate": 0,
                 "users.dateCreated": 0,
@@ -970,6 +982,7 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
             }
         }
     ]).then((result) => {
+        // console.log(result)
         const encodedResult = jwt.sign({
             conversationslist: result
         }, JWT_SECRET, {
@@ -1095,6 +1108,18 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 as: "users"
             }
         },{
+            $lookup:{
+                from: "groups",
+                localField: "conversationID",
+                foreignField: "groupID",
+                as: "groupdetails"
+            }
+        },{
+            $unwind:{
+                path: "$groupdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
             $project:{
                 "users.birthdate": 0,
                 "users.dateCreated": 0,
@@ -1106,6 +1131,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
             }
         }
     ]).then((result) => {
+        // console.log(result)
         const encodedResult = jwt.sign({
             conversationslist: result
         }, JWT_SECRET, {
