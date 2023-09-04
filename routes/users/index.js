@@ -1163,6 +1163,116 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
     })
 })
 
+const sendMessageInitForGC = async (convID, userID, recs) => {
+    const messageID = await checkExistingMessageID(makeID(30));
+        const conversationID = convID;
+        const sender = userID;
+        const receivers = recs; //Array
+        const seeners = []; //Array
+        const content = `${userID} created the group chat`;
+        const messageDate = {
+            date: dateGetter(),
+            time: timeGetter()
+        };
+        const isReply = false;
+        const messageType = "notif";
+        const conversationType = "group";
+
+        const payload = {
+            messageID: messageID,
+            conversationID: conversationID,
+            sender: sender,
+            receivers: receivers,
+            seeners: seeners,
+            content: content,
+            messageDate: messageDate,
+            isReply: isReply,
+            messageType: messageType,
+            conversationType: conversationType
+        }
+
+        const newMessage = new UserMessage(payload)
+
+        newMessage.save().then(() => {
+            receivers.map((rcvs, i) => {
+                var sseWithUserID = sseNotificationsWaiters[rcvs]
+                if(sseWithUserID){
+                    sseMessageNotification("messages_list", rcvs, sender)
+                    contactListTrigger("contactlist", rcvs, `${userID} created a group chat`, sseWithUserID)
+                }
+            })
+        }).catch((err) => {
+            console.log(err)
+        })
+}
+
+router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+
+        const contactID = await checkContactID(`${makeID(20)}`)
+        const otherUsers = decodeToken.otherUsers
+        const groupName = decodeToken.groupName
+        const privacy = decodeToken.privacy
+        const allReceivers = [
+            userID,
+            ...otherUsers
+        ]
+        const userReceivers = allReceivers.map((alr, i) => ({
+            userID: alr
+        }))
+
+        // console.log(allReceivers)
+
+        const payload = {
+            contactID: contactID,
+            actionBy: userID,
+            actionDate: {
+                date: dateGetter(),
+                time: timeGetter()
+            },
+            status: true,
+            type: "group",
+            users: userReceivers
+        }
+
+        const newContact = new UserContacts(payload)
+
+        newContact.save().then(async () => {
+            const groupParams = {
+                groupID: contactID,
+                groupName: groupName,
+                dateCreated: {
+                    date: dateGetter(),
+                    time: timeGetter()
+                },
+                createdBy: userID,
+                type: privacy
+            }
+
+            const newGroup = new UserGroups(groupParams)
+            newGroup.save().then(async () => {
+                sendMessageInitForGC(contactID, userID, allReceivers)
+                res.send({ status: true, message: `You created a Group Chat` })
+            }).catch((err) => {
+                res.send({ status: false, message: "Creating a group encountered an error!" })
+                console.log(err)
+            })
+
+            // res.send({ status: true, message: `You created a Group Chat` })
+        }).catch((err) => {
+            res.send({ status: false, message: "Creating a group contact encountered an error!" })
+            console.log(err)
+        })
+    }catch(ex){
+        res.send({ status: false, message: "Group token encountered an error!" })
+        console.log(ex)
+    }
+})
+
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
