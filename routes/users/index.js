@@ -945,7 +945,18 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
                 messageType: { "$last": "$messageType" },
-                conversationType: { "$last": "$conversationType" }
+                conversationType: { "$last": "$conversationType" },
+                unread: {
+                    $sum: {
+                        $cond: {
+                            if:{
+                                $in: [userID, "$seeners"]
+                            },
+                            then: 0,
+                            else: 1
+                        }
+                    }
+                }
             }
         },{
             $sort: {
@@ -1094,7 +1105,18 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
                 messageType: { "$last": "$messageType" },
-                conversationType: { "$last": "$conversationType" }
+                conversationType: { "$last": "$conversationType" },
+                unread: {
+                    $sum: {
+                        $cond: {
+                            if:{
+                                $in: [userID, "$seeners"]
+                            },
+                            then: 0,
+                            else: 1
+                        }
+                    }
+                }
             }
         },{
             $sort: {
@@ -1127,7 +1149,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 "users.gender": 0,
                 "users.isActivated": 0,
                 "users.isVerified": 0,
-                "users.password": 0
+                "users.password": 0,
             }
         }
     ]).then((result) => {
