@@ -1041,7 +1041,9 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         const conversationID = decodedToken.conversationID;
         const sender = userID;
         const receivers = decodedToken.receivers; //Array
-        const seeners = decodedToken.seeners; //Array
+        const seeners = [
+            userID
+        ]; //Array
         const content = decodedToken.content;
         const messageDate = {
             date: dateGetter(),
