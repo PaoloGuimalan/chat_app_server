@@ -1297,6 +1297,42 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
     }
 })
 
+router.post('/seenNewMessages', jwtchecker, (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+
+        const conversationID = decodeToken.conversationID;
+        const receivers = decodeToken.receivers;
+
+        // console.log(receivers)
+        
+        UserMessage.updateMany({ 
+            conversationID: conversationID,
+            seeners: {
+                $nin: [userID]
+            } 
+        },{
+            $push: {
+                seeners: userID
+            }
+        }).then((result) => {
+            receivers.map((rcvs, i) => {
+                sseMessageNotification("messages_list", rcvs, userID)
+            })
+            res.send({ status: true, message: "Seen OK" });
+        }).catch((err) => {
+            console.log(err)
+            res.send({ status: false, message: "Cannot update seen status" })
+        })
+    }catch(ex){
+        console.log(ex)
+        res.send({ status: false, message: "Error reading messages!" })
+    }
+})
+
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
