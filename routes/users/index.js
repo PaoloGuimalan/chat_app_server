@@ -923,7 +923,7 @@ const checkExistingMessageID = async (messageID) => {
     })
 }
 
-const messagesTrigger = async (id, sseWithUserID, details) => {
+const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
     const userID = id;
 
     await UserMessage.aggregate([
@@ -1004,6 +1004,7 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
             itr.sse(`messages_list`, {
                 status: true,
                 auth: true,
+                onseen: onseen,
                 message: details,
                 result: encodedResult
             })
@@ -1020,12 +1021,12 @@ const messagesTrigger = async (id, sseWithUserID, details) => {
     })
 }
 
-const sseMessageNotification = async (type, id, details) => {
+const sseMessageNotification = async (type, id, details, trigger) => {
     const sseWithUserID = sseNotificationsWaiters[id]
 
     if(sseWithUserID){
         if(type == "messages_list"){
-            messagesTrigger(id, sseWithUserID, details)
+            messagesTrigger(id, sseWithUserID, details, trigger)
         }
     }
 }
@@ -1071,7 +1072,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         newMessage.save().then(() => {
             res.send({status: true, message: "Message Sent"})
             receivers.map((rcvs, i) => {
-                sseMessageNotification("messages_list", rcvs, sender)
+                sseMessageNotification("messages_list", rcvs, sender, false)
             })
         }).catch((err) => {
             console.log(err)
@@ -1221,7 +1222,7 @@ const sendMessageInitForGC = async (convID, userID, recs) => {
             receivers.map((rcvs, i) => {
                 var sseWithUserID = sseNotificationsWaiters[rcvs]
                 if(sseWithUserID){
-                    sseMessageNotification("messages_list", rcvs, sender)
+                    sseMessageNotification("messages_list", rcvs, sender, false)
                     contactListTrigger("contactlist", rcvs, `${userID} created a group chat`, sseWithUserID)
                 }
             })
@@ -1319,9 +1320,12 @@ router.post('/seenNewMessages', jwtchecker, (req, res) => {
                 seeners: userID
             }
         }).then((result) => {
-            receivers.map((rcvs, i) => {
-                sseMessageNotification("messages_list", rcvs, userID)
-            })
+            // console.log(result.modifiedCount)
+            if(result.modifiedCount > 0){
+                receivers.map((rcvs, i) => {
+                    sseMessageNotification("messages_list", rcvs, userID, true)
+                })
+            }
             res.send({ status: true, message: "Seen OK" });
         }).catch((err) => {
             console.log(err)
