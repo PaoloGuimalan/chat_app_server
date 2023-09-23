@@ -12,6 +12,7 @@ const UserContacts = require("../../schema/users/contacts")
 const UserNotifications = require("../../schema/users/notifications")
 const UserMessage = require('../../schema/messages/message')
 const UserGroups = require("../../schema/users/groups")
+const UploadedFiles = require("../../schema/posts/uploadedfiles")
 
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
@@ -1337,6 +1338,28 @@ router.post('/seenNewMessages', jwtchecker, (req, res) => {
     }catch(ex){
         console.log(ex)
         res.send({ status: false, message: "Error reading messages!" })
+    }
+})
+
+router.post('/sendFiles', jwtchecker, (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+
+        const conversationID = decodeToken.conversationID
+        const receivers = decodeToken.receivers;
+        const files = decodeToken.files;
+        const isReply = decodeToken.isReply;
+        const conversationType = decodeToken.conversationType;
+
+        // console.log(files)
+
+        res.send({ status: true, message: "OK" })
+    }catch(ex){
+        console.log(ex)
+        res.send({ status: false, message: "Error decoding files!" })
     }
 })
 

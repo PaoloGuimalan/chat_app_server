@@ -20,8 +20,13 @@ const connectMongo = async () => {
     return mongoose.connect(MongooseConnection.url, MongooseConnection.params)
 }
 
-app.use(bodyParser.urlencoded({extended: false}));
-app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({
+    limit: "200mb",
+    extended: false
+}));
+app.use(bodyParser.json({
+    limit: "200mb"
+}));
 app.use(express.json());
 app.use(cors({
     origin: "*",
