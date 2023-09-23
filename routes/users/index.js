@@ -1038,6 +1038,8 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
     try{
         const decodedToken = jwt.verify(token, JWT_SECRET)
 
+        const pendingID = decodedToken.pendingID;
+
         const messageID = await checkExistingMessageID(makeID(30));
         const conversationID = decodedToken.conversationID;
         const sender = userID;
@@ -1057,6 +1059,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         const payload = {
             messageID: messageID,
             conversationID: conversationID,
+            pendingID: pendingID,
             sender: sender,
             receivers: receivers,
             seeners: seeners,
@@ -1070,7 +1073,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         const newMessage = new UserMessage(payload)
 
         newMessage.save().then(() => {
-            res.send({status: true, message: "Message Sent"})
+            res.send({status: true, message: "Message Sent", pendingID: pendingID})
             receivers.map((rcvs, i) => {
                 sseMessageNotification("messages_list", rcvs, sender, false)
             })
