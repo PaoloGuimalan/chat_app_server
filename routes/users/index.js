@@ -5,6 +5,31 @@ const mongoose = require("mongoose")
 const jwt = require("jsonwebtoken")
 const Axios = require("axios")
 const sse = require("sse-express")
+const readable = require('stream').Readable;
+const fs = require("fs");
+const firebase = require("firebase-admin")
+const fstorage = require("firebase-admin/storage");
+const { FIREBASE_TYPE, FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL, FIREBASE_CLIENT_ID, FIREBASE_AUTH_URI, FIREBASE_TOKEN_URI, FIREBASE_AUTH_PROVIDER_X509_CERT_URL, FIREBASE_CLIENT_X509_CERT_URL, FIREBASE_UNIVERSE_DOMAIN, FIREBASE_STORAGE_BUCKET } = require("../../reusables/vars/firebasevars")
+
+const firebaseAdminConfig = {
+    type: FIREBASE_TYPE,
+    project_id: FIREBASE_PROJECT_ID,
+    private_key_id: FIREBASE_PRIVATE_KEY_ID,
+    private_key: FIREBASE_PRIVATE_KEY,
+    client_email: FIREBASE_CLIENT_EMAIL,
+    client_id: FIREBASE_CLIENT_ID,
+    auth_uri: FIREBASE_AUTH_URI,
+    token_uri: FIREBASE_TOKEN_URI,
+    auth_provider_x509_cert_url: FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
+    client_x509_cert_url: FIREBASE_CLIENT_X509_CERT_URL,
+    universe_domain: FIREBASE_UNIVERSE_DOMAIN
+  }
+
+const firebaseinit = firebase.initializeApp({
+    credential: firebase.credential.cert(firebaseAdminConfig),
+    storageBucket: FIREBASE_STORAGE_BUCKET
+});
+const storage = fstorage.getStorage(firebaseinit.storage().app)
 
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
@@ -17,6 +42,8 @@ const UploadedFiles = require("../../schema/posts/uploadedfiles")
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
 const makeID = require("../../reusables/hooks/makeID")
+const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
+const { format } = require("path")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -1341,7 +1368,107 @@ router.post('/seenNewMessages', jwtchecker, (req, res) => {
     }
 })
 
-router.post('/sendFiles', jwtchecker, (req, res) => {
+const checkExistingFileID = async (checkID) => {
+    return await UploadedFiles.find({ fileID: checkID}).then((result) => {
+        if(result.length > 0){
+            checkExistingFileID(`FILE_${makeID(20)}`)
+        }
+        else{
+            return checkID;
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+const saveFileRecordToDatabase = async (foreignID, fileData, action, fileType, fileOrigin) => {
+    const payload = {
+        fileID: await checkExistingFileID(`FILE_${makeID(20)}`),
+        foreignID: foreignID,
+        fileDetails: {
+            data: fileData
+        },
+        fileOrigin: fileOrigin,
+        fileType: fileType,
+        action: action,
+        dateUploaded: {
+            time: timeGetter(),
+            date: dateGetter()
+        }
+    }
+
+    const newFile = new UploadedFiles(payload)
+
+    newFile.save().then(() => {
+
+    }).catch((err) => {
+        console.log(err)
+    })
+}
+
+const uploadFirebase = async (mp, userID, receivers, isReply, conversationType) => {
+    var messageID = await checkExistingMessageID(makeID(30))
+
+    var arr = mp.content.split(',')
+    var fileTypeBase = arr[0].match(/:(.*?);/)[1]
+    var fileType = arr[0].match(/:(.*?);/)[1].split("/")[1]
+    var fileID = `IMG_${makeID(20)}.${fileType}`
+    var fileIDwoType = `IMG_${makeID(20)}`
+    // var fileFinal = dataURLtoFile(mp.content, fileIDwoType)
+    var contentFinal = mp.content.split('base64,')[1]
+    var fileFinal = base64ToArrayBuffer(contentFinal)
+    var finalBuffer = Buffer.from(fileFinal)
+
+    var finalPathwithID = `imgs/${fileID}`
+
+    const file = storage.bucket().file(finalPathwithID)
+
+    await file.save(finalBuffer, {
+        contentType: fileTypeBase,
+        public: true
+    }).then((url) => {
+        const publicUrl = `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithID}`;
+        saveFileMessage(userID, messageID, mp.pendingID, mp.conversationID, receivers, publicUrl, isReply, mp.type, conversationType)
+    })
+}
+
+const saveFileMessage = async (userID, messageID, pendingID, conversationID, receivers, content, isReply, messageType, conversationType) => {
+    const seeners = [
+        userID
+    ]; //Array
+    const messageDate = {
+        date: dateGetter(),
+        time: timeGetter()
+    };
+    
+    const payload = {
+        messageID: messageID,
+        conversationID: conversationID,
+        pendingID: pendingID,
+        sender: userID,
+        receivers: receivers,
+        seeners: seeners,
+        content: content,
+        messageDate: messageDate,
+        isReply: isReply,
+        messageType: messageType,
+        conversationType: conversationType
+    }
+    
+    const newMessage = new UserMessage(payload)
+    
+    newMessage.save().then(() => {
+        saveFileRecordToDatabase(messageID, content, "message", messageType, "firebase")
+        receivers.map((rcvs, i) => {
+            sseMessageNotification("messages_list", rcvs, userID, false)
+        })
+    }).catch((err) => {
+        console.log(err)
+    })
+}
+
+router.post('/sendFiles', jwtchecker, async (req, res) => {
     const userID = req.params.userID
     const token = req.body.token;
 
@@ -1354,7 +1481,9 @@ router.post('/sendFiles', jwtchecker, (req, res) => {
         const isReply = decodeToken.isReply;
         const conversationType = decodeToken.conversationType;
 
-        // console.log(files)
+        files.map((mp) => {
+           uploadFirebase(mp, userID, receivers, isReply, conversationType)
+        })
 
         res.send({ status: true, message: "OK" })
     }catch(ex){

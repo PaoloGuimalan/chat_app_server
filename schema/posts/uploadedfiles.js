@@ -1,7 +1,8 @@
 const mongoose = require("mongoose")
 
 const uploadedfiles = mongoose.Schema({
-    filesID: { type: mongoose.Schema.Types.Mixed, require: true },
+    fileID: { type: mongoose.Schema.Types.Mixed, require: true },
+    foreignID: { type: mongoose.Schema.Types.Mixed, require: true },
     fileDetails: {
         data: { type: mongoose.Schema.Types.Mixed, require: true }
     },
