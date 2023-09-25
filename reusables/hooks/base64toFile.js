@@ -1,4 +1,5 @@
 const { File } = require("@web-std/file")
+const atob = require("atob")
 
 function dataURLtoFile(dataurl, filename) {
     var arr = dataurl.split(','),
