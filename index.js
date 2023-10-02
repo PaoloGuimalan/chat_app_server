@@ -14,7 +14,8 @@ const MongooseConnection = require("./connections/index")
 
 const Auth = require("./routes/auth/index")
 const Messages = require("./routes/messages/index")
-const Users = require("./routes/users/index")
+const Users = require("./routes/users/index");
+const { initSocketIO } = require("./socketIO/socketIO");
 
 const connectMongo = async () => {
     return mongoose.connect(MongooseConnection.url, MongooseConnection.params)
@@ -42,7 +43,7 @@ app.get('/', (req, res) => {
     res.send("Welcome to ChatterLoop V2 API!")
 })
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server Running: ${PORT}`)
     connectMongo().then(() => {
         console.log(`Connected to MongoDB`)
@@ -50,3 +51,5 @@ app.listen(PORT, () => {
         console.log(err)
     })
 })
+
+initSocketIO(server);

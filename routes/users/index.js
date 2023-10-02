@@ -1492,6 +1492,49 @@ router.post('/sendFiles', jwtchecker, async (req, res) => {
     }
 })
 
+const reachCallRecepients = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+    const message = decodedToken.conversationType == "single"?
+    `${decodedToken.callDisplayName} wants to have a ${decodedToken.callType == "audio"? "call" : "video call"}` :
+    `${decodedToken.caller.name} is calling in ${decodedToken.callDisplayName}`;
+
+    const encodedResult = jwt.sign({
+        callmetadata: decodedToken
+    }, JWT_SECRET, {
+        expiresIn: 60 * 60 * 24 * 7
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`incomingcall`, {
+                status: true,
+                auth: true,
+                message: message,
+                result: encodedResult
+            })
+        })
+    }
+}
+
+router.post('/call', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+        const recepients = decodeToken.recepients;
+        
+        recepients.map((rcp) => {
+            reachCallRecepients(rcp, decodeToken)
+        })
+
+        res.send({ status: true, message: "OK" })
+    }catch(ex){
+        console.log(ex)
+        res.send({ status: false, message: "Error declaring call!" })
+    }
+})
+
 router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
