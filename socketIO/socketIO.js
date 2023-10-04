@@ -56,29 +56,54 @@ const initSocketIO = (server) => {
             // console.log("LEAVE CALL", data);
             var conversationID = data.conversationID;
             var currentCall = callCollections[conversationID];
-            var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
+            
+            if(currentCall){
+                var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
 
-            callCollections[conversationID] = {
-                users: [
-                    ...usersInCall
-                ]
+                if(usersInCall.length == 0){
+                    delete callCollections[conversationID];
+
+                    console.log("DELETE CALL IN MEMORY LEAVE CALL", usersInCall);
+                }
+                else{
+                    callCollections[conversationID] = {
+                        users: [
+                            ...usersInCall
+                        ]
+                    }
+    
+                    console.log("LEAVE CALL", usersInCall)
+                }
             }
-
-            console.log("LEAVE CALL", usersInCall)
+            else{
+                console.log("CALL ALREADY LEFT AND DELETED");
+            }
         })
     
         socket.on("disconnect", (socket) => {
             conversationIDGlobal.map((gl) => {
                 var currentCall = callCollections[gl];
-                var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
+                if(currentCall){
+                    var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
 
-                callCollections[gl] = {
-                    users: [
-                        ...usersInCall
-                    ]
+                    if(usersInCall.length == 0){
+                        delete callCollections[gl];
+
+                        console.log("DELETE CALL IN MEMORY DISCONNECT", usersInCall);
+                    }
+                    else{
+                        callCollections[gl] = {
+                            users: [
+                                ...usersInCall
+                            ]
+                        }
+    
+                        console.log("DISCONNECT CALL", usersInCall)
+                    }
                 }
-
-                console.log("DISCONNECT CALL", usersInCall)
+                else{
+                    console.log("CALL ALREADY DISCONNECTED AND DELETED");
+                }
             })
         })
 
