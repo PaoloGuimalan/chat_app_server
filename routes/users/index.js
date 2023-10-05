@@ -1711,10 +1711,30 @@ const setUserSession = async (userID, status, resolve) => {
     })
 }
 
+const updateContactswSessionStatus = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+
+    const encodedResult = jwt.sign({
+        user: decodedToken
+    }, JWT_SECRET, {
+        expiresIn: 60 * 60 * 24 * 7
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`active_users`, {
+                status: true,
+                auth: true,
+                result: encodedResult
+            })
+        })
+    }
+}
+
 router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) => {
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
-    const contacts = getContactsForSession(userID);
+    const contacts = await getContactsForSession(userID);
 
     if(sseWithUserID){
         sseNotificationsWaiters[userID] = {
@@ -1732,14 +1752,38 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
         }
     }
 
-    // setUserSession(userID, true, async () => {
-    //     console.log("CONNECTED", userID);
-    // })
+    const activeMetaData = {
+        _id: userID,
+        sessionStatus: true,
+        sessiondate: {
+            date: dateGetter(),
+            time: timeGetter()
+        }
+    }
+
+    setUserSession(userID, true, async () => {
+        // console.log("CONNECTED", userID);
+        contacts.map((mp) => {
+            updateContactswSessionStatus(mp, activeMetaData)
+        })
+    })
     
     req.on('close', () => {
-        // setUserSession(userID, false, async () => {
-        //     console.log("DISCONNECTED", userID);
-        // })
+        const disconnectMetaData = {
+            _id: userID,
+            sessionStatus: false,
+            sessiondate: {
+                date: dateGetter(),
+                time: timeGetter()
+            }
+        }
+
+        setUserSession(userID, false, async () => {
+            // console.log("DISCONNECTED", userID);
+            contacts.map((mp) => {
+                updateContactswSessionStatus(mp, disconnectMetaData)
+            })
+        })
     })
 })
 
