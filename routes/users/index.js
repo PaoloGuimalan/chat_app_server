@@ -1536,27 +1536,6 @@ router.post('/call', jwtchecker, async (req, res) => {
     }
 })
 
-router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
-    const userID = req.params.userID
-    const sseWithUserID = sseNotificationsWaiters[userID]
-
-    if(sseWithUserID){
-        sseNotificationsWaiters[userID] = {
-            response: [
-                ...sseWithUserID.response,
-                res
-            ]
-        }
-    }
-    else{
-        sseNotificationsWaiters[userID] = {
-            response: [
-                res
-            ]
-        }
-    }
-})
-
 const getContactsForSession = async (userID) => {
     return await UserContacts.aggregate([
         {
@@ -1732,27 +1711,40 @@ const setUserSession = async (userID, status, resolve) => {
     })
 }
 
-router.get('/activecontacts', jwtchecker, (req, res) => {
+router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) => {
     const userID = req.params.userID
-})
-
-router.get('/sessionhold', jwtchecker, async (req, res) => {
-    const userID = req.params.userID
+    const sseWithUserID = sseNotificationsWaiters[userID]
     const contacts = getContactsForSession(userID);
 
+    if(sseWithUserID){
+        sseNotificationsWaiters[userID] = {
+            response: [
+                ...sseWithUserID.response,
+                res
+            ]
+        }
+    }
+    else{
+        sseNotificationsWaiters[userID] = {
+            response: [
+                res
+            ]
+        }
+    }
+
     setUserSession(userID, true, async () => {
-        console.log("CONNECTED", userID);
+        console.log("CONNECTED", await contacts);
     })
-
-    // setTimeout(() => {
-    //     res.end();
-    // },5000);
-
+    
     req.on('close', () => {
         setUserSession(userID, false, async () => {
             console.log("DISCONNECTED", userID);
         })
     })
+})
+
+router.get('/activecontacts', jwtchecker, (req, res) => {
+    const userID = req.params.userID
 })
 
 router.get('/sselogout', jwtchecker, (req, res) => {
