@@ -1732,19 +1732,61 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
         }
     }
 
-    setUserSession(userID, true, async () => {
-        console.log("CONNECTED", await contacts);
-    })
+    // setUserSession(userID, true, async () => {
+    //     console.log("CONNECTED", userID);
+    // })
     
     req.on('close', () => {
-        setUserSession(userID, false, async () => {
-            console.log("DISCONNECTED", userID);
-        })
+        // setUserSession(userID, false, async () => {
+        //     console.log("DISCONNECTED", userID);
+        // })
     })
 })
 
-router.get('/activecontacts', jwtchecker, (req, res) => {
+router.get('/activecontacts', jwtchecker, async (req, res) => {
     const userID = req.params.userID
+    const contacts = await getContactsForSession(userID);
+
+    // console.log(contacts)
+
+    await UserSessions.aggregate([
+        {
+            $match: {
+                 userID: { $in: contacts }
+            }
+        },{
+            $group: {
+                "_id": "$userID",
+                "sessionID": { 
+                    "$last": "$sessionID"
+                 },
+                "sessionStatus": { 
+                    "$last": "$sessionStatus"
+                 },
+                "sessiondate": { 
+                    "$last": "$sessiondate"
+                 }
+            }
+        }
+    ]).then((result) => {
+        const resultChecker = result.map((mp) => mp._id)
+        const sessionFiller = contacts.map((mp) => {
+            if(resultChecker.includes(mp)){
+                return(result.filter((flt) => flt._id == mp)[0])
+            }
+            else{
+                return {
+                    _id: mp,
+                    sessionStatus: false,
+                    sessiondate: null
+                }
+            }
+        })
+        res.send({ status: true, result: sessionFiller })
+    }).catch((err) => {
+        console.log(err);
+        res.send({ status: false, message: "Error getting active users" })
+    })
 })
 
 router.get('/sselogout', jwtchecker, (req, res) => {
