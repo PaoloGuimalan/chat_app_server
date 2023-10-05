@@ -38,6 +38,7 @@ const UserNotifications = require("../../schema/users/notifications")
 const UserMessage = require('../../schema/messages/message')
 const UserGroups = require("../../schema/users/groups")
 const UploadedFiles = require("../../schema/posts/uploadedfiles")
+const UserSessions = require("../../schema/auth/sessions")
 
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
@@ -1554,6 +1555,204 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], (req, res) => {
             ]
         }
     }
+})
+
+const getContactsForSession = async (userID) => {
+    return await UserContacts.aggregate([
+        {
+            $match:{
+                $and:[
+                    {
+                        $or:[
+                            { actionBy: userID },
+                            { "users.userID": userID }
+                        ]
+                    },
+                    {
+                        status: true
+                    },
+                    {
+                        type: "single"
+                    }
+                ]
+            }
+        },{
+            $lookup:{
+                from: "contacts",
+                localField: "contactID",
+                foreignField: "contactID",
+                let: { 
+                    firstUserID: { $arrayElemAt: ['$users.userID', 0] },
+                    secondUserID: { $arrayElemAt: ['$users.userID', 1] } 
+                },
+                pipeline: [
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$firstUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "userone"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$userone",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    },
+                    {
+                        $lookup:{
+                            from: "useraccount",
+                            pipeline:[
+                                {
+                                    $match: {
+                                        $expr:{
+                                            $and: [
+                                                {$eq: ["$userID", "$$secondUserID"]},
+                                                {$eq: ["$isVerified", true]},
+                                                {$eq: ["$isActivated", true]}
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: "usertwo"
+                        }
+                    },
+                    {
+                        $unwind:{
+                            path: "$usertwo",
+                            preserveNullAndEmptyArrays: true
+                        }
+                    }
+                ],
+                as: "userdetails"
+            }
+        },{
+            $unwind:{
+                path: "$userdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $lookup:{
+                from: "groups",
+                localField: "contactID",
+                foreignField: "groupID",
+                as: "groupdetails"
+            }
+        },{
+            $unwind:{
+                path: "$groupdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $project:{
+                "userdetails.actionBy": 0,
+                "userdetails.actionDate": 0,
+                "userdetails.contactID": 0,
+                "userdetails.status": 0,
+                "userdetails.users": 0,
+                "users": 0,
+                "userdetails.userone.birthdate": 0,
+                "userdetails.userone.dateCreated": 0,
+                "userdetails.userone.email": 0,
+                "userdetails.userone.gender": 0,
+                "userdetails.userone.isActivated": 0,
+                "userdetails.userone.isVerified": 0,
+                "userdetails.userone.password": 0,
+                "userdetails.usertwo.birthdate": 0,
+                "userdetails.usertwo.dateCreated": 0,
+                "userdetails.usertwo.email": 0,
+                "userdetails.usertwo.gender": 0,
+                "userdetails.usertwo.isActivated": 0,
+                "userdetails.usertwo.isVerified": 0,
+                "userdetails.usertwo.password": 0
+            }
+        },{
+            $sort: {_id: -1}
+        }
+    ]).then((result) => {
+        return result.map((mp) => {
+            if(mp.userdetails.userone.userID == userID){
+                return mp.userdetails.usertwo.userID;
+            }
+            else{
+                return mp.userdetails.userone.userID;
+            }
+        });
+    }).catch((err) => {
+        console.log(err)
+        return [];
+    })
+}
+
+const checkSessionID = async (currentID) => {
+    return await UserSessions.find({ sessionID: currentID }).then((result) => {
+        if(result.length > 0){
+            checkSessionID(`SESSION_${makeID(20)}_${timeGetter()}_${dateGetter()}`.split(" ").join("").split(":").join("_").split("pm").join("_").split("/").join("_"));
+        }
+        else{
+            return currentID;
+        }
+    }).catch((err) => {
+        console.log(err);
+        return false;
+    })
+}
+
+const setUserSession = async (userID, status, resolve) => {
+    const newSessionID = await checkSessionID(`SESSION_${makeID(20)}_${timeGetter()}_${dateGetter()}`.split(" ").join("").split(":").join("_").split("pm").join("_").split("/").join("_"));
+    const newSessionPayload = {
+        sessionID: newSessionID,
+        userID: userID,
+        sessionStatus: status,
+        sessiondate: {
+            date: dateGetter(),
+            time: timeGetter()
+        }
+    }
+
+    const newSession = new UserSessions(newSessionPayload);
+
+    newSession.save().then(() => {
+        resolve()
+    }).catch((err) => {
+        console.log(err);
+    })
+}
+
+router.get('/activecontacts', jwtchecker, (req, res) => {
+    const userID = req.params.userID
+})
+
+router.get('/sessionhold', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const contacts = getContactsForSession(userID);
+
+    setUserSession(userID, true, async () => {
+        console.log("CONNECTED", userID);
+    })
+
+    // setTimeout(() => {
+    //     res.end();
+    // },5000);
+
+    req.on('close', () => {
+        setUserSession(userID, false, async () => {
+            console.log("DISCONNECTED", userID);
+        })
+    })
 })
 
 router.get('/sselogout', jwtchecker, (req, res) => {
