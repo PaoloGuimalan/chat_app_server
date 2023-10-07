@@ -1878,6 +1878,31 @@ router.post('/rejectcall', jwtchecker, (req, res) => {
     }
 })
 
+router.post('/endcall', jwtchecker, (req, res) => {
+    const userID = req.params.userID;
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+        const conversationID = decodeToken.conversationID;
+        const conversationType = decodeToken.conversationType;
+        const recepients = decodeToken.recepients;
+
+        recepients.map((mp) => {
+            callrejectnotif(mp, {
+                conversationID: conversationID,
+                endedBy: userID
+            })
+        })
+
+        res.send({ status: true, message: "OK" })
+    }
+    catch(ex){
+        console.log(ex)
+        res.send({ status: false, message: "Cannot decode token" })
+    }
+})
+
 router.get('/sselogout', jwtchecker, (req, res) => {
     
 })
