@@ -1833,6 +1833,51 @@ router.get('/activecontacts', jwtchecker, async (req, res) => {
     })
 })
 
+const callrejectnotif = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+
+    const encodedResult = jwt.sign({
+        rejectdata: decodedToken
+    }, JWT_SECRET, {
+        expiresIn: 60 * 60 * 24 * 7
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.sse(`callreject`, {
+                status: true,
+                auth: true,
+                result: encodedResult
+            })
+        })
+    }
+}
+
+router.post('/rejectcall', jwtchecker, (req, res) => {
+    const userID = req.params.userID;
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+        const conversationID = decodeToken.conversationID;
+        const conversationType = decodeToken.conversationType;
+        const callerID = decodeToken.caller.userID;
+
+        if(conversationType == "single"){
+            callrejectnotif(callerID, {
+                conversationID: conversationID,
+                rejectedBy: userID
+            })
+        }
+
+        res.send({ status: true, message: "OK" })
+    }
+    catch(ex){
+        console.log(ex)
+        res.send({ status: false, message: "Cannot decode token" })
+    }
+})
+
 router.get('/sselogout', jwtchecker, (req, res) => {
     
 })
