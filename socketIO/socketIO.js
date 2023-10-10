@@ -23,25 +23,43 @@ const initSocketIO = (server) => {
             conversationIDGlobal.push(conversationID);
 
             if(currentCall){
+                var newCallMembersSet = [
+                    ...currentCall.users,
+                    {
+                        socketID: socketID,
+                        userID: data.userID
+                    }
+                ]
+
                 callCollections[conversationID] = {
-                    users: [
-                        ...currentCall.users,
-                        {
-                            socketID: socketID,
-                            userID: data.userID
-                        }
-                    ]
+                    users: newCallMembersSet
                 }
+
+                newCallMembersSet.map((mp) => {
+                    var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                    io.to(mp.socketID).emit('newcaller', usersInCallSocketMemory);
+                })
             }
             else{
+                var newCallMembersSet = [
+                    {
+                        socketID: socketID,
+                        userID: data.userID
+                    }
+                ]
+
                 callCollections[conversationID] = {
-                    users: [
-                        {
-                            socketID: socketID,
-                            userID: data.userID
-                        }
-                    ]
+                    users: newCallMembersSet
                 }
+
+                callCollections[conversationID] = {
+                    users: newCallMembersSet
+                }
+
+                newCallMembersSet.map((mp) => {
+                    var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                    io.to(mp.socketID).emit('newcaller', usersInCallSocketMemory);
+                })
             }
             // console.log(socketID)
         })
