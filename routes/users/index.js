@@ -45,6 +45,7 @@ const timeGetter = require("../../reusables/hooks/getTime")
 const makeID = require("../../reusables/hooks/makeID")
 const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
 const { format } = require("path")
+const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -1205,10 +1206,14 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
 router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
     const conversationID = req.params.conversationID;
+    const range = req.headers["range"];
+    const totalmessages = await GetAllMessageCountInAConversation(conversationID);
 
-    await UserMessage.find({ conversationID: conversationID }).then((result) => {
+    await UserMessage.find({ conversationID: conversationID }).sort({ _id: -1 }).limit(range).then((result) => {
+        var message = result.reverse();
         const encodedResult = jwt.sign({
-            messages: result
+            messages: message,
+            total: totalmessages
         }, JWT_SECRET, {
             expiresIn: 60 * 60 * 24 * 7
         })
@@ -1333,6 +1338,9 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
 router.post('/seenNewMessages', jwtchecker, (req, res) => {
     const userID = req.params.userID
     const token = req.body.token;
+    const range = req.headers["range"];
+
+    // console.log("Seen", range);
 
     try{
         const decodeToken = jwt.verify(token, JWT_SECRET)
