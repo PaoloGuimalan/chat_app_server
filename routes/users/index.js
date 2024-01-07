@@ -46,11 +46,10 @@ const makeID = require("../../reusables/hooks/makeID")
 const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
 const { format } = require("path")
 const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
+const { sseNotificationsWaiters } = require("../../reusables/hooks/sse")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
-
-let sseNotificationsWaiters = Object.create(null)
 
 const jwtchecker = (req, res, next) => {
     const token = req.headers["x-access-token"]
