@@ -40,7 +40,7 @@ app.use('/m', Messages)
 app.use('/u', Users)
 
 app.get('/', (req, res) => {
-    res.send("Welcome to ChatterLoop V2 API!")
+    res.send("Welcome to Chatterloop V2 API!")
 })
 
 const server = app.listen(PORT, () => {
