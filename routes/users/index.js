@@ -1421,14 +1421,34 @@ const uploadFirebase = async (mp, userID, receivers, isReply, conversationType) 
     var arr = mp.content.split(',')
     var fileTypeBase = arr[0].match(/:(.*?);/)[1]
     var fileType = arr[0].match(/:(.*?);/)[1].split("/")[1]
-    var fileID = `IMG_${makeID(20)}.${fileType}`
+
+    var fileIDTypeChecker = !mp.type.includes("audio") && !mp.type.includes("video") && !mp.type.includes("image") ? "" : `.${fileType}`
+    let tosplitname = mp.name ? mp.name : ""
+    let split = tosplitname.split(".");
+    let splicedStr = split.slice(0, split.length - 1).join(".")
+    var fileNameChecker = mp.name ? `${splicedStr}###` : 'IMG_'
+    var fileNameCheckerEncoded = mp.name ? `${encodeURIComponent(splicedStr)}###` : 'IMG_'
+    var fileIDRandomStamp = makeID(20);
+    var fileID = `${fileNameChecker}${fileIDRandomStamp}${fileIDTypeChecker}`
+    var fileIDEncoded = `${fileNameCheckerEncoded}${fileIDRandomStamp}${fileIDTypeChecker}`
     var fileIDwoType = `IMG_${makeID(20)}`
     // var fileFinal = dataURLtoFile(mp.content, fileIDwoType)
     var contentFinal = mp.content.split('base64,')[1]
     var fileFinal = base64ToArrayBuffer(contentFinal)
     var finalBuffer = Buffer.from(fileFinal)
 
-    var finalPathwithID = `imgs/${fileID}`
+    const folderDesignation = {
+        image: 'imgs',
+        video: 'videos',
+        audio: 'audios',
+        any: 'files'
+    }
+
+    var fileTypeChecker = !mp.type.includes("audio") && !mp.type.includes("video") && !mp.type.includes("image") ? folderDesignation["any"] : folderDesignation[mp.type.split("/")[0]] 
+    var finalPathwithID = `${fileTypeChecker}/${fileID}`
+    var finalPathwithIDEncoded = `${fileTypeChecker}/${fileIDEncoded}`
+
+    // console.log(finalPathwithID)
 
     const file = storage.bucket().file(finalPathwithID)
 
@@ -1436,7 +1456,7 @@ const uploadFirebase = async (mp, userID, receivers, isReply, conversationType) 
         contentType: fileTypeBase,
         public: true
     }).then((url) => {
-        const publicUrl = `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithID}`;
+        const publicUrl = mp.type.includes("image") ? `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithID}` : `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithIDEncoded}%%%${mp.name}`;
         saveFileMessage(userID, messageID, mp.pendingID, mp.conversationID, receivers, publicUrl, isReply, mp.type, conversationType)
     })
 }
