@@ -5,7 +5,7 @@ const { sseNotificationsWaiters } = require("../../reusables/hooks/sse")
 const dateGetter = require("../../reusables/hooks/getDate")
 const timeGetter = require("../../reusables/hooks/getTime")
 const makeID = require("../../reusables/hooks/makeID")
-const { jwtchecker } = require("../../reusables/hooks/jwthelper")
+const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper")
 const router = express.Router();
 
 const UserAccount = require("../../schema/auth/useraccount")
@@ -14,7 +14,8 @@ router.get('/userinfo/:profileUserID', jwtchecker, (req, res) => {
     const profileUserID = req.params.profileUserID;
 
     UserAccount.findOne({ userID: profileUserID }, { password: 0 }).then((result) => {
-        res.send({ status: true, result: result });
+        const encodedResult = createJWT(result)
+        res.send({ status: true, result: encodedResult });
     }).catch((err) => {
         console.log(err);
         res.send({ status: false, message: err.message });

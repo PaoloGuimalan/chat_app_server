@@ -34,6 +34,15 @@ const jwtchecker = (req, res, next) => {
     }
 }
 
+const createJWT = (payload) => {
+    const encodedResult = jwt.sign({
+        data: payload
+    }, JWT_SECRET)
+
+    return encodedResult;
+}
+
 module.exports = {
-    jwtchecker
+    jwtchecker,
+    createJWT
 }
