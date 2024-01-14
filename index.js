@@ -15,6 +15,7 @@ const MongooseConnection = require("./connections/index")
 const Auth = require("./routes/auth/index")
 const Messages = require("./routes/messages/index")
 const Users = require("./routes/users/index");
+const Profile = require("./routes/profile/index")
 const { initSocketIO } = require("./socketIO/socketIO");
 
 const connectMongo = async () => {
@@ -38,6 +39,7 @@ app.use(cors({
 app.use('/auth', Auth)
 app.use('/m', Messages)
 app.use('/u', Users)
+app.use('/p', Profile)
 
 app.get('/', (req, res) => {
     res.send("Welcome to Chatterloop V2 API!")
