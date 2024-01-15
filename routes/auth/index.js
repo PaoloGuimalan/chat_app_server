@@ -180,6 +180,7 @@ router.post('/register', async (req, res) => {
                 year: birthyear
             },
             profile: "none",
+            coverphoto: "",
             gender: gender,
             email: email,
             password: encode(password),

@@ -16,6 +16,7 @@ const Auth = require("./routes/auth/index")
 const Messages = require("./routes/messages/index")
 const Users = require("./routes/users/index");
 const Profile = require("./routes/profile/index")
+const Posts = require("./routes/posts/index")
 const { initSocketIO } = require("./socketIO/socketIO");
 
 const connectMongo = async () => {
@@ -40,6 +41,7 @@ app.use('/auth', Auth)
 app.use('/m', Messages)
 app.use('/u', Users)
 app.use('/p', Profile)
+app.use('/posts', Posts)
 
 app.get('/', (req, res) => {
     res.send("Welcome to Chatterloop V2 API!")
