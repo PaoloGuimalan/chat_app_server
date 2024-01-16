@@ -46,6 +46,11 @@ router.post('/createpost', jwtchecker, async (req, res) => {
             postID: postID,
             userID: userID,
             isSponsored: false,
+            isLive: false,
+            isOnMap: {
+                status: false,
+                isStationary: true
+            },
             fromSystem: true,
             dateposted: currentTimestampInSeconds,
             ...decodeToken

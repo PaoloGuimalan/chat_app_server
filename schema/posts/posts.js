@@ -26,6 +26,11 @@ const posts = mongoose.Schema({
     }, //public, friends, filtered
     onfeed: { type: mongoose.Schema.Types.Mixed, require: true }, //is on feed, archive, trash, etc.
     isSponsored: Boolean,
+    isLive: Boolean,
+    isOnMap: {
+        status: Boolean,
+        isStationary: Boolean
+    },
     fromSystem: Boolean,
     dateposted: { type: mongoose.Schema.Types.Mixed, require: true }
 });
