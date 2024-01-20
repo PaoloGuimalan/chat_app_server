@@ -16,7 +16,7 @@ const checkPostIDExisting = async (currentID) => {
 }
 
 const GetAllPostsCountInProfile = async (userID) => {
-    return await Posts.count({ userID: userID }).then((result) => {
+    return await Posts.count({ $or: [ { userID: userID }, { "tagging.users": userID } ] }).then((result) => {
         return result;
     })
 }

@@ -18,8 +18,60 @@ router.get('/userposts/:profileUserID', jwtchecker, async (req, res) => {
     const range = req.headers["range"];
     const totalposts = await GetAllPostsCountInProfile(profileUserID);
 
-    await Posts.find({ userID: profileUserID }).sort({ _id: -1 }).limit(range).then((result) => {
-        var posts = result.reverse();
+    await Posts.aggregate([ //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
+        {
+            "$match": {
+                "$or": [
+                    { "userID": profileUserID },
+                    { "tagging.users": profileUserID }
+                ]
+            }
+        },
+        {
+            "$lookup": {
+                from: "useraccount",
+                localField: "tagging.users",
+                foreignField: "userID",
+                as: "tagged_users"
+            }
+        },
+        {
+            $lookup:
+               {
+                 from: "useraccount",
+                 let: { userIDPass: "$userID" },
+                 pipeline: [ {
+                    $match: {
+                       $expr: { $eq: [ "$userID", "$$userIDPass" ] }
+                    }
+                  } ],
+                 as: "post_owner"
+               }
+        },
+        {
+            "$unwind": "$post_owner"
+        },
+        {
+            "$sort": {
+                "_id": -1
+            }
+        },
+        {
+            "$limit": parseInt(range)
+        },
+        {
+            "$project": {
+                "tagged_users.dateCreated": 0,
+                "tagged_users.email": 0,
+                "tagged_users.password": 0,
+                "post_owner.dateCreated": 0,
+                "post_owner.email": 0,
+                "post_owner.password": 0
+            }
+        }
+    ]).then((result) => {
+        var posts = result;
+        // console.log(result)
         const encodedResult = createJWT({
             posts: posts,
             total: totalposts
