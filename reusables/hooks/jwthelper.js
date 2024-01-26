@@ -42,7 +42,16 @@ const createJWT = (payload) => {
     return encodedResult;
 }
 
+const createJWTwExp = (payload) => {
+    const encodedResult = jwt.sign(payload, JWT_SECRET, {
+        expiresIn: 60 * 60 * 24 * 7
+    })
+
+    return encodedResult;
+}
+
 module.exports = {
     jwtchecker,
-    createJWT
+    createJWT,
+    createJWTwExp
 }

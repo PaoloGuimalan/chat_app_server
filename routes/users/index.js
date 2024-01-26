@@ -641,7 +641,7 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
                     fromUserID: userID,
                     content: {
                         headline: `Contact Request`,
-                        details: `${userID} have sent a contact request for you.`,
+                        details: `@${userID} have sent a contact request for you.`,
                     },
                     date: {
                         date: dateGetter(),
