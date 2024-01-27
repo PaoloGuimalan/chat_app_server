@@ -973,6 +973,7 @@ const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
                 content: { "$last": "$content" },
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
+                isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
                 unread: {
@@ -1095,6 +1096,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
             content: content,
             messageDate: messageDate,
             isReply: isReply,
+            isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
         }
@@ -1139,6 +1141,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 content: { "$last": "$content" },
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
+                isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
                 unread: {
@@ -1248,6 +1251,7 @@ const sendMessageInitForGC = async (convID, userID, recs) => {
             content: content,
             messageDate: messageDate,
             isReply: isReply,
+            isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
         }
@@ -1480,6 +1484,7 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
         content: content,
         messageDate: messageDate,
         isReply: isReply,
+        isDeleted: false,
         messageType: messageType,
         conversationType: conversationType
     }
