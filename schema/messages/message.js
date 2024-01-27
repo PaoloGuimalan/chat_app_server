@@ -13,6 +13,7 @@ const usermessage = mongoose.Schema({
         time: {type: mongoose.Schema.Types.Mixed, require: true}
     },
     isReply: { type: Boolean, require: true },
+    replyingTo: { type: mongoose.Schema.Types.Mixed, require: true },
     isDeleted: { type: Boolean, require: true },
     messageType: { type: mongoose.Schema.Types.Mixed, require: true },
     conversationType: { type: mongoose.Schema.Types.Mixed, require: true }

@@ -973,6 +973,7 @@ const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
                 content: { "$last": "$content" },
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
+                replyingTo: { "$last": "$replyingTo" },
                 isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
@@ -1083,6 +1084,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
             time: timeGetter()
         };
         const isReply = decodedToken.isReply;
+        const replyingTo = decodedToken.replyingTo;
         const messageType = decodedToken.messageType;
         const conversationType = decodedToken.conversationType;
 
@@ -1096,6 +1098,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
             content: content,
             messageDate: messageDate,
             isReply: isReply,
+            replyingTo: replyingTo,
             isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
@@ -1141,6 +1144,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 content: { "$last": "$content" },
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
+                replyingTo: { "$last": "$replyingTo" },
                 isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
@@ -1251,6 +1255,7 @@ const sendMessageInitForGC = async (convID, userID, recs) => {
             content: content,
             messageDate: messageDate,
             isReply: isReply,
+            replyingTo: "",
             isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
@@ -1484,6 +1489,7 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
         content: content,
         messageDate: messageDate,
         isReply: isReply,
+        replyingTo: "",
         isDeleted: false,
         messageType: messageType,
         conversationType: conversationType
