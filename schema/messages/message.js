@@ -14,6 +14,7 @@ const usermessage = mongoose.Schema({
     },
     isReply: { type: Boolean, require: true },
     replyingTo: { type: mongoose.Schema.Types.Mixed, require: true },
+    reactions: [{ type: mongoose.Schema.Types.Mixed, require: true }],
     isDeleted: { type: Boolean, require: true },
     messageType: { type: mongoose.Schema.Types.Mixed, require: true },
     conversationType: { type: mongoose.Schema.Types.Mixed, require: true }

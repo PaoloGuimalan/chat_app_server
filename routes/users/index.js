@@ -974,6 +974,7 @@ const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
                 replyingTo: { "$last": "$replyingTo" },
+                reactions: { "$last": "$reactions" },
                 isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
@@ -1099,6 +1100,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
             messageDate: messageDate,
             isReply: isReply,
             replyingTo: replyingTo,
+            reactions: [],
             isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
@@ -1145,6 +1147,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 messageDate: { "$last": "$messageDate" },
                 isReply: { "$last": "$isReply" },
                 replyingTo: { "$last": "$replyingTo" },
+                reactions: { "$last": "$reactions" },
                 isDeleted: { "$last": "$isDeleted" },
                 messageType: { "$last": "$messageType" },
                 conversationType: { "$last": "$conversationType" },
@@ -1215,7 +1218,29 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
     const range = req.headers["range"];
     const totalmessages = await GetAllMessageCountInAConversation(conversationID);
 
-    await UserMessage.find({ conversationID: conversationID }).sort({ _id: -1 }).limit(range).then((result) => {
+    await UserMessage.aggregate([ //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
+        {
+            "$match": {
+                conversationID: conversationID
+            }
+        },
+        {
+            "$lookup": {
+                from: "messages",
+                localField: "replyingTo",
+                foreignField: "messageID",
+                as: "replyedmessage"
+            }
+        },
+        {
+            "$sort": {
+                "_id": -1
+            }
+        },
+        {
+            "$limit": parseInt(range)
+        }
+    ]).then((result) => {
         var message = result.reverse();
         const encodedResult = jwt.sign({
             messages: message,
@@ -1256,6 +1281,7 @@ const sendMessageInitForGC = async (convID, userID, recs) => {
             messageDate: messageDate,
             isReply: isReply,
             replyingTo: "",
+            reactions: [],
             isDeleted: false,
             messageType: messageType,
             conversationType: conversationType
@@ -1424,7 +1450,7 @@ const saveFileRecordToDatabase = async (foreignID, fileData, action, fileType, f
     })
 }
 
-const uploadFirebase = async (mp, userID, receivers, isReply, conversationType) => {
+const uploadFirebase = async (mp, userID, receivers, isReply, replyingTo, conversationType) => {
     var messageID = await checkExistingMessageID(makeID(30))
 
     var arr = mp.content.split(',')
@@ -1466,11 +1492,11 @@ const uploadFirebase = async (mp, userID, receivers, isReply, conversationType) 
         public: true
     }).then((url) => {
         const publicUrl = mp.type.includes("image") ? `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithID}` : `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithIDEncoded}%%%${mp.name}`;
-        saveFileMessage(userID, messageID, mp.pendingID, mp.conversationID, receivers, publicUrl, isReply, mp.type, conversationType)
+        saveFileMessage(userID, messageID, mp.pendingID, mp.conversationID, receivers, publicUrl, isReply, replyingTo, mp.type, conversationType)
     })
 }
 
-const saveFileMessage = async (userID, messageID, pendingID, conversationID, receivers, content, isReply, messageType, conversationType) => {
+const saveFileMessage = async (userID, messageID, pendingID, conversationID, receivers, content, isReply, replyingTo, messageType, conversationType) => {
     const seeners = [
         userID
     ]; //Array
@@ -1489,7 +1515,8 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
         content: content,
         messageDate: messageDate,
         isReply: isReply,
-        replyingTo: "",
+        replyingTo: replyingTo,
+        reactions: [],
         isDeleted: false,
         messageType: messageType,
         conversationType: conversationType
@@ -1518,10 +1545,11 @@ router.post('/sendFiles', jwtchecker, async (req, res) => {
         const receivers = decodeToken.receivers;
         const files = decodeToken.files;
         const isReply = decodeToken.isReply;
+        const replyingTo = decodeToken.replyingTo;
         const conversationType = decodeToken.conversationType;
 
         files.map((mp) => {
-           uploadFirebase(mp, userID, receivers, isReply, conversationType)
+           uploadFirebase(mp, userID, receivers, isReply, replyingTo, conversationType)
         })
 
         res.send({ status: true, message: "OK" })
