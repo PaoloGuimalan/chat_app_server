@@ -50,5 +50,31 @@ router.post('/deletemessage', jwtchecker, (req, res) => {
     }
 })
 
+router.post('/addreaction', jwtchecker, (req, res) => {
+    const token = req.body.token;
+    const userID = req.params.userID;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET);
+
+        // console.log(decodedToken);
+
+        UserMessage.updateOne({ conversationID: decodedToken.conversationID, messageID: decodedToken.messageID }, { $push: { reactions: decodedToken.newreaction } }).then( async (result) => {
+            const messageReceivers = await GetMessageReceivers(decodedToken.conversationID, decodedToken.messageID);
+            
+            messageReceivers.map((user) => {
+                MessagesTrigger(user, userID, false);
+            })
+
+            res.send({ status: true, message: "OK" })
+        }).catch((err) => {
+            res.send({ status: false, message: err.message })
+        })
+    }catch(ex){
+        console.log(ex);
+        res.send({ status: false, message: "Error decoding token" })
+    }
+})
+
 module.exports = router;
 
