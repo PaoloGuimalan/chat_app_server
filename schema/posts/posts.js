@@ -6,9 +6,11 @@ const posts = mongoose.Schema({
     content: {
         isShared: Boolean,
         references: [{
+            name: {type: mongoose.Schema.Types.Mixed, require: true},
             referenceID: {type: mongoose.Schema.Types.Mixed, require: true},
             reference: {type: mongoose.Schema.Types.Mixed, require: true},
-            caption: {type: mongoose.Schema.Types.Mixed, require: true}
+            caption: {type: mongoose.Schema.Types.Mixed, require: true},
+            referenceMediaType: {type: mongoose.Schema.Types.Mixed, require: true}
         }],
         data: {type: mongoose.Schema.Types.Mixed, require: true}
     },

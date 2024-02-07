@@ -12,6 +12,7 @@ const Posts = require("../../schema/posts/posts")
 const UserNotifications = require("../../schema/users/notifications")
 const { checkPostIDExisting, GetAllPostsCountInProfile } = require("../../reusables/models/posts")
 const { checkNotifID } = require("../../reusables/models/notifications")
+const { uploadFirebaseMultiple, saveFileRecordToDatabase } = require("../../reusables/hooks/firebaseupload")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -124,6 +125,19 @@ router.post('/createpost', jwtchecker, async (req, res) => {
 
     try{
         const decodeToken = jwt.verify(token, JWT_SECRET);
+        const filereferencesraw = decodeToken.content.references;
+        const filereferences = filereferencesraw.map((mp) => ({
+            name: mp.name,
+            caption: mp.caption,
+            reference: mp.reference,
+            referenceMediaType: mp.referenceMediaType,
+            referenceID: `${postID}_${makeID(20)}`
+        }))
+        const finaluploadedreferences = await uploadFirebaseMultiple(filereferences);
+
+        finaluploadedreferences.map((mp) => {
+            saveFileRecordToDatabase(mp.referenceID, mp.reference, "post", mp.referenceMediaType, "firebase");
+        })
 
         const payload = {
             postID: postID,
@@ -136,10 +150,14 @@ router.post('/createpost', jwtchecker, async (req, res) => {
             },
             fromSystem: true,
             dateposted: currentTimestampInSeconds,
-            ...decodeToken
+            ...decodeToken,
+            content: {
+                ...decodeToken.content,
+                references: finaluploadedreferences
+            }
         }
 
-        // console.log(userID, payload);
+        // console.log(userID, payload, payload.content.references);
 
         const newPost = new Posts(payload);
 

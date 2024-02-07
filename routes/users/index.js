@@ -25,11 +25,11 @@ const firebaseAdminConfig = {
     universe_domain: FIREBASE_UNIVERSE_DOMAIN
   }
 
-const firebaseinit = firebase.initializeApp({
-    credential: firebase.credential.cert(firebaseAdminConfig),
-    storageBucket: FIREBASE_STORAGE_BUCKET
-});
-const storage = fstorage.getStorage(firebaseinit.storage().app)
+// const firebaseinit = firebase.initializeApp({
+//     credential: firebase.credential.cert(firebaseAdminConfig),
+//     storageBucket: FIREBASE_STORAGE_BUCKET
+// });
+// const storage = fstorage.getStorage(firebaseinit.storage().app)
 
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
@@ -47,6 +47,7 @@ const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/ba
 const { format } = require("path")
 const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
 const { sseNotificationsWaiters } = require("../../reusables/hooks/sse")
+const { storage } = require("../../reusables/hooks/firebaseupload")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
