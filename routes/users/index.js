@@ -1234,6 +1234,24 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
             }
         },
         {
+            "$lookup": {
+                from: "useraccount",
+                localField: "reactions.userID",
+                foreignField: "userID",
+                as: "reactionsWithInfo"
+            }
+        },
+        {
+            $project:{
+                "reactionsWithInfo._id": 0,
+                "reactionsWithInfo.birthdate": 0,
+                "reactionsWithInfo.gender": 0,
+                "reactionsWithInfo.email": 0,
+                "reactionsWithInfo.password": 0,
+                "reactionsWithInfo.dateCreated": 0
+            }
+        },
+        {
             "$sort": {
                 "_id": -1
             }
