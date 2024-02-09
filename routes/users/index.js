@@ -1259,22 +1259,16 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
         {
             "$limit": parseInt(range)
         }
-    ]).then(async (result) => {
-        await UserMessage.find({ conversationID: conversationID }, {  }).then((pendingIDResult) => {
-            var message = result.reverse();
-            var pendingIDs = pendingIDResult.filter((flt) => flt.pendingID !== undefined).map((mp) => mp.pendingID);
-            const encodedResult = jwt.sign({
-                pendingIDs: pendingIDs,
-                messages: message,
-                total: totalmessages
-            }, JWT_SECRET, {
-                expiresIn: 60 * 60 * 24 * 7
-            })
-
-            res.send({ status: true, message: "OK", result: encodedResult })
-        }).catch((err) => {
-            console.log(err);
+    ]).then((result) => {
+        var message = result.reverse();
+        const encodedResult = jwt.sign({
+            messages: message,
+            total: totalmessages
+        }, JWT_SECRET, {
+            expiresIn: 60 * 60 * 24 * 7
         })
+
+        res.send({ status: true, message: "OK", result: encodedResult })
     }).catch((err) => {
         console.log(err)
         res.send({ status: false, message: "Error generating conversation" })
