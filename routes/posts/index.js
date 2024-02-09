@@ -136,7 +136,7 @@ router.post('/createpost', jwtchecker, async (req, res) => {
         const finaluploadedreferences = await uploadFirebaseMultiple(filereferences);
 
         finaluploadedreferences.map((mp) => {
-            saveFileRecordToDatabase(mp.referenceID, mp.reference, "post", mp.referenceMediaType, "firebase");
+            saveFileRecordToDatabase([mp.referenceID], mp.reference, "post", mp.referenceMediaType, "firebase");
         })
 
         const payload = {

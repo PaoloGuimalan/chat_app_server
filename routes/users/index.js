@@ -1360,12 +1360,14 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
             const groupParams = {
                 groupID: contactID,
                 groupName: groupName,
+                profile: "",
                 dateCreated: {
                     date: dateGetter(),
                     time: timeGetter()
                 },
                 createdBy: userID,
-                type: privacy
+                privacy: privacy,
+                type: "group"
             }
 
             const newGroup = new UserGroups(groupParams)
@@ -1544,7 +1546,7 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
     const newMessage = new UserMessage(payload)
     
     newMessage.save().then(() => {
-        saveFileRecordToDatabase(messageID, content, "message", messageType, "firebase")
+        saveFileRecordToDatabase([messageID, conversationID], content, "message", messageType, "firebase")
         receivers.map((rcvs, i) => {
             sseMessageNotification("messages_list", rcvs, userID, false)
         })

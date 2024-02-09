@@ -7,8 +7,10 @@ const Axios = require("axios")
 
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
+const UploadedFiles = require("../../schema/posts/uploadedfiles")
+const UserContacts = require("../../schema/users/contacts")
 const UserMessage = require('../../schema/messages/message')
-const { jwtchecker } = require("../../reusables/hooks/jwthelper")
+const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper")
 const { GetMessageReceivers } = require("../../reusables/models/messages")
 const { MessagesTrigger } = require("../../reusables/hooks/sse")
 
@@ -73,6 +75,124 @@ router.post('/addreaction', jwtchecker, (req, res) => {
     }catch(ex){
         console.log(ex);
         res.send({ status: false, message: "Error decoding token" })
+    }
+})
+
+router.get('/conversationinfo/:conversationID/:type', jwtchecker, (req, res) => {
+    const userID = req.params.userID;
+    const conversationID = req.params.conversationID;
+    const type = req.params.type;
+
+    if(type === "single"){
+        UserContacts.aggregate([
+            {
+                $match: {
+                    contactID: conversationID
+                }
+            },
+            {
+                $lookup: {
+                    from: "useraccount",
+                    localField: "users.userID",
+                    foreignField: "userID",
+                    as: "usersWithInfo"
+                }
+            },
+            {
+                $lookup: {
+                    from: "files",
+                    localField: "contactID",
+                    foreignField: "foreignID",
+                    as: "conversationfiles"
+                }
+            },
+            {
+                $project: {
+                    "usersWithInfo.birthdate": 0,
+                    "usersWithInfo.dateCreated": 0,
+                    "usersWithInfo.email": 0,
+                    "usersWithInfo.gender": 0,
+                    "usersWithInfo.password": 0,
+                    "usersWithInfo.coverphoto": 0
+                }
+            }
+        ]).then((result) => {
+            if(result.length > 0) {
+                var flattenedResults = result[0];
+                const encodedResult = createJWT({
+                    data: flattenedResults
+                })
+                res.send({ status: true, result: encodedResult })
+            }
+            else{
+                // respond as no records
+                res.send({ status: false, message: "No conversation details matched" })
+            }
+        }).catch((err) => {
+            console.log(err);
+            res.send({ status: false, message: "Cannot determine conversation details" })
+        })
+    }
+    else{
+        UserContacts.aggregate([
+            {
+                $match: {
+                    contactID: conversationID
+                }
+            },
+            {
+                $lookup: {
+                    from: "groups",
+                    localField: "contactID",
+                    foreignField: "groupID",
+                    as: "conversationInfo"
+                }
+            },
+            {
+                $unwind: "$conversationInfo"
+            },
+            {
+                $lookup: {
+                    from: "useraccount",
+                    localField: "users.userID",
+                    foreignField: "userID",
+                    as: "usersWithInfo"
+                }
+            },
+            {
+                $lookup: {
+                    from: "files",
+                    localField: "contactID",
+                    foreignField: "foreignID",
+                    as: "conversationfiles"
+                }
+            },
+            {
+                $project: {
+                    "usersWithInfo.birthdate": 0,
+                    "usersWithInfo.dateCreated": 0,
+                    "usersWithInfo.email": 0,
+                    "usersWithInfo.gender": 0,
+                    "usersWithInfo.password": 0,
+                    "usersWithInfo.coverphoto": 0
+                }
+            }
+        ]).then((result) => {
+            if(result.length > 0) {
+                var flattenedResults = result[0];
+                const encodedResult = createJWT({
+                    data: flattenedResults
+                })
+                res.send({ status: true, result: encodedResult })
+            }
+            else{
+                // respond as no records
+                res.send({ status: false, message: "No conversation details matched" })
+            }
+        }).catch((err) => {
+            console.log(err);
+            res.send({ status: false, message: "Cannot determine conversation details" })
+        })
     }
 })
 
