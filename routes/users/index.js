@@ -1787,10 +1787,23 @@ const setUserSession = async (userID, status, resolve) => {
         }
     }
 
-    const newSession = new UserSessions(newSessionPayload);
+    await UserSessions.find({ userID: userID }).then((result) => {
+        if(result.length > 0){
+            UserSessions.updateMany({ userID: userID }, newSessionPayload).then((_) => {
+                resolve();
+            }).catch((err) => {
+                console.log(err);
+            })
+        }
+        else{
+            const newSession = new UserSessions(newSessionPayload);
 
-    newSession.save().then(() => {
-        resolve()
+            newSession.save().then(() => {
+                resolve()
+            }).catch((err) => {
+                console.log(err);
+            })
+        }
     }).catch((err) => {
         console.log(err);
     })
