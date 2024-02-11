@@ -14,7 +14,8 @@ const usernotifications = mongoose.Schema({
         date: {type: mongoose.Schema.Types.Mixed, require: true},
         time: {type: mongoose.Schema.Types.Mixed, require: true}
     },
-    type: { type: mongoose.Schema.Types.Mixed, require: true }
+    type: { type: mongoose.Schema.Types.Mixed, require: true },
+    isRead: { type: mongoose.Schema.Types.Mixed, require: true }
 })
 
 module.exports = mongoose.model("UserNotifications", usernotifications, "notifications")

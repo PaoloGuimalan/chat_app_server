@@ -14,6 +14,16 @@ const checkNotifID = async (ntfID) => {
     })
 }
 
+const CountAllUnreadNotifications = async (userID) => {
+    return await UserNotifications.count({ toUserID: userID, isRead: false }).then((result) => {
+        return result;
+    }).catch((err) => {
+        console.log(err);
+        return false;
+    })
+}
+
 module.exports = {
-    checkNotifID
+    checkNotifID,
+    CountAllUnreadNotifications
 }

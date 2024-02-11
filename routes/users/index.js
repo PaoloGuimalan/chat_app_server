@@ -46,8 +46,9 @@ const makeID = require("../../reusables/hooks/makeID")
 const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
 const { format } = require("path")
 const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
-const { sseNotificationsWaiters } = require("../../reusables/hooks/sse")
+const { sseNotificationsWaiters, ReloadUserNotification } = require("../../reusables/hooks/sse")
 const { storage } = require("../../reusables/hooks/firebaseupload")
+const { CountAllUnreadNotifications } = require("../../reusables/models/notifications")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -118,6 +119,8 @@ const jwtssechecker = (req, res, next) => {
 }
 
 const notificicationTrigger = async (type, id, details, sseWithUserID) => {
+    const UnreadNotificationsTotal =  await CountAllUnreadNotifications(id);
+
     await UserNotifications.aggregate([
         {
             $match:{
@@ -150,7 +153,8 @@ const notificicationTrigger = async (type, id, details, sseWithUserID) => {
     ]).then((result) => {
         // console.log(result)
         var encodedResult = jwt.sign({
-            notifications: result
+            notifications: result,
+            totalunread: UnreadNotificationsTotal
         }, JWT_SECRET, {
             expiresIn: 60 * 60 * 24 * 7
         })
@@ -665,8 +669,26 @@ router.post('/requestContact', jwtchecker, async (req, res) => {
     }
 })
 
+router.post('/readnotifications', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+
+    if(userID){
+        await UserNotifications.updateMany({ toUserID: userID, isRead: false }, { isRead: true }).then((result) => {
+            ReloadUserNotification(userID, "Notifications has been read");
+            res.send({status: true, message: "Notifications has been read" });
+        }).catch((err) => {
+            console.log(err);
+            res.send({status: false, message: "Error marking notifications as read" })
+        })
+    }
+    else {
+        res.send({status: false, message: "No userID received" })
+    }
+})
+
 router.get('/getNotifications', jwtchecker, async (req, res) => {
     const userID = req.params.userID
+    const UnreadNotificationsTotal =  await CountAllUnreadNotifications(userID);
 
     await UserNotifications.aggregate([
         {
@@ -700,7 +722,8 @@ router.get('/getNotifications', jwtchecker, async (req, res) => {
     ]).then((result) => {
         // console.log(result)
         var encodedResult = jwt.sign({
-            notifications: result
+            notifications: result,
+            totalunread: UnreadNotificationsTotal
         }, JWT_SECRET, {
             expiresIn: 60 * 60 * 24 * 7
         })

@@ -104,7 +104,8 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
                 date: dateGetter(),
                 time: timeGetter()
             },
-            type: "tag_notification"
+            type: "tag_notification",
+            isRead: false
         }
 
         const newNotif = new UserNotifications(notifParams);
