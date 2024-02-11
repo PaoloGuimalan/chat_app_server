@@ -7,6 +7,7 @@ const { CountAllUnreadNotifications } = require("../models/notifications");
 
 const SendTagPostNotification = async (details, userID) => {
     const sseWithUserID = sseNotificationsWaiters[userID];
+    const UnreadNotificationsTotal =  await CountAllUnreadNotifications(userID);
 
     await UserNotifications.aggregate([
         {
@@ -40,7 +41,8 @@ const SendTagPostNotification = async (details, userID) => {
     ]).then((result) => {
         // console.log(result)
         var encodedResult = createJWTwExp({
-            notifications: result
+            notifications: result,
+            totalunread: UnreadNotificationsTotal
         });
 
         if(sseWithUserID){
