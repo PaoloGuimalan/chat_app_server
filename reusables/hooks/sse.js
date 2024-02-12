@@ -215,29 +215,53 @@ const ReloadUserNotification = async (id, details) => {
             totalunread: UnreadNotificationsTotal
         })
 
+        if(sseWithUserID){
+            sseWithUserID.response.map((itr, i) => {
+                itr.sse(`notifications_reload`, {
+                    status: true,
+                    auth: true,
+                    message: details,
+                    result: encodedResult
+                })
+            })
+        }
+    }).catch((err) => {
+        console.log(err)
+        if(sseWithUserID){
+            sseWithUserID.response.map((itr, i) => {
+                itr.sse(`notifications_reload`, {
+                    status: false,
+                    auth: true,
+                    message: "Error retrieving notifications"
+                })
+            })
+        }
+    })
+}
+
+const BroadcastIsTypingStatus = (receiver, data) => {
+    const sseWithUserID = sseNotificationsWaiters[receiver];
+
+    var encodedResult = createJWTwExp({
+        istyping: data
+    })
+
+    if(sseWithUserID){
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`notifications_reload`, {
+            itr.sse(`istyping_broadcast`, {
                 status: true,
                 auth: true,
-                message: details,
+                message: "istyping broadcast",
                 result: encodedResult
             })
         })
-    }).catch((err) => {
-        console.log(err)
-        sseWithUserID.response.map((itr, i) => {
-            itr.sse(`notifications_reload`, {
-                status: false,
-                auth: true,
-                message: "Error retrieving notifications"
-            })
-        })
-    })
+    }
 }
 
 module.exports = {
     sseNotificationsWaiters,
     SendTagPostNotification,
     MessagesTrigger,
-    ReloadUserNotification
+    ReloadUserNotification,
+    BroadcastIsTypingStatus
 }
