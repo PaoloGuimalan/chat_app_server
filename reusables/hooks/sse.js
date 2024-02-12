@@ -48,7 +48,7 @@ const SendTagPostNotification = async (details, userID) => {
         if(sseWithUserID){
             // console.log(sseWithUserID)
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`notifications`, {
+                itr.res.sse(`notifications`, {
                     status: true,
                     auth: true,
                     message: details,
@@ -60,7 +60,7 @@ const SendTagPostNotification = async (details, userID) => {
         console.log(err)
         if(sseWithUserID){
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`notifications`, {
+                itr.res.sse(`notifications`, {
                     status: false,
                     auth: true,
                     message: "Error retrieving notifications"
@@ -151,7 +151,7 @@ const MessagesTrigger = async (id, details, onseen) => {
 
         if(sseWithUserID){
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`messages_list`, {
+                itr.res.sse(`messages_list`, {
                     status: true,
                     auth: true,
                     onseen: onseen,
@@ -164,7 +164,7 @@ const MessagesTrigger = async (id, details, onseen) => {
         console.log(err)
         if(sseWithUserID){
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`messages_list`, {
+                itr.res.sse(`messages_list`, {
                     status: false,
                     auth: true,
                     message: "Error generating conversations list"
@@ -217,7 +217,7 @@ const ReloadUserNotification = async (id, details) => {
 
         if(sseWithUserID){
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`notifications_reload`, {
+                itr.res.sse(`notifications_reload`, {
                     status: true,
                     auth: true,
                     message: details,
@@ -229,7 +229,7 @@ const ReloadUserNotification = async (id, details) => {
         console.log(err)
         if(sseWithUserID){
             sseWithUserID.response.map((itr, i) => {
-                itr.sse(`notifications_reload`, {
+                itr.res.sse(`notifications_reload`, {
                     status: false,
                     auth: true,
                     message: "Error retrieving notifications"
@@ -248,7 +248,7 @@ const BroadcastIsTypingStatus = (receiver, data) => {
 
     if(sseWithUserID){
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`istyping_broadcast`, {
+            itr.res.sse(`istyping_broadcast`, {
                 status: true,
                 auth: true,
                 message: "istyping broadcast",
@@ -258,10 +258,34 @@ const BroadcastIsTypingStatus = (receiver, data) => {
     }
 }
 
+const clearASingleSession = (tokenfromsse, sessionstamp) => {
+    const connectionID = tokenfromsse;
+    const ifexistingsession = sseNotificationsWaiters[connectionID];
+
+    if(ifexistingsession){
+        const minusmutatesession = ifexistingsession.response.filter((flt) => flt.sessionstamp != sessionstamp);
+        
+        if(minusmutatesession.length > 0){
+            sseNotificationsWaiters[connectionID] = {
+                response: minusmutatesession
+            }
+        }
+        else{
+            delete sseNotificationsWaiters[connectionID];
+        }
+    }
+}
+
+const clearAllSession = () => {
+    sseNotificationsWaiters = Object.create(null);
+}
+
 module.exports = {
     sseNotificationsWaiters,
     SendTagPostNotification,
     MessagesTrigger,
     ReloadUserNotification,
-    BroadcastIsTypingStatus
+    BroadcastIsTypingStatus,
+    clearASingleSession,
+    clearAllSession
 }

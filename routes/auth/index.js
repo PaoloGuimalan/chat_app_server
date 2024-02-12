@@ -12,6 +12,7 @@ const { encode, decode } = require("../../reusables/hooks/bycrypt")
 
 const UserAccount = require("../../schema/auth/useraccount")
 const UserVerification = require("../../schema/auth/userverification")
+const { sseNotificationsWaiters } = require("../../reusables/hooks/sse")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -49,6 +50,16 @@ const jwtchecker = (req, res, next) => {
 
 router.use((req, res, next) => {
     next()
+})
+
+router.get('/sessions', (req, res) => {
+    const sessions = Object.keys(sseNotificationsWaiters).map((mp) => ({
+        connectionID: mp,
+        numberOfSessions: sseNotificationsWaiters[mp].response.length,
+        sessions: sseNotificationsWaiters[mp].response.map((mpi) => (mpi.sessionstamp))
+    })) ;
+
+    res.send({ status: true, result: sessions });
 })
 
 router.get('/users', jwtchecker, async (req, res) => {

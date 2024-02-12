@@ -46,9 +46,10 @@ const makeID = require("../../reusables/hooks/makeID")
 const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
 const { format } = require("path")
 const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
-const { sseNotificationsWaiters, ReloadUserNotification } = require("../../reusables/hooks/sse")
+const { sseNotificationsWaiters, ReloadUserNotification, clearASingleSession } = require("../../reusables/hooks/sse")
 const { storage } = require("../../reusables/hooks/firebaseupload")
 const { CountAllUnreadNotifications } = require("../../reusables/models/notifications")
+const makeid = require("../../reusables/hooks/makeID")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -160,7 +161,7 @@ const notificicationTrigger = async (type, id, details, sseWithUserID) => {
         })
 
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`notifications`, {
+            itr.res.sse(`notifications`, {
                 status: true,
                 auth: true,
                 message: details,
@@ -170,7 +171,7 @@ const notificicationTrigger = async (type, id, details, sseWithUserID) => {
     }).catch((err) => {
         console.log(err)
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`notifications`, {
+            itr.res.sse(`notifications`, {
                 status: false,
                 auth: true,
                 message: "Error retrieving notifications"
@@ -312,7 +313,7 @@ const contactListTrigger = async (type, id, details, sseWithUserID) => {
         })
 
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`contactslist`, {
+            itr.res.sse(`contactslist`, {
                 status: true,
                 auth: true,
                 message: details,
@@ -325,7 +326,7 @@ const contactListTrigger = async (type, id, details, sseWithUserID) => {
     }).catch((err) => {
         console.log(err)
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`contactslist`, {
+            itr.res.sse(`contactslist`, {
                 status: false,
                 auth: true,
                 message: "Error fetching contacts list"
@@ -1057,7 +1058,7 @@ const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
         })
 
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`messages_list`, {
+            itr.res.sse(`messages_list`, {
                 status: true,
                 auth: true,
                 onseen: onseen,
@@ -1068,7 +1069,7 @@ const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
     }).catch((err) => {
         console.log(err)
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`messages_list`, {
+            itr.res.sse(`messages_list`, {
                 status: false,
                 auth: true,
                 message: "Error generating conversations list"
@@ -1617,7 +1618,7 @@ const reachCallRecepients = (rcp, decodedToken) => {
 
     if(sseWithUserID){
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`incomingcall`, {
+            itr.res.sse(`incomingcall`, {
                 status: true,
                 auth: true,
                 message: message,
@@ -1845,7 +1846,7 @@ const updateContactswSessionStatus = (rcp, decodedToken) => {
 
     if(sseWithUserID){
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`active_users`, {
+            itr.res.sse(`active_users`, {
                 status: true,
                 auth: true,
                 result: encodedResult
@@ -1858,19 +1859,26 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
     const contacts = await getContactsForSession(userID);
+    const sessionstamp = `SESSION_STAMP_${makeid(15)}`
 
     if(sseWithUserID){
         sseNotificationsWaiters[userID] = {
             response: [
                 ...sseWithUserID.response,
-                res
+                {
+                    sessionstamp: sessionstamp,
+                    res: res
+                }
             ]
         }
     }
     else{
         sseNotificationsWaiters[userID] = {
             response: [
-                res
+                {
+                    sessionstamp: sessionstamp,
+                    res: res
+                }
             ]
         }
     }
@@ -1903,6 +1911,7 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
 
         setUserSession(userID, false, async () => {
             // console.log("DISCONNECTED", userID);
+            clearASingleSession(userID, sessionstamp);
             contacts.map((mp) => {
                 updateContactswSessionStatus(mp, disconnectMetaData)
             })
@@ -1967,7 +1976,7 @@ const callrejectnotif = (rcp, decodedToken) => {
 
     if(sseWithUserID){
         sseWithUserID.response.map((itr, i) => {
-            itr.sse(`callreject`, {
+            itr.res.sse(`callreject`, {
                 status: true,
                 auth: true,
                 result: encodedResult
