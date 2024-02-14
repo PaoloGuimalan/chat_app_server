@@ -50,6 +50,7 @@ const { sseNotificationsWaiters, ReloadUserNotification, clearASingleSession } =
 const { storage } = require("../../reusables/hooks/firebaseupload")
 const { CountAllUnreadNotifications } = require("../../reusables/models/notifications")
 const makeid = require("../../reusables/hooks/makeID")
+const { GetAllReceivers } = require("../../reusables/models/messages")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -1100,7 +1101,8 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         const messageID = await checkExistingMessageID(makeID(30));
         const conversationID = decodedToken.conversationID;
         const sender = userID;
-        const receivers = decodedToken.receivers; //Array
+        const receiversfetch = await GetAllReceivers(conversationID);
+        const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
         const seeners = [
             userID
         ]; //Array
@@ -1414,7 +1416,7 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
     }
 })
 
-router.post('/seenNewMessages', jwtchecker, (req, res) => {
+router.post('/seenNewMessages', jwtchecker, async (req, res) => {
     const userID = req.params.userID
     const token = req.body.token;
     const range = req.headers["range"];
@@ -1425,7 +1427,9 @@ router.post('/seenNewMessages', jwtchecker, (req, res) => {
         const decodeToken = jwt.verify(token, JWT_SECRET)
 
         const conversationID = decodeToken.conversationID;
-        const receivers = decodeToken.receivers;
+        const receiversfetch = await GetAllReceivers(conversationID);
+        const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+        // const receivers = decodeToken.receivers;
 
         // console.log(receivers)
         
@@ -1587,7 +1591,9 @@ router.post('/sendFiles', jwtchecker, async (req, res) => {
         const decodeToken = jwt.verify(token, JWT_SECRET)
 
         const conversationID = decodeToken.conversationID
-        const receivers = decodeToken.receivers;
+        const receiversfetch = await GetAllReceivers(conversationID);
+        const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+        // const receivers = decodeToken.receivers;
         const files = decodeToken.files;
         const isReply = decodeToken.isReply;
         const replyingTo = decodeToken.replyingTo;

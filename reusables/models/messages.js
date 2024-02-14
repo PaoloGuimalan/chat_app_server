@@ -89,9 +89,19 @@ const NotificationMessageForConversations = async (convID, userID, recs, details
     })
 }
 
+const GetAllReceivers = async (contactID) => {
+    return await UserContacts.findOne({ contactID: contactID }).then((result) => {
+        return result;
+    }).catch((err) => {
+        console.log(err);
+        throw new Error(err);
+    })
+}
+
 module.exports = {
     GetMessageReceivers,
     AddNewMemberToContacts,
     AddNewMemberToAllMessages,
-    NotificationMessageForConversations
+    NotificationMessageForConversations,
+    GetAllReceivers
 }

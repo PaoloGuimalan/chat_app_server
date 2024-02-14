@@ -11,7 +11,7 @@ const UploadedFiles = require("../../schema/posts/uploadedfiles")
 const UserContacts = require("../../schema/users/contacts")
 const UserMessage = require('../../schema/messages/message')
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper")
-const { GetMessageReceivers, AddNewMemberToAllMessages, AddNewMemberToContacts, NotificationMessageForConversations } = require("../../reusables/models/messages")
+const { GetMessageReceivers, AddNewMemberToAllMessages, AddNewMemberToContacts, NotificationMessageForConversations, GetAllReceivers } = require("../../reusables/models/messages")
 const { MessagesTrigger, BroadcastIsTypingStatus } = require("../../reusables/hooks/sse")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
@@ -196,13 +196,15 @@ router.get('/conversationinfo/:conversationID/:type', jwtchecker, (req, res) => 
     }
 })
 
-router.post('/istypingbroadcast', jwtchecker, (req, res) => {
+router.post('/istypingbroadcast', jwtchecker, async (req, res) => {
     const token = req.body.token;
     const userID = req.params.userID;
 
     try{
         const decodedToken = jwt.verify(token, JWT_SECRET);
-        const receivers = decodedToken.receivers;
+        const receiversfetch = await GetAllReceivers(decodedToken.conversationID);
+        const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+        // const receivers = decodedToken.receivers;
 
         receivers.map((mp) => {
             if(mp !== userID){
@@ -219,7 +221,7 @@ router.post('/istypingbroadcast', jwtchecker, (req, res) => {
     }
 })
 
-router.post('/addnewmember', jwtchecker, (req, res) => {
+router.post('/addnewmember', jwtchecker, async (req, res) => {
     const token = req.body.token;
     const userID = req.params.userID;
 
@@ -227,7 +229,8 @@ router.post('/addnewmember', jwtchecker, (req, res) => {
         const decodedToken = jwt.verify(token, JWT_SECRET);
         const conversationID = decodedToken.conversationID;
         const memberstoadd = decodedToken.memberstoadd;
-        const receivers = decodedToken.receivers;
+        const receiversfetch = await GetAllReceivers(conversationID);
+        const receivers = [...decodedToken.receivers, ...receiversfetch.users.map((mp) => mp.userID)];
 
         memberstoadd.map((mp) => {
             AddNewMemberToContacts(conversationID, mp.userID).then(() => {
