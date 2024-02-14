@@ -11,7 +11,7 @@ const UploadedFiles = require("../../schema/posts/uploadedfiles")
 const UserContacts = require("../../schema/users/contacts")
 const UserMessage = require('../../schema/messages/message')
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper")
-const { GetMessageReceivers } = require("../../reusables/models/messages")
+const { GetMessageReceivers, AddNewMemberToAllMessages, AddNewMemberToContacts, NotificationMessageForConversations } = require("../../reusables/models/messages")
 const { MessagesTrigger, BroadcastIsTypingStatus } = require("../../reusables/hooks/sse")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
@@ -211,6 +211,33 @@ router.post('/istypingbroadcast', jwtchecker, (req, res) => {
         })
 
         // console.log(userID, decodedToken.conversationID, decodedToken.receivers);
+
+        res.send({ status: true, message: "OK" })
+    }catch(ex){
+        console.log(ex);
+        res.send({ status: false, message: "Error decoding token" })
+    }
+})
+
+router.post('/addnewmember', jwtchecker, (req, res) => {
+    const token = req.body.token;
+    const userID = req.params.userID;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET);
+        const conversationID = decodedToken.conversationID;
+        const memberstoadd = decodedToken.memberstoadd;
+        const receivers = decodedToken.receivers;
+
+        memberstoadd.map((mp) => {
+            AddNewMemberToContacts(conversationID, mp.userID).then(() => {
+                AddNewMemberToAllMessages(conversationID, mp.userID).then(() => {
+                    NotificationMessageForConversations(conversationID, userID, receivers, `${userID} added ${mp.userID}`)
+                }).catch((err) => console.log);
+            }).catch((err) => console.log);
+        })
+
+        // console.log(userID, decodedToken.conversationID, decodedToken.memberstoadd);
 
         res.send({ status: true, message: "OK" })
     }catch(ex){
