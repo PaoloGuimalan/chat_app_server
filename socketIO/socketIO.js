@@ -81,6 +81,23 @@ const initSocketIO = (server) => {
             // console.log(callCollections[data.conversationID].users)
         })
 
+        socket.on("answer_data", (data) => {
+            var conversationID = data.conversationID;
+            var currentCall = callCollections[conversationID];
+
+            if(currentCall){
+                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
+                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                    const peerdata = data
+                    io.to(mp.socketID).emit('answer_peer_service', peerdata);
+                })
+            }
+
+            // console.log(socket.id, data);
+            // socket.to
+            // console.log(callCollections[data.conversationID].users)
+        })
+
         socket.on("leavecall", (data) => {
             // console.log("LEAVE CALL", data);
             var conversationID = data.conversationID;
