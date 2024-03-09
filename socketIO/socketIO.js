@@ -61,10 +61,21 @@ const initSocketIO = (server) => {
                     io.to(mp.socketID).emit('newcaller', usersInCallSocketMemory);
                 })
             }
-            // console.log(socketID)
+            console.log(socketID, conversationIDGlobal, data)
         })
 
         socket.on("data", (data) => {
+            var conversationID = data.conversationID;
+            var currentCall = callCollections[conversationID];
+
+            if(currentCall){
+                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
+                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                    const peerdata = data
+                    io.to(mp.socketID).emit('connect_peer_service', peerdata);
+                })
+            }
+
             // console.log(socket.id, data);
             // socket.to
             // console.log(callCollections[data.conversationID].users)
