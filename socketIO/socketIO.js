@@ -27,7 +27,13 @@ const initSocketIO = (server) => {
                     ...currentCall.users,
                     {
                         socketID: socketID,
-                        userID: data.userID
+                        userID: data.userID,
+                        offererUserName: data.userID,
+                        offer: null,
+                        offerIceCandidates: [],
+                        answererUserName: null,
+                        answer: null,
+                        answererIceCandidates: []
                     }
                 ]
 
@@ -35,16 +41,25 @@ const initSocketIO = (server) => {
                     users: newCallMembersSet
                 }
 
-                newCallMembersSet.map((mp) => {
+                var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                io.to(socketID).emit('caller_connected', usersInCallSocketMemory);
+
+                newCallMembersSet.filter((flt) => flt.socketID !== socketID).map((mp) => {
                     var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    io.to(mp.socketID).emit('newcaller', usersInCallSocketMemory);
+                    io.to(mp.socketID).emit('newCaller', usersInCallSocketMemory);
                 })
             }
             else{
                 var newCallMembersSet = [
                     {
                         socketID: socketID,
-                        userID: data.userID
+                        userID: data.userID,
+                        offererUserName: data.userID,
+                        offer: null,
+                        offerIceCandidates: [],
+                        answererUserName: null,
+                        answer: null,
+                        answererIceCandidates: []
                     }
                 ]
 
@@ -56,12 +71,45 @@ const initSocketIO = (server) => {
                     users: newCallMembersSet
                 }
 
-                newCallMembersSet.map((mp) => {
+                var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                io.to(socketID).emit('caller_connected', usersInCallSocketMemory);
+
+                newCallMembersSet.filter((flt) => flt.socketID !== socketID).map((mp) => {
                     var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    io.to(mp.socketID).emit('newcaller', usersInCallSocketMemory);
+                    io.to(mp.socketID).emit('newCaller', usersInCallSocketMemory);
                 })
             }
             console.log(socketID, conversationIDGlobal, data)
+        })
+
+        socket.on("newOffer", (data) => {
+            var conversationID = data.conversationID;
+            var currentCall = callCollections[conversationID];
+
+            if(currentCall){
+                const myOffer = currentCall.users.filter((flt) => flt.socketID === socketID)[0];
+                const otherOffers = currentCall.users.filter((flt) => flt.socketID !== socketID);
+
+                var newCallMembersSet = [
+                    ...otherOffers,
+                    {
+                        ...myOffer,
+                        offer: data.offer
+                    }
+                ]
+
+                callCollections[conversationID] = {
+                    users: newCallMembersSet
+                }
+
+                // console.log(newCallMembersSet)
+
+                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
+                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+                    const peerdata = data
+                    io.to(mp.socketID).emit('newOfferAwaiting', peerdata);
+                })
+            }
         })
 
         socket.on("data", (data) => {
@@ -79,6 +127,65 @@ const initSocketIO = (server) => {
             // console.log(socket.id, data);
             // socket.to
             // console.log(callCollections[data.conversationID].users)
+        })
+
+        socket.on("sendIceCandidateToSignalingServer", (data) => {
+            var conversationID = data.conversationID;
+            var currentCall = callCollections[conversationID];
+
+            if(data.didIOffer){
+                // console.log("I OFFER")
+                const offerInOffers = currentCall.users.filter((flt) => flt.offererUserName === data.iceUserName)[0];
+                if(offerInOffers){
+                    offerInOffers.offerIceCandidates.push(data.iceCandidate);
+                    if(offerInOffers.answererUserName){
+                        const socketToSendTo = currentCall.users.filter((flt) => flt.userID === offerInOffers.answererUserName)[0]
+                        if(socketToSendTo){
+                            io.to(socketToSendTo.socketID).emit('receivedIceCandidateFromServer', data.iceCandidate)
+                        }else{
+                            console.log("Ice candidate recieved but could not find answere")
+                        }
+                    }
+                }
+            }
+            else{
+                // console.log("NO OFFER")
+                const offerInOffers = currentCall.users.filter((flt) => flt.answererUserName === data.iceUserName)[0];
+                const socketToSendTo = currentCall.users.filter((flt) => flt.userID === offerInOffers.offererUserName)[0];
+                if(socketToSendTo){
+                    socket.to(socketToSendTo.socketID).emit('receivedIceCandidateFromServer', data.iceCandidate)
+                }else{
+                    console.log("Ice candidate recieved but could not find offerer")
+                }
+            }
+        })
+
+        socket.on("newAnswer", (data, ackFunction) => {
+            var conversationID = data.conversationID;
+            var currentCall = callCollections[conversationID];
+
+            if(currentCall){
+                const socketToAnswer = currentCall.users.filter((flt) => flt.userID === data.userID)[0]
+
+                if(socketToAnswer){
+                    const socketIdToAnswer = socketToAnswer.socketID
+                    const offerToUpdate = currentCall.users.filter((flt) => flt.userID === data.userID)[0]
+
+                    if(!offerToUpdate){
+                        console.log("No OfferToUpdate")
+                        return;
+                    }
+
+                    ackFunction(offerToUpdate.offerIceCandidates);
+                    // console.log(offerToUpdate.offerIceCandidates)
+                    offerToUpdate.answer = data.answer
+                    offerToUpdate.answererUserName = data.userName
+
+                    // console.log(socketToAnswer);
+
+                    io.to(socketIdToAnswer).emit('answerResponse', offerToUpdate)
+                }
+            }
         })
 
         socket.on("answer_data", (data) => {
