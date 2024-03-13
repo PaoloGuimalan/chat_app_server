@@ -294,6 +294,18 @@ const MessagesTrigger = async (id, details, onseen) => {
                 preserveNullAndEmptyArrays: true
             }
         },{
+            $lookup:{
+                from: "servers",
+                localField: "groupdetails.serverID",
+                foreignField: "serverID",
+                as: "serverdetails"
+            }
+        },{
+            $unwind:{
+                path: "$serverdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
             $project:{
                 "users.birthdate": 0,
                 "users.dateCreated": 0,
