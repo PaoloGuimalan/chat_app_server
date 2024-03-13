@@ -17,6 +17,7 @@ const Messages = require("./routes/messages/index")
 const Users = require("./routes/users/index");
 const Profile = require("./routes/profile/index")
 const Posts = require("./routes/posts/index")
+const Server = require("./routes/serverrts/index")
 const { initSocketIO } = require("./socketIO/socketIO");
 
 const connectMongo = async () => {
@@ -41,6 +42,7 @@ app.use('/auth', Auth)
 app.use('/m', Messages)
 app.use('/u', Users)
 app.use('/p', Profile)
+app.use('/s', Server)
 app.use('/posts', Posts)
 
 app.get('/', (req, res) => {
