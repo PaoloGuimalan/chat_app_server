@@ -37,6 +37,7 @@ const UserContacts = require("../../schema/users/contacts")
 const UserNotifications = require("../../schema/users/notifications")
 const UserMessage = require('../../schema/messages/message')
 const UserGroups = require("../../schema/users/groups")
+const UserServers = require("../../schema/users/servers");
 const UploadedFiles = require("../../schema/posts/uploadedfiles")
 const UserSessions = require("../../schema/auth/sessions")
 
@@ -568,6 +569,20 @@ const checkContactID = async (cnctID) => {
     return await UserContacts.find({contactID: cnctID}).then((result) => {
         if(result.length){
             checkContactID(`${makeID(20)}`)
+        }
+        else{
+            return cnctID;
+        }
+    }).catch((err) => {
+        console.log(err)
+        return false;
+    })
+}
+
+const checkServerID = async (cnctID) => {
+    return await UserServers.find({serverID: cnctID}).then((result) => {
+        if(result.length){
+            checkServerID(`${makeID(20)}`)
         }
         else{
             return cnctID;
@@ -1214,6 +1229,18 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
                 preserveNullAndEmptyArrays: true
             }
         },{
+            $lookup:{
+                from: "servers",
+                localField: "groupdetails.serverID",
+                foreignField: "serverID",
+                as: "serverdetails"
+            }
+        },{
+            $unwind:{
+                path: "$serverdetails",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
             $project:{
                 "users.birthdate": 0,
                 "users.dateCreated": 0,
@@ -1225,7 +1252,7 @@ router.get('/initConversationList', jwtchecker, async (req, res) => {
             }
         }
     ]).then((result) => {
-        // console.log(result)
+        // console.log(result.reverse())
         const encodedResult = jwt.sign({
             conversationslist: result
         }, JWT_SECRET, {
@@ -1301,20 +1328,20 @@ router.get('/initConversation/:conversationID', jwtchecker, async (req, res) => 
     })
 })
 
-const sendMessageInitForGC = async (convID, userID, recs) => {
+const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
     const messageID = await checkExistingMessageID(makeID(30));
         const conversationID = convID;
         const sender = userID;
         const receivers = recs; //Array
         const seeners = []; //Array
-        const content = `${userID} created the group chat`;
+        const content = `${userID} ${message}`;
         const messageDate = {
             date: dateGetter(),
             time: timeGetter()
         };
         const isReply = false;
         const messageType = "notif";
-        const conversationType = "group";
+        const conversationType = type;
 
         const payload = {
             messageID: messageID,
@@ -1398,7 +1425,7 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
 
             const newGroup = new UserGroups(groupParams)
             newGroup.save().then(async () => {
-                sendMessageInitForGC(contactID, userID, allReceivers)
+                sendMessageInitForGC(contactID, userID, allReceivers, "created the group chat", "group")
                 res.send({ status: true, message: `You created a Group Chat` })
             }).catch((err) => {
                 res.send({ status: false, message: "Creating a group encountered an error!" })
@@ -1408,6 +1435,122 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
             // res.send({ status: true, message: `You created a Group Chat` })
         }).catch((err) => {
             res.send({ status: false, message: "Creating a group contact encountered an error!" })
+            console.log(err)
+        })
+    }catch(ex){
+        res.send({ status: false, message: "Group token encountered an error!" })
+        console.log(ex)
+    }
+})
+
+const creategroupchatreusable = async (serverID, channelName, userIDpass, tokenpass) => {
+    const userID = userIDpass
+    const token = tokenpass;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET)
+
+        const contactID = await checkContactID(`${makeID(20)}`)
+        const otherUsers = decodeToken.otherUsers
+        const privacy = decodeToken.privacy
+        const allReceivers = [
+            userID,
+            ...otherUsers
+        ]
+        const userReceivers = allReceivers.map((alr, i) => ({
+            userID: alr
+        }))
+
+        // console.log(allReceivers)
+
+        const payload = {
+            contactID: contactID,
+            actionBy: userID,
+            actionDate: {
+                date: dateGetter(),
+                time: timeGetter()
+            },
+            status: true,
+            type: "server",
+            users: userReceivers
+        }
+
+        const newContact = new UserContacts(payload)
+
+        newContact.save().then(async () => {
+            const groupParams = {
+                serverID: serverID,
+                groupID: contactID,
+                groupName: channelName,
+                profile: "",
+                dateCreated: {
+                    date: dateGetter(),
+                    time: timeGetter()
+                },
+                createdBy: userID,
+                privacy: privacy,
+                type: "server"
+            }
+
+            const newGroup = new UserGroups(groupParams)
+            newGroup.save().then(async () => {
+                sendMessageInitForGC(contactID, userID, allReceivers, "created the channel", "server")
+            }).catch((err) => {
+                console.log(err)
+            })
+
+            // res.send({ status: true, message: `You created a Group Chat` })
+        }).catch((err) => {
+            console.log(err)
+        })
+    }catch(ex){
+        console.log(ex)
+    }
+}
+
+router.post('/createserver', jwtchecker, async (req, res) => {
+    const userID = req.params.userID
+    const token = req.body.token;
+
+    try{
+        const decodeToken = jwt.verify(token, JWT_SECRET);
+        const defaultchannellist = ["General", "Announcements", "Random"];
+
+        const serverID = await checkServerID(`${makeID(20)}`)
+        const otherUsers = decodeToken.otherUsers
+        const serverName = decodeToken.groupName
+        const privacy = decodeToken.privacy
+        const allReceivers = [
+            userID,
+            ...otherUsers
+        ]
+        const userReceivers = allReceivers.map((alr, i) => ({
+            userID: alr
+        }))
+
+        // console.log(allReceivers)
+
+        const payload = {
+            serverID: serverID,
+            serverName: serverName,
+            profile: "",
+            dateCreated: {
+                date: dateGetter(),
+                time: timeGetter()
+            },
+            members: userReceivers,
+            createdBy: userID,
+            privacy: privacy
+        }
+
+        const newserver = new UserServers(payload);
+        newserver.save().then(async () => {
+            defaultchannellist.map((mp) => {
+                creategroupchatreusable(serverID, mp, userID, token);
+            })
+            res.send({ status: true, message: `You created a Group Chat` })
+        }).catch((err) => {
+            res.send({ status: false, message: "Creating a server encountered an error!" })
             console.log(err)
         })
     }catch(ex){
