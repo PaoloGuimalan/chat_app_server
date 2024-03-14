@@ -128,4 +128,43 @@ router.get('/initserversetup/:conversationID', jwtchecker, async (req, res) => {
     })
 })
 
+router.get('/initserverchannels/:serverID', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const serverID = req.params.serverID;
+
+    await UserServer.aggregate([
+        {
+            $match: { serverID: serverID }
+        },{
+            $lookup:{
+                from: "groups",
+                localField: "serverID",
+                foreignField: "serverID", //from groups
+                pipeline: [{
+                    $lookup:{
+                        from: "messages",
+                        localField: "groupID",
+                        foreignField: "conversationID",
+                        pipeline: [{
+                            $match: { seeners: { $nin: [userID] }}
+                        },{
+                            $count: "unread"
+                        }],
+                        as: "messages"
+                    }
+                }],
+                as: "channels"
+            }
+        }
+    ]).then((result) => {
+        const encodedResult = createJWT({
+            data: result
+        })
+        res.send({ status: true, result: encodedResult });
+    }).catch((err) => {
+        console.log(err);
+        res.send({ status: false, message: "Error fetching server" });
+    })
+})
+
 module.exports = router;
