@@ -134,7 +134,12 @@ router.get('/initserverchannels/:serverID', jwtchecker, async (req, res) => {
 
     await UserServer.aggregate([
         {
-            $match: { serverID: serverID }
+            $match: { 
+                $and:[
+                    { serverID: serverID },
+                    { members: { $in: [{ userID: userID }] } }
+                ]
+            }
         },{
             $lookup:{
                 from: "groups",
