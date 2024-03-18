@@ -10,6 +10,8 @@ const router = express.Router();
 
 const UserServer = require("../../schema/users/servers")
 const UserMessage = require("../../schema/messages/message")
+const { GetServerChannels, GetServerDetails } = require("../../reusables/models/server")
+const { AddNewMemberToChannels } = require("../../reusables/models/messages")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -160,8 +162,26 @@ router.get('/initserverchannels/:serverID', jwtchecker, async (req, res) => {
                 }],
                 as: "channels"
             }
+        },{
+            $lookup: {
+                from: "useraccount",
+                localField: "members.userID",
+                foreignField: "userID",
+                as: "usersWithInfo"
+            }
+        },{
+            $project:{
+                "usersWithInfo.birthdate": 0,
+                "usersWithInfo.dateCreated": 0,
+                "usersWithInfo.email": 0,
+                "usersWithInfo.gender": 0,
+                "usersWithInfo.isActivated": 0,
+                "usersWithInfo.isVerified": 0,
+                "usersWithInfo.password": 0,
+            }
         }
     ]).then((result) => {
+        // console.log(result[0].usersWithInfo)
         const encodedResult = createJWT({
             data: result
         })
@@ -170,6 +190,52 @@ router.get('/initserverchannels/:serverID', jwtchecker, async (req, res) => {
         console.log(err);
         res.send({ status: false, message: "Error fetching server" });
     })
+})
+
+router.post('/addnewmembertoserver', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const token = req.body.token;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET);
+        const serverID = decodedToken.serverID;
+        const memberstoadd = decodedToken.memberstoadd;
+        const memberstoaddinserverdts = memberstoadd.map((mp) => ({ userID: mp.userID }));
+
+        const GetServerDts = await GetServerDetails(serverID);
+        const ServerChannelsList = await GetServerChannels(serverID, false);
+        const mappedGroupID = ServerChannelsList.map((mp) => mp.groupID);
+
+        const currentmembers = GetServerDts.members;
+
+        const newsetofmembers = [...memberstoaddinserverdts, ...currentmembers]
+
+        const uniquenewsetofmembers = newsetofmembers.filter((value, index) => {
+            const _value = JSON.stringify(value);
+            return index === newsetofmembers.findIndex(obj => {
+              return JSON.stringify(obj) === _value;
+            });
+        });
+
+        UserServer.updateOne({ serverID: serverID }, { members: uniquenewsetofmembers }).then(() => {
+            mappedGroupID.map((mp) => {
+                AddNewMemberToChannels(userID, {
+                    conversationID: mp,
+                    memberstoadd: memberstoadd,
+                    receivers: decodedToken.receivers
+                })
+            })
+            res.send({ status: true, message: "Server updated" })
+        }).catch((err) => {
+            console.log(err);
+            res.send({ status: false, message: "Error updating server members" })
+        })
+
+        // console.log(decodedToken, mappedGroupID, uniqueArray);
+    }catch(ex){
+        console.log(ex);
+        res.send({ status: false, message: "Error decoding token" })
+    }
 })
 
 module.exports = router;

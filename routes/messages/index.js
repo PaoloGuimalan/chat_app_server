@@ -235,7 +235,7 @@ router.post('/addnewmember', jwtchecker, async (req, res) => {
         memberstoadd.map((mp) => {
             AddNewMemberToContacts(conversationID, mp.userID).then(() => {
                 AddNewMemberToAllMessages(conversationID, mp.userID).then(() => {
-                    NotificationMessageForConversations(conversationID, userID, receivers, `${userID} added ${mp.userID}`)
+                    NotificationMessageForConversations(conversationID, userID, receivers, `${userID} added ${mp.userID}`, "group")
                 }).catch((err) => console.log);
             }).catch((err) => console.log);
         })
