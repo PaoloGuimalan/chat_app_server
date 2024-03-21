@@ -20,7 +20,16 @@ const GetServerDetails = async (serverID) => {
     })
 }
 
+const GetServerMembers = async (serverID) => {
+    return await UserServer.findOne({ serverID: serverID}).then((result) => {
+        return result.members;
+    }).catch((err) => {
+        throw new Error(err);
+    })
+}
+
 module.exports = {
     GetServerChannels,
-    GetServerDetails
+    GetServerDetails,
+    GetServerMembers
 }

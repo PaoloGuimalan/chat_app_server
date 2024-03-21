@@ -52,6 +52,8 @@ const { storage } = require("../../reusables/hooks/firebaseupload")
 const { CountAllUnreadNotifications } = require("../../reusables/models/notifications")
 const makeid = require("../../reusables/hooks/makeID")
 const { GetAllReceivers } = require("../../reusables/models/messages")
+const { GetServerMembers } = require("../../reusables/models/server")
+const { createJWT } = require("../../reusables/hooks/jwthelper")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -1455,7 +1457,7 @@ router.post('/createContactGroupChat', jwtchecker, async (req, res) => {
     }
 })
 
-const creategroupchatreusable = async (serverID, channelName, userIDpass, tokenpass, privacy) => {
+const creategroupchatreusable = async (serverID, channelName, userIDpass, tokenpass, privacyprop) => {
     const userID = userIDpass
     const token = tokenpass;
 
@@ -1464,7 +1466,7 @@ const creategroupchatreusable = async (serverID, channelName, userIDpass, tokenp
 
         const contactID = await checkContactID(`${makeID(20)}`)
         const otherUsers = decodeToken.otherUsers
-        const privacy = decodeToken.privacy
+        const privacy = privacyprop
         const allReceivers = [
             userID,
             ...otherUsers
@@ -1519,6 +1521,44 @@ const creategroupchatreusable = async (serverID, channelName, userIDpass, tokenp
         console.log(ex)
     }
 }
+
+router.post('/createchannel', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const token = req.body.token;
+
+    try{
+        const decodedToken = jwt.verify(token, JWT_SECRET);
+        const serverID = decodedToken.serverID;
+        const memberstoadd = decodedToken.otherUsers;
+        // const memberstoaddinserverdts = memberstoadd.map((mp) => ({ userID: mp }));
+        const privacy = decodedToken.privacy;
+        const groupName = decodedToken.groupName;
+        
+        const serverMembers = await GetServerMembers(serverID);
+
+        if(privacy){
+            const modifiedservermembers = memberstoadd;
+            // console.log(privacy, modifiedservermembers);
+            const channeltoken = jwt.sign({
+                otherUsers: modifiedservermembers
+            }, JWT_SECRET)
+            creategroupchatreusable(serverID, groupName, userID, channeltoken, privacy);
+        }
+        else{
+            const modifiedservermemberspub = serverMembers.filter((flt) => flt.userID !== userID).map((mp) => mp.userID);
+            const channeltokenpub = jwt.sign({
+                otherUsers: modifiedservermemberspub
+            }, JWT_SECRET)
+            // console.log(privacy, modifiedservermemberspub, jwt.verify(channeltokenpub, JWT_SECRET))
+            creategroupchatreusable(serverID, groupName, userID, channeltokenpub, privacy);
+        }
+
+        res.send({ status: true, message: "OK" });
+    }catch(ex){
+        console.log(ex);
+        res.send({ status: false, message: "Error decoding token" })
+    }
+})
 
 router.post('/createserver', jwtchecker, async (req, res) => {
     const userID = req.params.userID

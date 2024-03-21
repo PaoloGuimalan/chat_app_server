@@ -10,7 +10,7 @@ const router = express.Router();
 
 const UserServer = require("../../schema/users/servers")
 const UserMessage = require("../../schema/messages/message")
-const { GetServerChannels, GetServerDetails } = require("../../reusables/models/server")
+const { GetServerChannels, GetServerDetails, GetServerMembers } = require("../../reusables/models/server")
 const { AddNewMemberToChannels } = require("../../reusables/models/messages")
 
 const JWT_SECRET = process.env.JWT_SECRET
