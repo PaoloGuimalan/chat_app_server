@@ -1534,7 +1534,7 @@ router.post('/createchannel', jwtchecker, async (req, res) => {
         const privacy = decodedToken.privacy;
         const groupName = decodedToken.groupName;
         
-        const serverMembers = await GetServerMembers(serverID);
+        const serverMembers = await GetServerMembers(serverID, false);
 
         if(privacy){
             const modifiedservermembers = memberstoadd;

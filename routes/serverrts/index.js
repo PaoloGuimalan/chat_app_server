@@ -238,4 +238,19 @@ router.post('/addnewmembertoserver', jwtchecker, async (req, res) => {
     }
 })
 
+router.get('/getservermembers/:serverID', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const serverID = req.params.serverID;
+
+    const result = await GetServerMembers(serverID, true);
+
+    const encodedResult = jwt.sign({
+        members: result
+    }, JWT_SECRET, {
+        expiresIn: 60 * 60 * 24 * 7
+    })
+
+    res.send({ status: true, result: encodedResult })
+})
+
 module.exports = router;
