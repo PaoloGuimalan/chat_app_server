@@ -13,6 +13,7 @@ const UserNotifications = require("../../schema/users/notifications")
 const { checkPostIDExisting, GetAllPostsCountInProfile } = require("../../reusables/models/posts")
 const { checkNotifID } = require("../../reusables/models/notifications")
 const { uploadFirebaseMultiple, saveFileRecordToDatabase } = require("../../reusables/hooks/firebaseupload")
+const { GetListOfContacts } = require("../../reusables/models/users")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -177,6 +178,88 @@ router.post('/createpost', jwtchecker, async (req, res) => {
         console.log(ex)
         res.send({ status: false, message: "Cannot decode token" })
     }
+})
+
+router.get('/feed', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const profileUserID = req.params.profileUserID;
+    const range = req.headers["range"];
+    const totalposts = await GetAllPostsCountInProfile(profileUserID);
+    const contactslist =  await GetListOfContacts(userID);
+
+    // console.log(contactslist);
+
+    await Posts.aggregate([ //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
+        {
+            "$match": {
+                "$and": [
+                    {
+                        "$or": [
+                            { "userID": { $in: contactslist } },
+                            { "tagging.users": { $in: contactslist } },
+                            { "privacy.status": "public" }
+                        ]
+                    },{
+                        "userID": { $ne: userID }
+                    }
+                ]
+            }
+        },
+        {
+            "$lookup": {
+                from: "useraccount",
+                localField: "tagging.users",
+                foreignField: "userID",
+                as: "tagged_users"
+            }
+        },
+        {
+            $lookup:
+               {
+                 from: "useraccount",
+                 let: { userIDPass: "$userID" },
+                 pipeline: [ {
+                    $match: {
+                       $expr: { $eq: [ "$userID", "$$userIDPass" ] }
+                    }
+                  } ],
+                 as: "post_owner"
+               }
+        },
+        {
+            "$unwind": "$post_owner"
+        },
+        {
+            "$sort": {
+                "_id": -1
+            }
+        },
+        {
+            "$limit": parseInt(range)
+        },
+        {
+            "$project": {
+                "tagged_users.dateCreated": 0,
+                "tagged_users.email": 0,
+                "tagged_users.password": 0,
+                "post_owner.dateCreated": 0,
+                "post_owner.email": 0,
+                "post_owner.password": 0
+            }
+        }
+    ]).then((result) => {
+        var posts = result;
+        // console.log(result)
+        const encodedResult = createJWT({
+            posts: posts,
+            total: totalposts
+        });
+
+        res.send({ status: true, result: encodedResult });
+    }).catch((err) => {
+        res.send({ status: false, message: err.message });
+        console.log(err);
+    })
 })
 
 module.exports = router;
