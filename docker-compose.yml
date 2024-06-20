@@ -1,0 +1,7 @@
+version: '1'
+services:
+  api:
+    container_name: 'chatterloop_api'
+    build: .
+    ports:
+      - "5000:3001"
