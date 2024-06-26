@@ -1,6 +1,7 @@
 const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3001;
+const POD_NAME = process.env.POD_NAME || "podless";
 const mysql = require("mysql");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
@@ -19,6 +20,7 @@ const Profile = require("./routes/profile/index")
 const Posts = require("./routes/posts/index")
 const Server = require("./routes/serverrts/index")
 const { initSocketIO } = require("./socketIO/socketIO");
+const consumeMessages = require("./reusables/rabbitmq/consumer");
 
 const connectMongo = async () => {
     return mongoose.connect(MongooseConnection.url, MongooseConnection.params)
@@ -50,7 +52,8 @@ app.get('/', (req, res) => {
 })
 
 const server = app.listen(PORT, () => {
-    console.log(`Server Running: ${PORT}`)
+    console.log(`Server Running: ${PORT} | ${POD_NAME}`)
+    consumeMessages();
     connectMongo().then(() => {
         console.log(`Connected to MongoDB`)
     }).catch((err) => {

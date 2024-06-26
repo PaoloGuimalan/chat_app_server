@@ -24,6 +24,11 @@ ENV FIREBASE_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/ce
 ENV FIREBASE_CLIENT_X509_CERT_URL=https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-kc8bu%40chatterloop.iam.gserviceaccount.com 
 ENV FIREBASE_UNIVERSE_DOMAIN=googleapis.com 
 ENV FIREBASE_STORAGE_BUCKET=chatterloop.appspot.com
+#RabbitMQ
+ENV RABBITMQ_USER=neonsystems
+ENV RABBITMQ_PASS=neonsystems
+ENV RABBITMQ_URL=rabbitmq-0.rabbitmq.rabbits.svc.cluster.local
+ENV RABBITMQ_PORT=5672
 
 ENV PORT=3001
 

@@ -6,6 +6,103 @@ const UserContacts = require("../../schema/users/contacts");
 const { createJWTwExp } = require("./jwthelper");
 const { CountAllUnreadNotifications } = require("../models/notifications");
 
+const SSENotificationsTrigger = async (type, ids, details) => {
+    const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser]
+    const sseWithUserIDRes = sseNotificationsWaiters[ids.sendToUser]
+
+    if(sseWithUserID){
+        if(ids.sendFromUser){
+            // console.log(ids.sendFromUser)
+            if(type == "info_contact_decline"){
+                NotificicationTrigger(ids.sendFromUser, details.actionlog)
+            }
+            else if(type == "info_contact_accept"){
+                NotificicationTrigger(ids.sendFromUser, details.actionlog)
+                ContactListTrigger(ids.sendFromUser, details.actionlog)
+            }
+            else if(type == "contact_request"){
+                NotificicationTrigger(ids.sendFromUser, details.actionlog)
+            }
+        }
+    }
+
+    if(sseWithUserIDRes){
+        if(ids.sendToUser){
+            // console.log(ids.sendToUser)
+            if(type == "info_contact_decline"){
+                NotificicationTrigger(ids.sendToUser, details.sendToDetails)
+            }
+            else if(type == "info_contact_accept"){
+                NotificicationTrigger(ids.sendToUser, details.sendToDetails)
+                ContactListTrigger(ids.sendToUser, details.sendToDetails)
+            }
+            else if(type == "contact_request"){
+                NotificicationTrigger(ids.sendToUser, details.sendToDetails)
+            }
+        }
+    }
+}
+
+const NotificicationTrigger = async (id, details) => {
+    const sseWithUserID = sseNotificationsWaiters[id];
+    const UnreadNotificationsTotal =  await CountAllUnreadNotifications(id);
+
+    await UserNotifications.aggregate([
+        {
+            $match:{
+                toUserID: id
+            }
+        },{
+            $lookup:{
+                from: "useraccount",
+                localField: "fromUserID",
+                foreignField: "userID",
+                as: "fromUser"
+            }
+        },{
+            $unwind:{
+                path: "$fromUser",
+                preserveNullAndEmptyArrays: true
+            }
+        },{
+            $sort: {_id: -1}
+        },{
+            $project:{
+                "fromUser._id": 0,
+                "fromUser.birthdate": 0,
+                "fromUser.gender": 0,
+                "fromUser.email": 0,
+                "fromUser.password": 0,
+                "fromUser.dateCreated": 0
+            }
+        }
+    ]).then((result) => {
+        // console.log(result)
+        var encodedResult = createJWTwExp({
+            notifications: result,
+            totalunread: UnreadNotificationsTotal
+        })
+
+        sseWithUserID.response.map((itr, i) => {
+            itr.res.sse(`notifications`, {
+                status: true,
+                auth: true,
+                message: details,
+                result: encodedResult
+            })
+        })
+    }).catch((err) => {
+        console.log(err)
+        sseWithUserID.response.map((itr, i) => {
+            itr.res.sse(`notifications`, {
+                status: false,
+                auth: true,
+                message: "Error retrieving notifications"
+            })
+        })
+    })
+}
+
 const SendTagPostNotification = async (details, userID) => {
     const sseWithUserID = sseNotificationsWaiters[userID];
     const UnreadNotificationsTotal =  await CountAllUnreadNotifications(userID);
@@ -431,6 +528,64 @@ const BroadcastIsTypingStatus = (receiver, data) => {
     }
 }
 
+const ReachCallRecepients = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+    const message = decodedToken.conversationType == "single"?
+    `${decodedToken.callDisplayName} wants to have a ${decodedToken.callType == "audio"? "call" : "video call"}` :
+    `${decodedToken.caller.name} is calling in ${decodedToken.callDisplayName}`;
+
+    const encodedResult = createJWTwExp({
+        callmetadata: decodedToken
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.res.sse(`incomingcall`, {
+                status: true,
+                auth: true,
+                message: message,
+                result: encodedResult
+            })
+        })
+    }
+}
+
+const CallRejectNotif = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+
+    const encodedResult = createJWTwExp({
+        rejectdata: decodedToken
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.res.sse(`callreject`, {
+                status: true,
+                auth: true,
+                result: encodedResult
+            })
+        })
+    }
+}
+
+const UpdateContactswSessionStatus = (rcp, decodedToken) => {
+    const sseWithUserID = sseNotificationsWaiters[rcp]
+
+    const encodedResult = createJWTwExp({
+        user: decodedToken
+    })
+
+    if(sseWithUserID){
+        sseWithUserID.response.map((itr, i) => {
+            itr.res.sse(`active_users`, {
+                status: true,
+                auth: true,
+                result: encodedResult
+            })
+        })
+    }
+}
+
 const clearASingleSession = (tokenfromsse, sessionstamp) => {
     const connectionID = tokenfromsse;
     const ifexistingsession = sseNotificationsWaiters[connectionID];
@@ -455,11 +610,16 @@ const clearAllSession = () => {
 
 module.exports = {
     sseNotificationsWaiters,
+    SSENotificationsTrigger,
+    NotificicationTrigger,
     SendTagPostNotification,
     MessagesTrigger,
     ContactListTrigger,
     ReloadUserNotification,
     BroadcastIsTypingStatus,
+    ReachCallRecepients,
+    CallRejectNotif,
+    UpdateContactswSessionStatus,
     clearASingleSession,
     clearAllSession
 }

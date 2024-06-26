@@ -47,336 +47,16 @@ const makeID = require("../../reusables/hooks/makeID")
 const { base64ToArrayBuffer, dataURLtoFile } = require("../../reusables/hooks/base64toFile")
 const { format } = require("path")
 const { GetAllMessageCountInAConversation } = require("../../reusables/models/conversation")
-const { sseNotificationsWaiters, ReloadUserNotification, clearASingleSession } = require("../../reusables/hooks/sse")
+const { sseNotificationsWaiters, ReloadUserNotification, clearASingleSession, ContactListTrigger, SSENotificationsTrigger, MessagesTrigger, ReachCallRecepients, UpdateContactswSessionStatus, CallRejectNotif } = require("../../reusables/hooks/sse")
 const { storage } = require("../../reusables/hooks/firebaseupload")
 const { CountAllUnreadNotifications } = require("../../reusables/models/notifications")
 const makeid = require("../../reusables/hooks/makeID")
 const { GetAllReceivers } = require("../../reusables/models/messages")
 const { GetServerMembers } = require("../../reusables/models/server")
-const { createJWT } = require("../../reusables/hooks/jwthelper")
+const { createJWT, jwtchecker, jwtssechecker } = require("../../reusables/hooks/jwthelper")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
-
-const jwtchecker = (req, res, next) => {
-    const token = req.headers["x-access-token"]
-
-    if(token){
-        jwt.verify(token, JWT_SECRET, async (err, decode) => {
-            if(err){
-                console.log(err)
-                res.send({ status: false, message: err.message })
-            }
-            else{
-                const id = decode.userID;
-                await UserAccount.findOne({ userID: id }).then((result) => {
-                    if(result){
-                        req.params.userID = result.userID;
-                        next()
-                    }
-                    else{
-                        res.send({ status: false, message: "Cannot verify user!"})
-                    }
-                }).catch((err) => {
-                    console.log(err)
-                    res.send({ status: false, message: "Error verifying user!"})
-                })
-            }
-        })
-    }
-    else{
-        res.send({ status: false, message: "Cannot verify user!"})
-    }
-}
-
-const jwtssechecker = (req, res, next) => {
-    const decodedToken = jwt.verify(req.params.token, JWT_SECRET)
-
-    const token = decodedToken.token
-    const type = decodedToken.type
-
-    if(token){
-        jwt.verify(token, JWT_SECRET, async (err, decode) => {
-            if(err){
-                console.log(err)
-                res.sse(type, { status: false, auth: false, message: err.message })
-            }
-            else{
-                const id = decode.userID;
-                await UserAccount.findOne({ userID: id }).then((result) => {
-                    if(result){
-                        req.params.userID = result.userID;
-                        next()
-                    }
-                    else{
-                        res.sse(type, { status: false, auth: false, message: "Cannot verify user!"})
-                    }
-                }).catch((err) => {
-                    console.log(err)
-                    res.sse(type, { status: false, auth: false, message: "Error verifying user!"})
-                })
-            }
-        })
-    }
-    else{
-        res.send(type, { status: false, auth: false, message: "Cannot verify user!"})
-    }
-}
-
-const notificicationTrigger = async (type, id, details, sseWithUserID) => {
-    const UnreadNotificationsTotal =  await CountAllUnreadNotifications(id);
-
-    await UserNotifications.aggregate([
-        {
-            $match:{
-                toUserID: id
-            }
-        },{
-            $lookup:{
-                from: "useraccount",
-                localField: "fromUserID",
-                foreignField: "userID",
-                as: "fromUser"
-            }
-        },{
-            $unwind:{
-                path: "$fromUser",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $sort: {_id: -1}
-        },{
-            $project:{
-                "fromUser._id": 0,
-                "fromUser.birthdate": 0,
-                "fromUser.gender": 0,
-                "fromUser.email": 0,
-                "fromUser.password": 0,
-                "fromUser.dateCreated": 0
-            }
-        }
-    ]).then((result) => {
-        // console.log(result)
-        var encodedResult = jwt.sign({
-            notifications: result,
-            totalunread: UnreadNotificationsTotal
-        }, JWT_SECRET, {
-            expiresIn: 60 * 60 * 24 * 7
-        })
-
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`notifications`, {
-                status: true,
-                auth: true,
-                message: details,
-                result: encodedResult
-            })
-        })
-    }).catch((err) => {
-        console.log(err)
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`notifications`, {
-                status: false,
-                auth: true,
-                message: "Error retrieving notifications"
-            })
-        })
-    })
-}
-
-const contactListTrigger = async (type, id, details, sseWithUserID) => {
-    const userID = id
-
-    await UserContacts.aggregate([
-        {
-            $match:{
-                $and:[
-                    {
-                        $or:[
-                            { actionBy: userID },
-                            { "users.userID": userID }
-                        ]
-                    },
-                    {
-                        status: true
-                    }
-                ]
-            }
-        },{
-            $lookup:{
-                from: "contacts",
-                localField: "contactID",
-                foreignField: "contactID",
-                let: { 
-                    firstUserID: { $arrayElemAt: ['$users.userID', 0] },
-                    secondUserID: { $arrayElemAt: ['$users.userID', 1] } 
-                },
-                pipeline: [
-                    {
-                        $lookup:{
-                            from: "useraccount",
-                            pipeline:[
-                                {
-                                    $match: {
-                                        $expr:{
-                                            $and: [
-                                                {$eq: ["$userID", "$$firstUserID"]},
-                                                {$eq: ["$isVerified", true]},
-                                                {$eq: ["$isActivated", true]}
-                                            ]
-                                        }
-                                    }
-                                }
-                            ],
-                            as: "userone"
-                        }
-                    },
-                    {
-                        $unwind:{
-                            path: "$userone",
-                            preserveNullAndEmptyArrays: true
-                        }
-                    },
-                    {
-                        $lookup:{
-                            from: "useraccount",
-                            pipeline:[
-                                {
-                                    $match: {
-                                        $expr:{
-                                            $and: [
-                                                {$eq: ["$userID", "$$secondUserID"]},
-                                                {$eq: ["$isVerified", true]},
-                                                {$eq: ["$isActivated", true]}
-                                            ]
-                                        }
-                                    }
-                                }
-                            ],
-                            as: "usertwo"
-                        }
-                    },
-                    {
-                        $unwind:{
-                            path: "$usertwo",
-                            preserveNullAndEmptyArrays: true
-                        }
-                    }
-                ],
-                as: "userdetails"
-            }
-        },{
-            $unwind:{
-                path: "$userdetails",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $lookup:{
-                from: "groups",
-                localField: "contactID",
-                foreignField: "groupID",
-                as: "groupdetails"
-            }
-        },{
-            $unwind:{
-                path: "$groupdetails",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $project:{
-                "userdetails.actionBy": 0,
-                "userdetails.actionDate": 0,
-                "userdetails.contactID": 0,
-                "userdetails.status": 0,
-                "userdetails.users": 0,
-                "users": 0,
-                "userdetails.userone.birthdate": 0,
-                "userdetails.userone.dateCreated": 0,
-                "userdetails.userone.email": 0,
-                "userdetails.userone.gender": 0,
-                "userdetails.userone.isActivated": 0,
-                "userdetails.userone.isVerified": 0,
-                "userdetails.userone.password": 0,
-                "userdetails.usertwo.birthdate": 0,
-                "userdetails.usertwo.dateCreated": 0,
-                "userdetails.usertwo.email": 0,
-                "userdetails.usertwo.gender": 0,
-                "userdetails.usertwo.isActivated": 0,
-                "userdetails.usertwo.isVerified": 0,
-                "userdetails.usertwo.password": 0
-            }
-        },{
-            $sort: {_id: -1}
-        }
-    ]).then((result) => {
-        // console.log(result)
-        const encodedResult = jwt.sign({
-            contacts: result
-        }, JWT_SECRET, {
-            expiresIn: 60 * 60 * 24 * 7
-        })
-
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`contactslist`, {
-                status: true,
-                auth: true,
-                message: details,
-                result: encodedResult
-            })
-        })
-
-        // res.send({ status: true, result: encodedResult })
-
-    }).catch((err) => {
-        console.log(err)
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`contactslist`, {
-                status: false,
-                auth: true,
-                message: "Error fetching contacts list"
-            })
-        })
-
-        // res.send({ status: false, message: "Error fetching contacts list" })
-    })
-}
-
-const sseNotificationstrigger = async (type, ids, details) => {
-    const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser]
-    const sseWithUserIDRes = sseNotificationsWaiters[ids.sendToUser]
-
-    if(sseWithUserID){
-        if(ids.sendFromUser){
-            // console.log(ids.sendFromUser)
-            if(type == "info_contact_decline"){
-                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-            }
-            else if(type == "info_contact_accept"){
-                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-                contactListTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-            }
-            else if(type == "contact_request"){
-                notificicationTrigger(type, ids.sendFromUser, details.actionlog, sseWithUserID)
-            }
-        }
-    }
-
-    if(sseWithUserIDRes){
-        if(ids.sendToUser){
-            // console.log(ids.sendToUser)
-            if(type == "info_contact_decline"){
-                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-            }
-            else if(type == "info_contact_accept"){
-                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-                contactListTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-            }
-            else if(type == "contact_request"){
-                notificicationTrigger(type, ids.sendToUser, details.sendToDetails, sseWithUserIDRes)
-            }
-        }
-    }
-}
 
 router.get('/search/:searchdata', jwtchecker, async (req, res) => {
     const userID = req.params.userID
@@ -556,14 +236,14 @@ const sendNotification = async (params, actionlog) => {
     const newNotif = new UserNotifications(params)
     
     newNotif.save().then(() => {
-        sseNotificationstrigger(type, {
+        SSENotificationsTrigger(type, {
             sendToUser: sendToUser,
             sendFromUser: sendFromUser
         }, {
             sendToDetails: sendToDetails,
             actionlog: actionlog
         })
-        // sseNotificationstrigger(type, sendFromUser, actionlog)
+        // SSENotificationsTrigger(type, sendFromUser, actionlog)
     }).catch((err) => { console.log(err) })
 }
 
@@ -995,129 +675,6 @@ const checkExistingMessageID = async (messageID) => {
     })
 }
 
-const messagesTrigger = async (id, sseWithUserID, details, onseen) => {
-    const userID = id;
-
-    await UserMessage.aggregate([
-        {
-            $match:{
-                receivers: { $in: [userID] }
-            }
-        },{
-            $group: {
-                _id: "$conversationID",
-                sortID: { "$last": "$_id" },
-                conversationID: { "$last": "$conversationID" },
-                messageID: { "$last": "$messageID" },
-                conversationID: { "$last": "$conversationID" },
-                sender: { "$last": "$sender" },
-                receivers: { "$last": "$receivers" },
-                seeners: { "$last": "$seeners" },
-                content: { "$last": "$content" },
-                messageDate: { "$last": "$messageDate" },
-                isReply: { "$last": "$isReply" },
-                replyingTo: { "$last": "$replyingTo" },
-                reactions: { "$last": "$reactions" },
-                isDeleted: { "$last": "$isDeleted" },
-                messageType: { "$last": "$messageType" },
-                conversationType: { "$last": "$conversationType" },
-                unread: {
-                    $sum: {
-                        $cond: {
-                            if:{
-                                $in: [userID, "$seeners"]
-                            },
-                            then: 0,
-                            else: 1
-                        }
-                    }
-                }
-            }
-        },{
-            $sort: {
-                sortID: -1
-            }
-        },{
-            $lookup:{
-                from: "useraccount",
-                localField: "receivers",
-                foreignField: "userID",
-                as: "users"
-            }
-        },{
-            $lookup:{
-                from: "groups",
-                localField: "conversationID",
-                foreignField: "groupID",
-                as: "groupdetails"
-            }
-        },{
-            $unwind:{
-                path: "$groupdetails",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $lookup:{
-                from: "servers",
-                localField: "groupdetails.serverID",
-                foreignField: "serverID",
-                as: "serverdetails"
-            }
-        },{
-            $unwind:{
-                path: "$serverdetails",
-                preserveNullAndEmptyArrays: true
-            }
-        },{
-            $project:{
-                "users.birthdate": 0,
-                "users.dateCreated": 0,
-                "users.email": 0,
-                "users.gender": 0,
-                "users.isActivated": 0,
-                "users.isVerified": 0,
-                "users.password": 0
-            }
-        }
-    ]).then((result) => {
-        // console.log(result)
-        const encodedResult = jwt.sign({
-            conversationslist: result
-        }, JWT_SECRET, {
-            expiresIn: 60 * 60 * 24 * 7
-        })
-
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`messages_list`, {
-                status: true,
-                auth: true,
-                onseen: onseen,
-                message: details,
-                result: encodedResult
-            })
-        })
-    }).catch((err) => {
-        console.log(err)
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`messages_list`, {
-                status: false,
-                auth: true,
-                message: "Error generating conversations list"
-            })
-        })
-    })
-}
-
-const sseMessageNotification = async (type, id, details, trigger) => {
-    const sseWithUserID = sseNotificationsWaiters[id]
-
-    if(sseWithUserID){
-        if(type == "messages_list"){
-            messagesTrigger(id, sseWithUserID, details, trigger)
-        }
-    }
-}
-
 router.post('/sendMessage', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
     const token = req.body.token;
@@ -1167,7 +724,7 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
         newMessage.save().then(() => {
             res.send({status: true, message: "Message Sent", pendingID: pendingID})
             receivers.map((rcvs, i) => {
-                sseMessageNotification("messages_list", rcvs, sender, false)
+                MessagesTrigger(rcvs, sender, false)
             })
         }).catch((err) => {
             console.log(err)
@@ -1379,8 +936,8 @@ const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
             receivers.map((rcvs, i) => {
                 var sseWithUserID = sseNotificationsWaiters[rcvs]
                 if(sseWithUserID){
-                    sseMessageNotification("messages_list", rcvs, sender, false)
-                    contactListTrigger("contactlist", rcvs, `${userID} created a group chat`, sseWithUserID)
+                    MessagesTrigger(rcvs, sender, false)
+                    ContactListTrigger(rcvs, `${userID} created a group chat`)
                 }
             })
         }).catch((err) => {
@@ -1641,7 +1198,7 @@ router.post('/seenNewMessages', jwtchecker, async (req, res) => {
             // console.log(result.modifiedCount)
             if(result.modifiedCount > 0){
                 receivers.map((rcvs, i) => {
-                    sseMessageNotification("messages_list", rcvs, userID, true)
+                    MessagesTrigger(rcvs, userID, true)
                 })
             }
             res.send({ status: true, message: "Seen OK" });
@@ -1771,7 +1328,7 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
     newMessage.save().then(() => {
         saveFileRecordToDatabase([messageID, conversationID], content, "message", messageType, "firebase")
         receivers.map((rcvs, i) => {
-            sseMessageNotification("messages_list", rcvs, userID, false)
+            MessagesTrigger(rcvs, userID, false)
         })
     }).catch((err) => {
         console.log(err)
@@ -1805,30 +1362,6 @@ router.post('/sendFiles', jwtchecker, async (req, res) => {
     }
 })
 
-const reachCallRecepients = (rcp, decodedToken) => {
-    const sseWithUserID = sseNotificationsWaiters[rcp]
-    const message = decodedToken.conversationType == "single"?
-    `${decodedToken.callDisplayName} wants to have a ${decodedToken.callType == "audio"? "call" : "video call"}` :
-    `${decodedToken.caller.name} is calling in ${decodedToken.callDisplayName}`;
-
-    const encodedResult = jwt.sign({
-        callmetadata: decodedToken
-    }, JWT_SECRET, {
-        expiresIn: 60 * 60 * 24 * 7
-    })
-
-    if(sseWithUserID){
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`incomingcall`, {
-                status: true,
-                auth: true,
-                message: message,
-                result: encodedResult
-            })
-        })
-    }
-}
-
 router.post('/call', jwtchecker, async (req, res) => {
     const userID = req.params.userID
     const token = req.body.token;
@@ -1838,7 +1371,7 @@ router.post('/call', jwtchecker, async (req, res) => {
         const recepients = decodeToken.recepients;
         
         recepients.map((rcp) => {
-            reachCallRecepients(rcp, decodeToken)
+            ReachCallRecepients(rcp, decodeToken)
         })
 
         res.send({ status: true, message: "OK" })
@@ -2036,26 +1569,6 @@ const setUserSession = async (userID, status, resolve) => {
     })
 }
 
-const updateContactswSessionStatus = (rcp, decodedToken) => {
-    const sseWithUserID = sseNotificationsWaiters[rcp]
-
-    const encodedResult = jwt.sign({
-        user: decodedToken
-    }, JWT_SECRET, {
-        expiresIn: 60 * 60 * 24 * 7
-    })
-
-    if(sseWithUserID){
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`active_users`, {
-                status: true,
-                auth: true,
-                result: encodedResult
-            })
-        })
-    }
-}
-
 router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) => {
     const userID = req.params.userID
     const sseWithUserID = sseNotificationsWaiters[userID]
@@ -2096,7 +1609,7 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
     setUserSession(userID, true, async () => {
         // console.log("CONNECTED", userID);
         contacts.map((mp) => {
-            updateContactswSessionStatus(mp, activeMetaData)
+            UpdateContactswSessionStatus(mp, activeMetaData)
         })
     })
     
@@ -2114,7 +1627,7 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
             // console.log("DISCONNECTED", userID);
             clearASingleSession(userID, sessionstamp);
             contacts.map((mp) => {
-                updateContactswSessionStatus(mp, disconnectMetaData)
+                UpdateContactswSessionStatus(mp, disconnectMetaData)
             })
         })
     })
@@ -2166,26 +1679,6 @@ router.get('/activecontacts', jwtchecker, async (req, res) => {
     })
 })
 
-const callrejectnotif = (rcp, decodedToken) => {
-    const sseWithUserID = sseNotificationsWaiters[rcp]
-
-    const encodedResult = jwt.sign({
-        rejectdata: decodedToken
-    }, JWT_SECRET, {
-        expiresIn: 60 * 60 * 24 * 7
-    })
-
-    if(sseWithUserID){
-        sseWithUserID.response.map((itr, i) => {
-            itr.res.sse(`callreject`, {
-                status: true,
-                auth: true,
-                result: encodedResult
-            })
-        })
-    }
-}
-
 router.post('/rejectcall', jwtchecker, (req, res) => {
     const userID = req.params.userID;
     const token = req.body.token;
@@ -2197,7 +1690,7 @@ router.post('/rejectcall', jwtchecker, (req, res) => {
         const callerID = decodeToken.caller.userID;
 
         if(conversationType == "single"){
-            callrejectnotif(callerID, {
+            CallRejectNotif(callerID, {
                 conversationID: conversationID,
                 rejectedBy: userID
             })
@@ -2222,7 +1715,7 @@ router.post('/endcall', jwtchecker, (req, res) => {
         const recepients = decodeToken.recepients;
 
         recepients.map((mp) => {
-            callrejectnotif(mp, {
+            CallRejectNotif(mp, {
                 conversationID: conversationID,
                 endedBy: userID
             })

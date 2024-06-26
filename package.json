@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "@web-std/file": "^3.0.3",
+    "amqplib": "^0.10.4",
     "atob": "^2.1.2",
     "axios": "^1.4.0",
     "bcrypt": "^5.1.1",
