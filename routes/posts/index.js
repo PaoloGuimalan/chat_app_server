@@ -14,6 +14,8 @@ const { checkPostIDExisting, GetAllPostsCountInProfile } = require("../../reusab
 const { checkNotifID } = require("../../reusables/models/notifications")
 const { uploadFirebaseMultiple, saveFileRecordToDatabase } = require("../../reusables/hooks/firebaseupload")
 const { GetListOfContacts } = require("../../reusables/models/users")
+const { SEND_TAG_POST_NOTIFICATION } = require("../../reusables/vars/rabbitmqevents")
+const producer = require("../../reusables/rabbitmq/producer")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -111,8 +113,14 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
 
         const newNotif = new UserNotifications(notifParams);
     
-        newNotif.save().then(() => {
+        newNotif.save().then(async () => {
             SendTagPostNotification(`@${userID} tagged you on a post.`, mp)
+            await producer.publishMessage("INFO:CHATTERLOOP", SEND_TAG_POST_NOTIFICATION, {
+                parameters: {
+                    details: `@${userID} tagged you on a post.`,
+                    userID: mp,
+                }
+            });
             // sseNotificationstrigger(type, sendFromUser, actionlog)
         }).catch((err) => { console.log(err) })
     })

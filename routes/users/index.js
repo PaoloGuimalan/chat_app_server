@@ -54,6 +54,8 @@ const makeid = require("../../reusables/hooks/makeID")
 const { GetAllReceivers } = require("../../reusables/models/messages")
 const { GetServerMembers } = require("../../reusables/models/server")
 const { createJWT, jwtchecker, jwtssechecker } = require("../../reusables/hooks/jwthelper")
+const producer = require("../../reusables/rabbitmq/producer")
+const { SSE_NOTIFICATIONS_TRIGGER, MESSAGES_TRIGGER_LOOPER, CONTACT_LIST_TRIGGER_LOOPER, REACH_CALL_RECEPIENTS_LOOPER, UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, CALL_REJECT_NOTIF, CALL_REJECT_NOTIF_LOOPER } = require("../../reusables/vars/rabbitmqevents")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -235,7 +237,7 @@ const sendNotification = async (params, actionlog) => {
     const type = params.type
     const newNotif = new UserNotifications(params)
     
-    newNotif.save().then(() => {
+    newNotif.save().then(async () => {
         SSENotificationsTrigger(type, {
             sendToUser: sendToUser,
             sendFromUser: sendFromUser
@@ -243,6 +245,20 @@ const sendNotification = async (params, actionlog) => {
             sendToDetails: sendToDetails,
             actionlog: actionlog
         })
+
+        await producer.publishMessage("INFO:CHATTERLOOP", SSE_NOTIFICATIONS_TRIGGER, {
+            parameters: {
+                type: type,
+                ids: {
+                    sendToUser: sendToUser,
+                    sendFromUser: sendFromUser
+                },
+                details: {
+                    sendToDetails: sendToDetails,
+                    actionlog: actionlog
+                }
+            }
+        });
         // SSENotificationsTrigger(type, sendFromUser, actionlog)
     }).catch((err) => { console.log(err) })
 }
@@ -372,8 +388,14 @@ router.post('/readnotifications', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
 
     if(userID){
-        await UserNotifications.updateMany({ toUserID: userID, isRead: false }, { isRead: true }).then((result) => {
+        await UserNotifications.updateMany({ toUserID: userID, isRead: false }, { isRead: true }).then(async (result) => {
             ReloadUserNotification(userID, "Notifications has been read");
+            await producer.publishMessage("INFO:CHATTERLOOP", "reload_user_notification", {
+                parameters: {
+                    id: userID,
+                    details: "Notifications has been read"
+                }
+            });
             res.send({status: true, message: "Notifications has been read" });
         }).catch((err) => {
             console.log(err);
@@ -721,11 +743,18 @@ router.post('/sendMessage', jwtchecker, async (req, res) => {
 
         const newMessage = new UserMessage(payload)
 
-        newMessage.save().then(() => {
+        newMessage.save().then(async () => {
             res.send({status: true, message: "Message Sent", pendingID: pendingID})
             receivers.map((rcvs, i) => {
                 MessagesTrigger(rcvs, sender, false)
             })
+            await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+                parameters: {
+                    receivers: receivers,
+                    sender: sender,
+                    onseen: false
+                }
+            });
         }).catch((err) => {
             console.log(err)
             res.send({status: false, message: "Error checking message"})
@@ -932,7 +961,7 @@ const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
 
         const newMessage = new UserMessage(payload)
 
-        newMessage.save().then(() => {
+        newMessage.save().then(async () => {
             receivers.map((rcvs, i) => {
                 var sseWithUserID = sseNotificationsWaiters[rcvs]
                 if(sseWithUserID){
@@ -940,6 +969,19 @@ const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
                     ContactListTrigger(rcvs, `${userID} created a group chat`)
                 }
             })
+            await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+                parameters: {
+                    receivers: receivers,
+                    sender: sender,
+                    onseen: false
+                }
+            });
+            await producer.publishMessage("INFO:CHATTERLOOP", CONTACT_LIST_TRIGGER_LOOPER, {
+                parameters: {
+                    receivers: receivers,
+                    details: `${userID} created a group chat`
+                }
+            });
         }).catch((err) => {
             console.log(err)
         })
@@ -1194,12 +1236,19 @@ router.post('/seenNewMessages', jwtchecker, async (req, res) => {
             $push: {
                 seeners: userID
             }
-        }).then((result) => {
+        }).then(async (result) => {
             // console.log(result.modifiedCount)
             if(result.modifiedCount > 0){
                 receivers.map((rcvs, i) => {
                     MessagesTrigger(rcvs, userID, true)
                 })
+                await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+                    parameters: {
+                        receivers: receivers,
+                        sender: userID,
+                        onseen: true
+                    }
+                });
             }
             res.send({ status: true, message: "Seen OK" });
         }).catch((err) => {
@@ -1325,11 +1374,18 @@ const saveFileMessage = async (userID, messageID, pendingID, conversationID, rec
     
     const newMessage = new UserMessage(payload)
     
-    newMessage.save().then(() => {
+    newMessage.save().then(async () => {
         saveFileRecordToDatabase([messageID, conversationID], content, "message", messageType, "firebase")
         receivers.map((rcvs, i) => {
             MessagesTrigger(rcvs, userID, false)
         })
+        await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+            parameters: {
+                receivers: receivers,
+                sender: userID,
+                onseen: false
+            }
+        });
     }).catch((err) => {
         console.log(err)
     })
@@ -1373,6 +1429,12 @@ router.post('/call', jwtchecker, async (req, res) => {
         recepients.map((rcp) => {
             ReachCallRecepients(rcp, decodeToken)
         })
+        await producer.publishMessage("INFO:CHATTERLOOP", REACH_CALL_RECEPIENTS_LOOPER, {
+            parameters: {
+                recepients: recepients,
+                decodedToken: decodeToken
+            }
+        });
 
         res.send({ status: true, message: "OK" })
     }catch(ex){
@@ -1611,6 +1673,12 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
         contacts.map((mp) => {
             UpdateContactswSessionStatus(mp, activeMetaData)
         })
+        await producer.publishMessage("INFO:CHATTERLOOP", UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, {
+            parameters: {
+                contacts: contacts,
+                decodedToken: activeMetaData
+            }
+        });
     })
     
     req.on('close', () => {
@@ -1629,6 +1697,12 @@ router.get('/sseNotifications/:token', [sse, jwtssechecker], async (req, res) =>
             contacts.map((mp) => {
                 UpdateContactswSessionStatus(mp, disconnectMetaData)
             })
+            await producer.publishMessage("INFO:CHATTERLOOP", UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, {
+                parameters: {
+                    contacts: contacts,
+                    decodedToken: disconnectMetaData
+                }
+            });
         })
     })
 })
@@ -1679,7 +1753,7 @@ router.get('/activecontacts', jwtchecker, async (req, res) => {
     })
 })
 
-router.post('/rejectcall', jwtchecker, (req, res) => {
+router.post('/rejectcall', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
     const token = req.body.token;
 
@@ -1694,6 +1768,15 @@ router.post('/rejectcall', jwtchecker, (req, res) => {
                 conversationID: conversationID,
                 rejectedBy: userID
             })
+            await producer.publishMessage("INFO:CHATTERLOOP", CALL_REJECT_NOTIF, {
+                parameters: {
+                    rcp: callerID,
+                    decodeToken: {
+                        conversationID: conversationID,
+                        rejectedBy: userID
+                    }
+                }
+            });
         }
 
         res.send({ status: true, message: "OK" })
@@ -1704,7 +1787,7 @@ router.post('/rejectcall', jwtchecker, (req, res) => {
     }
 })
 
-router.post('/endcall', jwtchecker, (req, res) => {
+router.post('/endcall', jwtchecker, async (req, res) => {
     const userID = req.params.userID;
     const token = req.body.token;
 
@@ -1720,6 +1803,15 @@ router.post('/endcall', jwtchecker, (req, res) => {
                 endedBy: userID
             })
         })
+        await producer.publishMessage("INFO:CHATTERLOOP", CALL_REJECT_NOTIF_LOOPER, {
+            parameters: {
+                recepients: recepients,
+                decodeToken: {
+                    conversationID: conversationID,
+                    endedBy: userID
+                }
+            }
+        });
 
         res.send({ status: true, message: "OK" })
     }

@@ -4,6 +4,8 @@ const dateGetter = require("../hooks/getDate");
 const timeGetter = require("../hooks/getTime");
 const makeid = require("../hooks/makeID");
 const { MessagesTrigger, ContactListTrigger } = require("../hooks/sse");
+const producer = require("../rabbitmq/producer");
+const { MESSAGES_TRIGGER_LOOPER, CONTACT_LIST_TRIGGER_LOOPER } = require("../vars/rabbitmqevents");
 
 const checkExistingMessageID = async (messageID) => {
     return await UserMessage.find({ messageID: messageID }).then((result) => {
@@ -79,11 +81,24 @@ const NotificationMessageForConversations = async (convID, userID, recs, details
 
     const newMessage = new UserMessage(payload)
 
-    newMessage.save().then(() => {
+    newMessage.save().then(async () => {
         receivers.map((rcvs) => {
             MessagesTrigger(rcvs, sender, false)
             ContactListTrigger(rcvs, `${userID} added you on a group chat`)
         })
+        await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+            parameters: {
+                receivers: receivers,
+                sender: sender,
+                onseen: false
+            }
+        });
+        await producer.publishMessage("INFO:CHATTERLOOP", CONTACT_LIST_TRIGGER_LOOPER, {
+            parameters: {
+                receivers: receivers,
+                details: `${userID} added you on a group chat`
+            }
+        });
     }).catch((err) => {
         console.log(err)
     })

@@ -13,6 +13,8 @@ const UserMessage = require('../../schema/messages/message')
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper")
 const { GetMessageReceivers, AddNewMemberToAllMessages, AddNewMemberToContacts, NotificationMessageForConversations, GetAllReceivers } = require("../../reusables/models/messages")
 const { MessagesTrigger, BroadcastIsTypingStatus } = require("../../reusables/hooks/sse")
+const { MESSAGES_TRIGGER_LOOPER, BROADCAST_IS_TYPING_STATUS_LOOPER } = require("../../reusables/vars/rabbitmqevents")
+const producer = require("../../reusables/rabbitmq/producer")
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE
 const JWT_SECRET = process.env.JWT_SECRET
@@ -42,6 +44,14 @@ router.post('/deletemessage', jwtchecker, (req, res) => {
                 MessagesTrigger(user, userID, false);
             })
 
+            await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+                parameters: {
+                    receivers: messageReceivers,
+                    sender: userID,
+                    onseen: false
+                }
+            });
+
             res.send({ status: true, message: "OK" })
         }).catch((err) => {
             res.send({ status: false, message: err.message })
@@ -67,6 +77,14 @@ router.post('/addreaction', jwtchecker, (req, res) => {
             messageReceivers.map((user) => {
                 MessagesTrigger(user, userID, false);
             })
+
+            await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
+                parameters: {
+                    receivers: messageReceivers,
+                    sender: userID,
+                    onseen: false
+                }
+            });
 
             res.send({ status: true, message: "OK" })
         }).catch((err) => {
@@ -211,6 +229,13 @@ router.post('/istypingbroadcast', jwtchecker, async (req, res) => {
                 BroadcastIsTypingStatus(mp, { userID: userID, conversationID: decodedToken.conversationID });
             }
         })
+
+        await producer.publishMessage("INFO:CHATTERLOOP", BROADCAST_IS_TYPING_STATUS_LOOPER, {
+            parameters: {
+                receivers: receivers.filter((flt) => flt !== userID),
+                data: { userID: userID, conversationID: decodedToken.conversationID }
+            }
+        });
 
         // console.log(userID, decodedToken.conversationID, decodedToken.receivers);
 
