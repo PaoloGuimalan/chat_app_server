@@ -15,7 +15,7 @@ const POD_NAME = process.env.POD_NAME || "podless";
 function brokerActions (data) {
   const message = data.message;
   try{
-    const parameters = message.message.parameters;
+    const parameters = message.parameters;
 
     switch(data.event){
       case SSE_NOTIFICATIONS_TRIGGER:
