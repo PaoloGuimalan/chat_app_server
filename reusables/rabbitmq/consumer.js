@@ -1,7 +1,7 @@
 require("dotenv").config()
 const amqp = require('amqplib');
 const config = require('../vars/config');
-const { SEND_TAG_POST_NOTIFICATION, BROADCAST_IS_TYPING_STATUS_LOOPER, SSE_NOTIFICATIONS_TRIGGER, CONTACT_LIST_TRIGGER_LOOPER, REACH_CALL_RECEPIENTS_LOOPER, UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, CALL_REJECT_NOTIF, CALL_REJECT_NOTIF_LOOPER } = require("../vars/rabbitmqevents");
+const { SEND_TAG_POST_NOTIFICATION, BROADCAST_IS_TYPING_STATUS_LOOPER, SSE_NOTIFICATIONS_TRIGGER, CONTACT_LIST_TRIGGER_LOOPER, REACH_CALL_RECEPIENTS_LOOPER, UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, CALL_REJECT_NOTIF, CALL_REJECT_NOTIF_LOOPER, MESSAGES_TRIGGER_LOOPER } = require("../vars/rabbitmqevents");
 const { SSENotificationsTrigger, MessagesTrigger, ContactListTrigger, ReachCallRecepients, UpdateContactswSessionStatus, CallRejectNotif, SendTagPostNotification, BroadcastIsTypingStatus } = require("../hooks/sse");
 const POD_NAME = process.env.POD_NAME || "podless";
 
@@ -13,9 +13,8 @@ const POD_NAME = process.env.POD_NAME || "podless";
 //step 6 : Consume messages from the queue
 
 function brokerActions (data) {
-  const message = data.message;
   try{
-    const parameters = message.parameters;
+    const parameters = data.message.parameters;
 
     switch(data.event){
       case SSE_NOTIFICATIONS_TRIGGER:
@@ -61,7 +60,7 @@ function brokerActions (data) {
         break;
     }
   }catch(ex){
-    console.log("Action Invalid: ", data);
+    console.log("Action Invalid: ", data, data.message.parameters, ex);
   }
 }
 
