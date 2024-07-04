@@ -19,6 +19,88 @@ const producer = require("../../reusables/rabbitmq/producer")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
+router.get('/preview/:postID', jwtchecker, async (req, res) => {
+    const userID = req.params.userID;
+    const postID = req.params.postID;
+    const contactslist =  await GetListOfContacts(userID);
+
+    // console.log(contactslist);
+
+    await Posts.aggregate([ //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
+        {
+            "$match": {
+                "$and": [
+                    {
+                        "$or": [
+                            { "userID": { $in: contactslist } },
+                            { "tagging.users": { $in: contactslist } },
+                            { "privacy.status": "public" },
+                            {
+                                "$and": [
+                                    { "privacy.status": "filtered" },
+                                    { "privacy.users": userID }
+                                ]
+                            }
+                        ]
+                    },{
+                        postID: postID
+                    }
+                ]
+            }
+        },
+        {
+            "$lookup": {
+                from: "useraccount",
+                localField: "tagging.users",
+                foreignField: "userID",
+                as: "tagged_users"
+            }
+        },
+        {
+            $lookup:
+               {
+                 from: "useraccount",
+                 let: { userIDPass: "$userID" },
+                 pipeline: [ {
+                    $match: {
+                       $expr: { $eq: [ "$userID", "$$userIDPass" ] }
+                    }
+                  } ],
+                 as: "post_owner"
+               }
+        },
+        {
+            "$unwind": "$post_owner"
+        },
+        {
+            "$sort": {
+                "_id": -1
+            }
+        },
+        {
+            "$project": {
+                "tagged_users.dateCreated": 0,
+                "tagged_users.email": 0,
+                "tagged_users.password": 0,
+                "post_owner.dateCreated": 0,
+                "post_owner.email": 0,
+                "post_owner.password": 0
+            }
+        }
+    ]).then((result) => {
+        var posts = result;
+        // console.log(result)
+        const encodedResult = createJWT({
+            preview: posts[0]
+        });
+
+        res.send({ status: true, result: encodedResult });
+    }).catch((err) => {
+        res.send({ status: false, message: err.message });
+        console.log(err);
+    })
+})
+
 router.get('/userposts/:profileUserID', jwtchecker, async (req, res) => {
     const profileUserID = req.params.profileUserID;
     const range = req.headers["range"];
@@ -143,11 +225,14 @@ router.post('/createpost', jwtchecker, async (req, res) => {
             referenceMediaType: mp.referenceMediaType,
             referenceID: `${postID}_${makeID(20)}`
         }))
-        const finaluploadedreferences = await uploadFirebaseMultiple(filereferences);
+        
+        const finaluploadedreferences = decodeToken.content.isShared ? filereferences : await uploadFirebaseMultiple(filereferences);
 
-        finaluploadedreferences.map((mp) => {
-            saveFileRecordToDatabase([mp.referenceID], mp.reference, "post", mp.referenceMediaType, "firebase");
-        })
+        if(decodeToken.content.isShared){
+            finaluploadedreferences.map((mp) => {
+                saveFileRecordToDatabase([mp.referenceID], mp.reference, "post", mp.referenceMediaType, "firebase");
+            })
+        }
 
         const payload = {
             postID: postID,
