@@ -62,7 +62,7 @@ app.get("/", (req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log(`Server Running: ${PORT} | ${POD_NAME}`);
-  consumeMessages();
+  // consumeMessages();
   connect_redis();
   connectMongo()
     .then(() => {
