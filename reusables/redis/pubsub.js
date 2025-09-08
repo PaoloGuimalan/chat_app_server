@@ -59,7 +59,7 @@ async function publish(channel, event, message) {
     };
 
     publisher.on("error", (err) => console.error("Redis Publisher Error", err));
-    await publisher.publish(channel, logDetails);
+    await publisher.publish(channel, JSON.stringify(logDetails));
     await publisher.disconnect();
   }
 }

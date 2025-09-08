@@ -2088,27 +2088,26 @@ router.get(
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
     const redis_event = `events_${userID}`;
 
-    // if(sseWithUserID){
-    //     sseNotificationsWaiters[userID] = {
-    //         response: [
-    //             ...sseWithUserID.response,
-    //             {
-    //                 sessionstamp: sessionstamp,
-    //                 res: res
-    //             }
-    //         ]
-    //     }
-    // }
-    // else{
-    //     sseNotificationsWaiters[userID] = {
-    //         response: [
-    //             {
-    //                 sessionstamp: sessionstamp,
-    //                 res: res
-    //             }
-    //         ]
-    //     }
-    // }
+    if (sseWithUserID) {
+      sseNotificationsWaiters[userID] = {
+        response: [
+          ...sseWithUserID.response,
+          {
+            sessionstamp: sessionstamp,
+            res: res,
+          },
+        ],
+      };
+    } else {
+      sseNotificationsWaiters[userID] = {
+        response: [
+          {
+            sessionstamp: sessionstamp,
+            res: res,
+          },
+        ],
+      };
+    }
 
     listen(redis_event, res);
 
