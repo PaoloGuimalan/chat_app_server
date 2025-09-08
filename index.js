@@ -60,8 +60,7 @@ app.get("/", (req, res) => {
   res.send("Welcome to Chatterloop V2 API!");
 });
 
-app.listen(PORT, () => {
-  // const server =
+const server = app.listen(PORT, () => {
   console.log(`Server Running: ${PORT} | ${POD_NAME}`);
   // consumeMessages();
   connect_redis();
@@ -74,4 +73,4 @@ app.listen(PORT, () => {
     });
 });
 
-// initSocketIO(server);
+initSocketIO(server);
