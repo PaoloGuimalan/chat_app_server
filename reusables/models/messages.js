@@ -113,19 +113,19 @@ const NotificationMessageForConversations = async (
       receivers.map((rcvs) => {
         MessagesTrigger(rcvs, sender, false);
         ContactListTrigger(rcvs, `${userID} added you on a group chat`);
-        publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
-          parameters: {
-            receivers: receivers,
-            sender: sender,
-            onseen: false,
-          },
-        });
-        publish(`events_${rcvs}`, CONTACT_LIST_TRIGGER_LOOPER, {
-          parameters: {
-            receivers: receivers,
-            details: `${userID} added you on a group chat`,
-          },
-        });
+        // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
+        //   parameters: {
+        //     receivers: receivers,
+        //     sender: sender,
+        //     onseen: false,
+        //   },
+        // });
+        // publish(`events_${rcvs}`, CONTACT_LIST_TRIGGER_LOOPER, {
+        //   parameters: {
+        //     receivers: receivers,
+        //     details: `${userID} added you on a group chat`,
+        //   },
+        // });
       });
       //   await producer.publishMessage(
       //     "INFO:CHATTERLOOP",

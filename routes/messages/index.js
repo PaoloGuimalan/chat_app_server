@@ -65,13 +65,13 @@ router.post("/deletemessage", jwtchecker, (req, res) => {
 
         messageReceivers.map((user) => {
           MessagesTrigger(user, userID, false);
-          publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
-            parameters: {
-              receivers: messageReceivers,
-              sender: userID,
-              onseen: false,
-            },
-          });
+          // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
+          //   parameters: {
+          //     receivers: messageReceivers,
+          //     sender: userID,
+          //     onseen: false,
+          //   },
+          // });
         });
 
         // await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
@@ -117,13 +117,13 @@ router.post("/addreaction", jwtchecker, (req, res) => {
 
         messageReceivers.map((user) => {
           MessagesTrigger(user, userID, false);
-          publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
-            parameters: {
-              receivers: messageReceivers,
-              sender: userID,
-              onseen: false,
-            },
-          });
+          // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
+          //   parameters: {
+          //     receivers: messageReceivers,
+          //     sender: userID,
+          //     onseen: false,
+          //   },
+          // });
         });
 
         // await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
@@ -296,15 +296,15 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
           userID: userID,
           conversationID: decodedToken.conversationID,
         });
-        publish(`events_${mp}`, BROADCAST_IS_TYPING_STATUS_LOOPER, {
-          parameters: {
-            receivers: receivers.filter((flt) => flt !== userID),
-            data: {
-              userID: userID,
-              conversationID: decodedToken.conversationID,
-            },
-          },
-        });
+        // publish(`events_${mp}`, BROADCAST_IS_TYPING_STATUS_LOOPER, {
+        //   parameters: {
+        //     receivers: receivers.filter((flt) => flt !== userID),
+        //     data: {
+        //       userID: userID,
+        //       conversationID: decodedToken.conversationID,
+        //     },
+        //   },
+        // });
       }
     });
 

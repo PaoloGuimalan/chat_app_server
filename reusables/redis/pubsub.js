@@ -23,6 +23,9 @@ let publisher;
 async function connect_redis() {
   const scope_subscriber = redis.createClient(redis_creds);
 
+  scope_subscriber.on("error", (err) =>
+    console.error("Redis Subscriber Error", err)
+  );
   await scope_subscriber.connect();
   console.log("Redis subscriber connected");
 
@@ -30,6 +33,9 @@ async function connect_redis() {
 
   const scope_publisher = redis.createClient(redis_creds);
 
+  scope_publisher.on("error", (err) =>
+    console.error("Redis Publisher Error", err)
+  );
   await scope_publisher.connect();
   console.log("Redis publisher connected");
 
@@ -38,12 +44,13 @@ async function connect_redis() {
 
 async function listen(channel, response_holder) {
   if (subscriber) {
-    subscriber.on("error", (err) =>
-      console.error("Redis Subscriber Error", err)
-    );
+    // subscriber.on("error", (err) =>
+    //   console.error("Redis Subscriber Error", err)
+    // );
 
     await subscriber.subscribe(channel, (message) => {
-      console.log(`Received message from ${channel}: ${message}`);
+      const data = JSON.parse(message);
+      response_holder.sse(data.event, data.message);
     });
   }
 }
@@ -58,14 +65,24 @@ async function publish(channel, event, message) {
       dateTime: new Date(),
     };
 
-    publisher.on("error", (err) => console.error("Redis Publisher Error", err));
+    // publisher.on("error", (err) => console.error("Redis Publisher Error", err));
     await publisher.publish(channel, JSON.stringify(logDetails));
     // await publisher.disconnect();
+  }
+}
+
+async function stop_listen(channel) {
+  if (subscriber) {
+    await subscriber.unsubscribe(channel);
+    console.log(`Unsubscribed from channel: ${channel}`);
+  } else {
+    console.error("Subscriber client is not connected");
   }
 }
 
 module.exports = {
   connect_redis,
   listen,
+  stop_listen,
   publish,
 };

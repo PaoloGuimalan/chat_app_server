@@ -217,12 +217,12 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
       .save()
       .then(async () => {
         SendTagPostNotification(`@${userID} tagged you on a post.`, mp);
-        publish(`events_${mp}`, SEND_TAG_POST_NOTIFICATION, {
-          parameters: {
-            details: `@${userID} tagged you on a post.`,
-            userID: mp,
-          },
-        });
+        // publish(`events_${mp}`, SEND_TAG_POST_NOTIFICATION, {
+        //   parameters: {
+        //     details: `@${userID} tagged you on a post.`,
+        //     userID: mp,
+        //   },
+        // });
         // await producer.publishMessage("INFO:CHATTERLOOP", SEND_TAG_POST_NOTIFICATION, {
         //     parameters: {
         //         details: `@${userID} tagged you on a post.`,
