@@ -120,6 +120,7 @@ router.get("/preview/:postID", jwtchecker, async (req, res) => {
 
 router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
   const profileUserID = req.params.profileUserID;
+  const page = req.headers["page"];
   const range = req.headers["range"];
   const totalposts = await GetAllPostsCountInProfile(profileUserID);
 
@@ -161,6 +162,9 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
       },
     },
     {
+      $skip: (parseInt(page) - 1) * parseInt(range),
+    },
+    {
       $limit: parseInt(range),
     },
     {
@@ -177,12 +181,18 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
     .then((result) => {
       var posts = result;
       // console.log(result)
-      const encodedResult = createJWT({
-        posts: posts,
-        total: totalposts,
-      });
+      // const encodedResult = createJWT({
+      //   posts: posts,
+      //   total: totalposts,
+      // });
 
-      res.send({ status: true, result: encodedResult });
+      res.send({
+        status: true,
+        result: {
+          posts: posts,
+          total: totalposts,
+        },
+      });
     })
     .catch((err) => {
       res.send({ status: false, message: err.message });
@@ -315,6 +325,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 router.get("/feed", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const profileUserID = req.params.profileUserID;
+  const page = req.headers["page"];
   const range = req.headers["range"];
   const totalposts = await GetAllPostsCountInProfile(profileUserID);
   const contactslist = await GetListOfContacts(userID);
@@ -370,6 +381,9 @@ router.get("/feed", jwtchecker, async (req, res) => {
       },
     },
     {
+      $skip: (parseInt(page) - 1) * parseInt(range),
+    },
+    {
       $limit: parseInt(range),
     },
     {
@@ -386,12 +400,18 @@ router.get("/feed", jwtchecker, async (req, res) => {
     .then((result) => {
       var posts = result;
       // console.log(result)
-      const encodedResult = createJWT({
-        posts: posts,
-        total: totalposts,
-      });
+      // const encodedResult = createJWT({
+      //   posts: posts,
+      //   total: totalposts,
+      // });
 
-      res.send({ status: true, result: encodedResult });
+      res.send({
+        status: true,
+        result: {
+          posts: posts,
+          total: totalposts,
+        },
+      });
     })
     .catch((err) => {
       res.send({ status: false, message: err.message });
