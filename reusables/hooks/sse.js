@@ -68,6 +68,9 @@ const NotificicationTrigger = async (id, details) => {
       $sort: { _id: -1 },
     },
     {
+      $limit: 10,
+    },
+    {
       $project: {
         "fromUser._id": 0,
         "fromUser.birthdate": 0,
@@ -144,6 +147,9 @@ const SendTagPostNotification = async (details, userID) => {
     },
     {
       $sort: { _id: -1 },
+    },
+    {
+      $limit: 10,
     },
     {
       $project: {
@@ -329,6 +335,9 @@ const ContactListTrigger = async (id, details) => {
     },
     {
       $sort: { _id: -1 },
+    },
+    {
+      $limit: 50,
     },
   ])
     .then((result) => {
@@ -549,6 +558,9 @@ const ReloadUserNotification = async (id, details) => {
     },
     {
       $sort: { _id: -1 },
+    },
+    {
+      $limit: 10,
     },
     {
       $project: {

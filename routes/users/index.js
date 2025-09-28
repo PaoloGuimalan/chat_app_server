@@ -544,6 +544,8 @@ router.post("/readnotifications", jwtchecker, async (req, res) => {
 
 router.get("/getNotifications", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const page = req.headers["page"];
+  const range = req.headers["range"];
   const UnreadNotificationsTotal = await CountAllUnreadNotifications(userID);
 
   await UserNotifications.aggregate([
@@ -551,6 +553,15 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       $match: {
         toUserID: userID,
       },
+    },
+    {
+      $sort: { _id: -1 },
+    },
+    {
+      $skip: (parseInt(page) - 1) * parseInt(range),
+    },
+    {
+      $limit: parseInt(range),
     },
     {
       $lookup: {
@@ -565,9 +576,6 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
         path: "$fromUser",
         preserveNullAndEmptyArrays: true,
       },
-    },
-    {
-      $sort: { _id: -1 },
     },
     {
       $project: {
@@ -728,6 +736,8 @@ router.post("/acceptContactRequest", jwtchecker, async (req, res) => {
 
 router.get("/getContacts", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const page = req.headers["page"];
+  const range = req.headers["range"];
 
   await UserContacts.aggregate([
     {
@@ -853,6 +863,22 @@ router.get("/getContacts", jwtchecker, async (req, res) => {
     {
       $sort: { _id: -1 },
     },
+    {
+      $skip: (parseInt(page) - 1) * parseInt(range),
+    },
+    {
+      $limit: parseInt(range),
+    },
+    // {
+    //   $facet: {
+    //     metadata: [{ $count: "total" }],
+    //     data: [
+    //       { $sort: { _id: -1 } },
+    //       { $skip: (parseInt(page) - 1) * parseInt(range) },
+    //       { $limit: parseInt(range) },
+    //     ],
+    //   },
+    // },
   ])
     .then((result) => {
       // console.log(result)
