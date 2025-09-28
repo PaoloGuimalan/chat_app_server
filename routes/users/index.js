@@ -975,6 +975,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
 
 router.get("/initConversationList", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const page = req.headers["page"];
+  const range = req.headers["range"];
 
   await UserMessage.aggregate([
     {
@@ -1017,6 +1019,12 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       $sort: {
         sortID: -1,
       },
+    },
+    {
+      $skip: (parseInt(page) - 1) * parseInt(range),
+    },
+    {
+      $limit: parseInt(range),
     },
     {
       $lookup: {
@@ -1095,6 +1103,7 @@ router.get(
   async (req, res) => {
     const userID = req.params.userID;
     const conversationID = req.params.conversationID;
+    const page = req.headers["page"];
     const range = req.headers["range"];
     const totalmessages = await GetAllMessageCountInAConversation(
       conversationID
@@ -1137,6 +1146,9 @@ router.get(
         $sort: {
           _id: -1,
         },
+      },
+      {
+        $skip: (parseInt(page) - 1) * parseInt(range),
       },
       {
         $limit: parseInt(range),

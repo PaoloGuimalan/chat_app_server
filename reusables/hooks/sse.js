@@ -426,6 +426,9 @@ const MessagesTrigger = async (id, details, onseen) => {
       },
     },
     {
+      $limit: 20,
+    },
+    {
       $lookup: {
         from: "useraccount",
         localField: "receivers",
