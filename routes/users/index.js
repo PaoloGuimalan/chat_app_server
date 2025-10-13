@@ -454,45 +454,45 @@ router.post("/requestContact", jwtchecker, async (req, res) => {
       ],
     };
 
-    if (await checkContactRequest(userID, addUserID)) {
-      const newContact = new UserContacts(payload);
+    // if (await checkContactRequest(userID, addUserID)) {
+    //   const newContact = new UserContacts(payload);
 
-      newContact
-        .save()
-        .then(async () => {
-          const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
-          const notifParams = {
-            notificationID: awaitNotifID,
-            referenceID: contactID,
-            referenceStatus: false,
-            toUserID: addUserID,
-            fromUserID: userID,
-            content: {
-              headline: `Contact Request`,
-              details: `@${userID} have sent a contact request for you.`,
-            },
-            date: {
-              date: dateGetter(),
-              time: timeGetter(),
-            },
-            type: "contact_request",
-          };
+    //   newContact
+    //     .save()
+    //     .then(async () => {
+    const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+    const notifParams = {
+      notificationID: awaitNotifID,
+      referenceID: contactID,
+      referenceStatus: false,
+      toUserID: addUserID,
+      fromUserID: userID,
+      content: {
+        headline: `Contact Request`,
+        details: `@${userID} have sent a contact request for you.`,
+      },
+      date: {
+        date: dateGetter(),
+        time: timeGetter(),
+      },
+      type: "contact_request",
+    };
 
-          sendNotification(notifParams, "You have sent a contact request");
+    sendNotification(notifParams, "You have sent a contact request");
 
-          res.send({
-            status: true,
-            message: `You have sent a contact request to @${addUserID}`,
-          });
-        })
-        .catch((err) => {
-          res.send({
-            status: false,
-            message: "Contact request encountered an error!",
-          });
-          console.log(err);
-        });
-    }
+    res.send({
+      status: true,
+      message: `You have sent a contact request to @${addUserID}`,
+    });
+    // })
+    // .catch((err) => {
+    //   res.send({
+    //     status: false,
+    //     message: "Contact request encountered an error!",
+    //   });
+    //   console.log(err);
+    // });
+    // }
   } catch (ex) {
     res.send({
       status: false,
@@ -665,29 +665,29 @@ router.post("/declineContactRequest", jwtchecker, async (req, res) => {
     const toUserID = decodedToken.toUserID;
     const fromUserID = decodedToken.fromUserID;
 
-    await UserContacts.deleteOne({ contactID: referenceID })
-      .then(async (result) => {
-        res.send({ status: true, message: "Contact has been deleted" });
-        if (type == "contact_request") {
-          const notifHeadline = `Declined Request`;
-          const notifContent = `${fromUserID} declined your request`;
+    // await UserContacts.deleteOne({ contactID: referenceID })
+    //   .then(async (result) => {
+    res.send({ status: true, message: "Contact has been deleted" });
+    if (type == "contact_request") {
+      const notifHeadline = `Declined Request`;
+      const notifContent = `${fromUserID} declined your request`;
 
-          await updateNotifStatus(
-            "info_contact_decline",
-            referenceID,
-            notificationID,
-            toUserID,
-            fromUserID,
-            notifHeadline,
-            notifContent,
-            "You declined a contact request"
-          );
-        }
-      })
-      .catch((err) => {
-        console.log(err);
-        res.send({ status: false, message: "Error verifying decline request" });
-      });
+      await updateNotifStatus(
+        "info_contact_decline",
+        referenceID,
+        notificationID,
+        toUserID,
+        fromUserID,
+        notifHeadline,
+        notifContent,
+        "You declined a contact request"
+      );
+    }
+    // })
+    // .catch((err) => {
+    //   console.log(err);
+    //   res.send({ status: false, message: "Error verifying decline request" });
+    // });
   } catch (ex) {
     console.log(ex);
     res.send({ status: false, message: "Error declining request" });
@@ -707,27 +707,27 @@ router.post("/acceptContactRequest", jwtchecker, async (req, res) => {
     const toUserID = decodedToken.toUserID;
     const fromUserID = decodedToken.fromUserID;
 
-    await UserContacts.updateOne({ contactID: referenceID }, { status: true })
-      .then(async (result) => {
-        res.send({ status: true, message: "Contact has been accepted" });
-        const notifHeadline = `Accepted Request`;
-        const notifContent = `${fromUserID} accepted your request`;
+    // await UserContacts.updateOne({ contactID: referenceID }, { status: true })
+    //   .then(async (result) => {
+    res.send({ status: true, message: "Contact has been accepted" });
+    const notifHeadline = `Accepted Request`;
+    const notifContent = `${fromUserID} accepted your request`;
 
-        await updateNotifStatus(
-          "info_contact_accept",
-          referenceID,
-          notificationID,
-          toUserID,
-          fromUserID,
-          notifHeadline,
-          notifContent,
-          "You accepted a contact request"
-        );
-      })
-      .catch((err) => {
-        res.send({ status: false, message: "Error verifying accept request" });
-        console.log(err);
-      });
+    await updateNotifStatus(
+      "info_contact_accept",
+      referenceID,
+      notificationID,
+      toUserID,
+      fromUserID,
+      notifHeadline,
+      notifContent,
+      "You accepted a contact request"
+    );
+    // })
+    // .catch((err) => {
+    //   res.send({ status: false, message: "Error verifying accept request" });
+    //   console.log(err);
+    // });
   } catch (ex) {
     console.log(ex);
     res.send({ status: false, message: "Error accepting request" });

@@ -44,81 +44,81 @@ const NotificicationTrigger = async (id, details) => {
   const sseWithUserID = sseNotificationsWaiters[id];
   const UnreadNotificationsTotal = await CountAllUnreadNotifications(id);
 
-  await UserNotifications.aggregate([
-    {
-      $match: {
-        toUserID: id,
-      },
-    },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "fromUserID",
-        foreignField: "userID",
-        as: "fromUser",
-      },
-    },
-    {
-      $unwind: {
-        path: "$fromUser",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $sort: { _id: -1 },
-    },
-    {
-      $limit: 10,
-    },
-    {
-      $project: {
-        "fromUser._id": 0,
-        "fromUser.birthdate": 0,
-        "fromUser.gender": 0,
-        "fromUser.email": 0,
-        "fromUser.password": 0,
-        "fromUser.dateCreated": 0,
-      },
-    },
-  ])
-    .then((result) => {
-      // console.log(result)
-      var encodedResult = createJWTwExp({
-        notifications: result,
-        totalunread: UnreadNotificationsTotal,
-      });
+  // await UserNotifications.aggregate([
+  //   {
+  //     $match: {
+  //       toUserID: id,
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "useraccount",
+  //       localField: "fromUserID",
+  //       foreignField: "userID",
+  //       as: "fromUser",
+  //     },
+  //   },
+  //   {
+  //     $unwind: {
+  //       path: "$fromUser",
+  //       preserveNullAndEmptyArrays: true,
+  //     },
+  //   },
+  //   {
+  //     $sort: { _id: -1 },
+  //   },
+  //   {
+  //     $limit: 10,
+  //   },
+  //   {
+  //     $project: {
+  //       "fromUser._id": 0,
+  //       "fromUser.birthdate": 0,
+  //       "fromUser.gender": 0,
+  //       "fromUser.email": 0,
+  //       "fromUser.password": 0,
+  //       "fromUser.dateCreated": 0,
+  //     },
+  //   },
+  // ])
+  //   .then((result) => {
+  //     // console.log(result)
+  //     var encodedResult = createJWTwExp({
+  //       notifications: result,
+  //       totalunread: UnreadNotificationsTotal,
+  //     });
 
-      //   sseWithUserID.response.map((itr, i) => {
-      //     itr.res.sse(`notifications`, {
-      //       status: true,
-      //       auth: true,
-      //       message: details,
-      //       result: encodedResult,
-      //     });
-      //   });
+  //   sseWithUserID.response.map((itr, i) => {
+  //     itr.res.sse(`notifications`, {
+  //       status: true,
+  //       auth: true,
+  //       message: details,
+  //       result: encodedResult,
+  //     });
+  //   });
 
-      publish(`events_${id}`, `notifications`, {
-        status: true,
-        auth: true,
-        message: details,
-        result: encodedResult,
-      });
-    })
-    .catch((err) => {
-      console.log(err);
-      //   sseWithUserID.response.map((itr, i) => {
-      //     itr.res.sse(`notifications`, {
-      //       status: false,
-      //       auth: true,
-      //       message: "Error retrieving notifications",
-      //     });
-      //   });
-      publish(`events_${id}`, `notifications`, {
-        status: false,
-        auth: true,
-        message: "Error retrieving notifications",
-      });
-    });
+  publish(`events_${id}`, `notifications`, {
+    status: true,
+    auth: true,
+    message: details,
+    result: "", //encodedResult
+  });
+  // })
+  // .catch((err) => {
+  //   console.log(err);
+  //   //   sseWithUserID.response.map((itr, i) => {
+  //   //     itr.res.sse(`notifications`, {
+  //   //       status: false,
+  //   //       auth: true,
+  //   //       message: "Error retrieving notifications",
+  //   //     });
+  //   //   });
+  //   publish(`events_${id}`, `notifications`, {
+  //     status: false,
+  //     auth: true,
+  //     message: "Error retrieving notifications",
+  //   });
+  // });
 };
 
 const SendTagPostNotification = async (details, userID) => {
@@ -534,87 +534,87 @@ const MessagesTrigger = async (id, details, onseen) => {
 const ReloadUserNotification = async (id, details) => {
   const userID = id;
   const sseWithUserID = sseNotificationsWaiters[userID];
-  const UnreadNotificationsTotal = await CountAllUnreadNotifications(id);
+  // const UnreadNotificationsTotal = await CountAllUnreadNotifications(id);
 
-  await UserNotifications.aggregate([
-    {
-      $match: {
-        toUserID: id,
-      },
-    },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "fromUserID",
-        foreignField: "userID",
-        as: "fromUser",
-      },
-    },
-    {
-      $unwind: {
-        path: "$fromUser",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $sort: { _id: -1 },
-    },
-    {
-      $limit: 10,
-    },
-    {
-      $project: {
-        "fromUser._id": 0,
-        "fromUser.birthdate": 0,
-        "fromUser.gender": 0,
-        "fromUser.email": 0,
-        "fromUser.password": 0,
-        "fromUser.dateCreated": 0,
-      },
-    },
-  ])
-    .then((result) => {
-      // console.log(result)
-      var encodedResult = createJWTwExp({
-        notifications: result,
-        totalunread: UnreadNotificationsTotal,
-      });
+  // await UserNotifications.aggregate([
+  //   {
+  //     $match: {
+  //       toUserID: id,
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "useraccount",
+  //       localField: "fromUserID",
+  //       foreignField: "userID",
+  //       as: "fromUser",
+  //     },
+  //   },
+  //   {
+  //     $unwind: {
+  //       path: "$fromUser",
+  //       preserveNullAndEmptyArrays: true,
+  //     },
+  //   },
+  //   {
+  //     $sort: { _id: -1 },
+  //   },
+  //   {
+  //     $limit: 10,
+  //   },
+  //   {
+  //     $project: {
+  //       "fromUser._id": 0,
+  //       "fromUser.birthdate": 0,
+  //       "fromUser.gender": 0,
+  //       "fromUser.email": 0,
+  //       "fromUser.password": 0,
+  //       "fromUser.dateCreated": 0,
+  //     },
+  //   },
+  // ])
+  //   .then((result) => {
+  //     // console.log(result)
+  //     var encodedResult = createJWTwExp({
+  //       notifications: result,
+  //       totalunread: UnreadNotificationsTotal,
+  //     });
 
-      //   if (sseWithUserID) {
-      //     sseWithUserID.response.map((itr, i) => {
-      //       itr.res.sse(`notifications_reload`, {
-      //         status: true,
-      //         auth: true,
-      //         message: details,
-      //         result: encodedResult,
-      //       });
-      //     });
-      //   }
+  //   if (sseWithUserID) {
+  //     sseWithUserID.response.map((itr, i) => {
+  //       itr.res.sse(`notifications_reload`, {
+  //         status: true,
+  //         auth: true,
+  //         message: details,
+  //         result: encodedResult,
+  //       });
+  //     });
+  //   }
 
-      publish(`events_${userID}`, `notifications_reload`, {
-        status: true,
-        auth: true,
-        message: details,
-        result: encodedResult,
-      });
-    })
-    .catch((err) => {
-      console.log(err);
-      //   if (sseWithUserID) {
-      //     sseWithUserID.response.map((itr, i) => {
-      //       itr.res.sse(`notifications_reload`, {
-      //         status: false,
-      //         auth: true,
-      //         message: "Error retrieving notifications",
-      //       });
-      //     });
-      //   }
-      publish(`events_${userID}`, `notifications_reload`, {
-        status: false,
-        auth: true,
-        message: "Error retrieving notifications",
-      });
-    });
+  publish(`events_${userID}`, `notifications_reload`, {
+    status: true,
+    auth: true,
+    message: details,
+    result: "", //encodedResult
+  });
+  // })
+  // .catch((err) => {
+  //   console.log(err);
+  //   //   if (sseWithUserID) {
+  //   //     sseWithUserID.response.map((itr, i) => {
+  //   //       itr.res.sse(`notifications_reload`, {
+  //   //         status: false,
+  //   //         auth: true,
+  //   //         message: "Error retrieving notifications",
+  //   //       });
+  //   //     });
+  //   //   }
+  //   publish(`events_${userID}`, `notifications_reload`, {
+  //     status: false,
+  //     auth: true,
+  //     message: "Error retrieving notifications",
+  //   });
+  // });
 };
 
 const BroadcastIsTypingStatus = (receiver, data) => {
