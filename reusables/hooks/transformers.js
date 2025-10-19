@@ -72,6 +72,30 @@ function transformUser(input) {
   return output;
 }
 
+function generateUUID() {
+  let dt = new Date().getTime();
+  let dt2 =
+    (typeof performance !== "undefined" &&
+      performance.now &&
+      performance.now() * 1000) ||
+    0;
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    let r = Math.random() * 16;
+
+    if (dt > 0) {
+      r = (dt + r) % 16 | 0;
+      dt = Math.floor(dt / 16);
+    } else {
+      r = (dt2 + r) % 16 | 0;
+      dt2 = Math.floor(dt2 / 16);
+    }
+
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 module.exports = {
   transformUser,
+  generateUUID,
 };

@@ -29,6 +29,7 @@ const {
 const producer = require("../../reusables/rabbitmq/producer");
 const { publish } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { generateUUID } = require("../../reusables/hooks/transformers");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -418,6 +419,48 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         `;
 
         await client.query(refInsertQuery, refValues);
+      }
+
+      if (
+        decodeToken.tagging.isTagged &&
+        decodeToken.tagging.users.length > 0
+      ) {
+        // Assume decodeToken.tagging.users contains usernames (or any identifier)
+        const taggedUsernames = decodeToken.tagging.users;
+
+        // Query user IDs for all tagged usernames
+        const userQuery = `
+          SELECT id, username
+          FROM account
+          WHERE username = ANY($1)
+        `;
+
+        const { rows: userRows } = await client.query(userQuery, [
+          taggedUsernames,
+        ]);
+
+        // Map of username -> real user id
+        const usernameToId = new Map(userRows.map((u) => [u.username, u.id]));
+
+        // Prepare tagValues and tagRowsSQL with real user ids
+        const tagValues = [];
+        const tagRowsSQL = taggedUsernames
+          .map((username, i) => {
+            const postTagId = generateUUID();
+            const userId = usernameToId.get(username);
+            if (!userId) throw new Error(`Tagged user "${username}" not found`);
+            tagValues.push(postTagId, postID, userId);
+            const baseIndex = i * 3;
+            return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
+          })
+          .join(", ");
+
+        const insertTagQuery = `
+          INSERT INTO posttag (post_tag_id, post_id, user_id)
+          VALUES ${tagRowsSQL};
+        `;
+
+        await client.query(insertTagQuery, tagValues);
       }
 
       await client.query("COMMIT");
