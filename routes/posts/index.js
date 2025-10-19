@@ -475,6 +475,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("ROLLBACK");
       console.error("Transaction error:", err);
       res.status(500).send({ status: false, message: "Database error." });
+    } finally {
+      client.release(); // very important!
     }
   } catch (ex) {
     console.error(ex);
