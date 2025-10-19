@@ -360,7 +360,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
     // Prepare main post insert
     const postInsertQuery = `
-      INSERT INTO post (
+      INSERT INTO newsfeed_post (
         post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
         is_shared, file_type, caption, content_type, is_tagged, privacy_status
       ) VALUES (
@@ -384,7 +384,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.content.privacyStatus || "public",
     ];
 
-    const client = pool;
+    const client = await pool.getPool();
 
     try {
       await client.query("BEGIN");
@@ -413,7 +413,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           .join(", ");
 
         const refInsertQuery = `
-          INSERT INTO postreference (reference_id, post_id, reference, caption, reference_media_type, reference_name)
+          INSERT INTO newsfeed_postreference (reference_id, post_id, reference, caption, reference_media_type, reference_name)
           VALUES ${refRowsSql};
         `;
 
