@@ -1,6 +1,7 @@
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const UserAccount = require("../../schema/auth/useraccount");
+const pool = require("../database/postgres");
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const jwtchecker = (req, res, next) => {
@@ -13,19 +14,31 @@ const jwtchecker = (req, res, next) => {
         res.send({ status: false, message: err.message });
       } else {
         const id = decode.userID;
-        await UserAccount.findOne({ userID: id })
-          .then((result) => {
-            if (result) {
-              req.params.userID = result.userID;
-              next();
-            } else {
-              res.send({ status: false, message: "Cannot verify user!" });
-            }
-          })
-          .catch((err) => {
-            console.log(err);
-            res.send({ status: false, message: "Error verifying user!" });
-          });
+        const { rows } = await pool.query(
+          "SELECT id, username FROM user_account WHERE username = $1",
+          [id]
+        );
+
+        if (rows.length > 0) {
+          const currentRow = rows[0];
+          req.params.userID = currentRow.username;
+          next();
+        } else {
+          res.send({ status: false, message: "Cannot verify user!" });
+        }
+        // await UserAccount.findOne({ userID: id })
+        //   .then((result) => {
+        //     if (result) {
+        //       req.params.userID = result.userID;
+        //       next();
+        //     } else {
+        //       res.send({ status: false, message: "Cannot verify user!" });
+        //     }
+        //   })
+        //   .catch((err) => {
+        //     console.log(err);
+        //     res.send({ status: false, message: "Error verifying user!" });
+        //   });
       }
     });
   } else {
@@ -46,28 +59,45 @@ const jwtssechecker = (req, res, next) => {
           res.sse(type, { status: false, auth: false, message: err.message });
         } else {
           const id = decode.userID;
-          await UserAccount.findOne({ userID: id })
-            .then((result) => {
-              if (result) {
-                req.params.userID = result.userID;
-                next();
-              } else {
-                res.sse(type, {
-                  status: false,
-                  auth: false,
-                  message: "Cannot verify user!",
-                });
-              }
-            })
-            .catch((err) => {
-              console.log(err);
-              res.sse(type, {
-                status: false,
-                auth: false,
-                message: "Error verifying user!",
-              });
+          const { rows } = await pool.query(
+            "SELECT id, username FROM user_account WHERE username = $1",
+            [id]
+          );
+
+          if (rows.length > 0) {
+            const currentRow = rows[0];
+            req.params.userID = currentRow.username;
+            next();
+          } else {
+            res.sse(type, {
+              status: false,
+              auth: false,
+              message: "Cannot verify user!",
             });
+          }
         }
+        // await UserAccount.findOne({ userID: id })
+        //   .then((result) => {
+        //     if (result) {
+        //       req.params.userID = result.userID;
+        //       next();
+        //     } else {
+        //       res.sse(type, {
+        //         status: false,
+        //         auth: false,
+        //         message: "Cannot verify user!",
+        //       });
+        //     }
+        //   })
+        //   .catch((err) => {
+        //     console.log(err);
+        //     res.sse(type, {
+        //       status: false,
+        //       auth: false,
+        //       message: "Error verifying user!",
+        //     });
+        // });
+        // }
       });
     } else {
       res.sse(type, {

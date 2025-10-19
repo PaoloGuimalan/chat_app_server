@@ -23,6 +23,7 @@ const Promptings = require("./routes/promptings/index");
 const { initSocketIO } = require("./socketIO/socketIO");
 const { consumeMessages } = require("./reusables/rabbitmq/consumer");
 const { connect_redis } = require("./reusables/redis/pubsub");
+const { getPool } = require("./reusables/database/postgres");
 
 const connectMongo = async () => {
   return mongoose.connect(MongooseConnection.url, MongooseConnection.params);
@@ -64,6 +65,7 @@ const server = app.listen(PORT, () => {
   console.log(`Server Running: ${PORT} | ${POD_NAME}`);
   // consumeMessages();
   connect_redis();
+  getPool();
   connectMongo()
     .then(() => {
       console.log(`Connected to MongoDB`);
