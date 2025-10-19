@@ -373,15 +373,15 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       id,
       false, // isSponsored
       false, // isLive
-      decodeToken.content.onFeed,
+      decodeToken.onfeed,
       true, // fromSystem
       currentTimestampInSeconds,
       decodeToken.content.isShared,
-      decodeToken.content.fileType,
-      decodeToken.content.caption,
-      decodeToken.content.contentType,
-      decodeToken.content.isTagged,
-      decodeToken.content.privacyStatus || "public",
+      decodeToken.type.fileType,
+      decodeToken.content.data,
+      decodeToken.type.contentType,
+      decodeToken.tagging.isTagged,
+      decodeToken.privacy.status,
     ];
 
     const client = await pool.getPool();
@@ -432,8 +432,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("ROLLBACK");
       console.error("Transaction error:", err);
       res.status(500).send({ status: false, message: "Database error." });
-    } finally {
-      client.release();
     }
   } catch (ex) {
     console.error(ex);
