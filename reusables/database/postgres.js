@@ -56,7 +56,22 @@ async function query(text, params) {
   return pool.query(text, params);
 }
 
+function releaseClient(client) {
+  try {
+    if (client && typeof client.release === "function") {
+      client.release();
+    } else if (client && typeof client.end === "function") {
+      // Fallback for non-pooled clients (not recommended)
+      console.log("END POOL");
+      //   client.end();
+    }
+  } catch (err) {
+    console.error("Error releasing PostgreSQL client:", err);
+  }
+}
+
 module.exports = {
   getPool,
   query,
+  releaseClient,
 };

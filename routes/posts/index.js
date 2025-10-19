@@ -476,7 +476,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       console.error("Transaction error:", err);
       res.status(500).send({ status: false, message: "Database error." });
     } finally {
-      client.release(); // very important!
+      // client.release(); // very important!
+      pool.releaseClient(client);
     }
   } catch (ex) {
     console.error(ex);
