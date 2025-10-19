@@ -247,8 +247,84 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
   });
 };
 
+// router.post("/createpost", jwtchecker, async (req, res) => {
+//   const userID = req.params.userID;
+//   const postID = await checkPostIDExisting(makeID(30));
+//   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
+
+//   const token = req.body.token;
+
+//   try {
+//     const decodeToken = jwt.verify(token, JWT_SECRET);
+//     const filereferencesraw = decodeToken.content.references;
+//     const filereferences = filereferencesraw.map((mp) => ({
+//       name: mp.name,
+//       caption: mp.caption,
+//       reference: mp.reference,
+//       referenceMediaType: mp.referenceMediaType,
+//       referenceID: `${postID}_${makeID(20)}`,
+//     }));
+
+//     const finaluploadedreferences = decodeToken.content.isShared
+//       ? filereferences
+//       : await uploadFirebaseMultiple(filereferences);
+
+//     if (decodeToken.content.isShared) {
+//       finaluploadedreferences.map((mp) => {
+//         saveFileRecordToDatabase(
+//           [mp.referenceID],
+//           mp.reference,
+//           "post",
+//           mp.referenceMediaType,
+//           "firebase"
+//         );
+//       });
+//     }
+
+//     const payload = {
+//       postID: postID,
+//       userID: userID,
+//       isSponsored: false,
+//       isLive: false,
+//       isOnMap: {
+//         status: false,
+//         isStationary: true,
+//       },
+//       fromSystem: true,
+//       dateposted: currentTimestampInSeconds,
+//       ...decodeToken,
+//       content: {
+//         ...decodeToken.content,
+//         references: finaluploadedreferences,
+//       },
+//     };
+
+//     // console.log(userID, payload, payload.content.references);
+
+//     const newPost = new Posts(payload);
+
+//     newPost
+//       .save()
+//       .then(() => {
+//         // use sse to return response with data
+//         if (decodeToken.tagging.isTagged) {
+//           notifyTaggedUser(userID, postID, decodeToken.tagging.users);
+//         }
+//         res.send({ status: true, result: "OK" });
+//       })
+//       .catch((err) => {
+//         res.send({ status: false, message: err.message });
+//         console.log(err);
+//       });
+//   } catch (ex) {
+//     console.log(ex);
+//     res.send({ status: false, message: "Cannot decode token" });
+//   }
+// });
+
 router.post("/createpost", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const postID = await checkPostIDExisting(makeID(30));
   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
 
@@ -270,7 +346,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       : await uploadFirebaseMultiple(filereferences);
 
     if (decodeToken.content.isShared) {
-      finaluploadedreferences.map((mp) => {
+      finaluploadedreferences.forEach((mp) => {
         saveFileRecordToDatabase(
           [mp.referenceID],
           mp.reference,
@@ -281,44 +357,86 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       });
     }
 
-    const payload = {
-      postID: postID,
-      userID: userID,
-      isSponsored: false,
-      isLive: false,
-      isOnMap: {
-        status: false,
-        isStationary: true,
-      },
-      fromSystem: true,
-      dateposted: currentTimestampInSeconds,
-      ...decodeToken,
-      content: {
-        ...decodeToken.content,
-        references: finaluploadedreferences,
-      },
-    };
+    // Prepare main post insert
+    const postInsertQuery = `
+      INSERT INTO post (
+        post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
+        is_shared, file_type, caption, content_type, is_tagged, privacy_status
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, to_timestamp($7),
+        $8, $9, $10, $11, $12, $13
+      );
+    `;
+    const postValues = [
+      postID,
+      id,
+      false, // isSponsored
+      false, // isLive
+      decodeToken.content.onFeed,
+      true, // fromSystem
+      currentTimestampInSeconds,
+      decodeToken.content.isShared,
+      decodeToken.content.fileType,
+      decodeToken.content.caption,
+      decodeToken.content.contentType,
+      decodeToken.content.isTagged,
+      decodeToken.content.privacyStatus || "public",
+    ];
 
-    // console.log(userID, payload, payload.content.references);
+    const client = await pool.connect();
 
-    const newPost = new Posts(payload);
+    try {
+      await client.query("BEGIN");
 
-    newPost
-      .save()
-      .then(() => {
-        // use sse to return response with data
-        if (decodeToken.tagging.isTagged) {
-          notifyTaggedUser(userID, postID, decodeToken.tagging.users);
-        }
-        res.send({ status: true, result: "OK" });
-      })
-      .catch((err) => {
-        res.send({ status: false, message: err.message });
-        console.log(err);
-      });
+      // Insert Post
+      await client.query(postInsertQuery, postValues);
+
+      // Batch insert post references
+      if (finaluploadedreferences.length > 0) {
+        const refValues = [];
+        const refRowsSql = finaluploadedreferences
+          .map((ref, i) => {
+            refValues.push(
+              ref.referenceID,
+              postID,
+              ref.reference,
+              ref.caption || null,
+              ref.referenceMediaType,
+              ref.name || null
+            );
+            const baseIndex = i * 6;
+            return `($${baseIndex + 1}, $${baseIndex + 2}, $${
+              baseIndex + 3
+            }, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
+          })
+          .join(", ");
+
+        const refInsertQuery = `
+          INSERT INTO postreference (reference_id, post_id, reference, caption, reference_media_type, reference_name)
+          VALUES ${refRowsSql};
+        `;
+
+        await client.query(refInsertQuery, refValues);
+      }
+
+      await client.query("COMMIT");
+
+      // Notify tagged users if any
+      if (decodeToken.tagging.isTagged) {
+        notifyTaggedUser(userID, postID, decodeToken.tagging.users);
+      }
+
+      res.send({ status: true, result: "OK" });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("Transaction error:", err);
+      res.status(500).send({ status: false, message: "Database error." });
+    } finally {
+      client.release();
+    }
   } catch (ex) {
-    console.log(ex);
-    res.send({ status: false, message: "Cannot decode token" });
+    console.error(ex);
+    res.status(400).send({ status: false, message: "Cannot decode token" });
   }
 });
 

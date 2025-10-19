@@ -22,6 +22,7 @@ const jwtchecker = (req, res, next) => {
         if (rows.length > 0) {
           const currentRow = rows[0];
           req.params.userID = currentRow.username;
+          req.params.id = currentRow.id;
           next();
         } else {
           res.send({ status: false, message: "Cannot verify user!" });
