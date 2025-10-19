@@ -431,7 +431,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         // Query user IDs for all tagged usernames
         const userQuery = `
           SELECT id, username
-          FROM account
+          FROM user_account
           WHERE username = ANY($1)
         `;
 
@@ -456,7 +456,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           .join(", ");
 
         const insertTagQuery = `
-          INSERT INTO posttag (post_tag_id, post_id, user_id)
+          INSERT INTO newsfeed_posttag (post_tag_id, post_id, user_id)
           VALUES ${tagRowsSQL};
         `;
 
