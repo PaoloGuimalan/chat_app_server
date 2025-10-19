@@ -28,6 +28,7 @@ const {
 } = require("../../reusables/vars/rabbitmqevents");
 const producer = require("../../reusables/rabbitmq/producer");
 const { publish } = require("../../reusables/redis/pubsub");
+const pool = require("../../reusables/database/postgres");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -383,7 +384,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.content.privacyStatus || "public",
     ];
 
-    const client = await pool.connect();
+    const client = pool;
 
     try {
       await client.query("BEGIN");
