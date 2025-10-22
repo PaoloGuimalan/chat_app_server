@@ -95,7 +95,57 @@ function generateUUID() {
   });
 }
 
+function formatConnectionData(rows) {
+  if (!rows.length) return null;
+
+  const connection = {
+    _id: rows[0].connection_id, // assuming connection_id is unique for this group
+    contactID: rows[0].connection_id,
+    actionBy: rows[0].username, // actionBy is from one "action_by_id" user, adjust if needed
+    actionDate: {
+      date: new Date(rows[0].action_date).toLocaleDateString("en-US"),
+      time: new Date(rows[0].action_date).toLocaleTimeString("en-US", {
+        hour12: true,
+      }),
+    },
+    status: rows[0].status,
+    type: rows[0].type,
+    users: [],
+    usersWithInfo: [],
+  };
+
+  // Create a map to avoid duplication
+  const userIds = new Set();
+
+  rows.forEach((row) => {
+    // Add to users array
+    if (!userIds.has(row.username)) {
+      userIds.add(row.username);
+      connection.users.push({
+        userID: row.username,
+        _id: row.involved_user_id,
+      });
+
+      connection.usersWithInfo.push({
+        _id: row.involved_user_id,
+        userID: row.username,
+        fullname: {
+          firstName: row.first_name,
+          middleName: row.middle_name,
+          lastName: row.last_name,
+        },
+        profile: row.profile,
+        isActivated: row.is_active,
+        isVerified: row.is_verified,
+      });
+    }
+  });
+
+  return connection;
+}
+
 module.exports = {
   transformUser,
   generateUUID,
+  formatConnectionData,
 };
