@@ -29,7 +29,10 @@ const {
 const producer = require("../../reusables/rabbitmq/producer");
 const { publish } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
-const { formatConnectionData } = require("../../reusables/hooks/transformers");
+const {
+  formatConnectionData,
+  formatToDesiredStructure,
+} = require("../../reusables/hooks/transformers");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -147,6 +150,43 @@ router.post("/addreaction", jwtchecker, (req, res) => {
   }
 });
 
+async function getRealmWithUsers(realmId) {
+  const query = `
+    SELECT jsonb_build_object(
+      'id', cr.id,
+      'realm_id', cr.realm_id,
+      'name', cr.name,
+      'profile', cr.profile,
+      'privacy', cr.is_private,
+      'type', cr.type,
+      'parent_id', cr.parent_id,
+      'usersWithInfo', COALESCE(jsonb_agg(
+        jsonb_build_object(
+          '_id', ua.id,
+          'userID', ua.username,
+          'fullname', jsonb_build_object(
+            'firstName', ua.first_name,
+            'middleName', ua.middle_name,
+            'lastName', ua.last_name
+          ),
+          'profile', ua.profile,
+          'isActivated', ua.is_active,
+          'isVerified', ua.is_verified,
+          '__v', 0
+        )
+      ) FILTER (WHERE ua.id IS NOT NULL), '[]'::jsonb)
+    ) AS realm_with_users
+    FROM community_realm cr
+    LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
+    LEFT JOIN user_account ua ON cm.account_id = ua.id
+    WHERE cr.realm_id = $1
+    GROUP BY cr.id;
+  `;
+
+  const { rows } = await pool.query(query, [realmId]);
+  return rows.length ? rows[0].realm_with_users : null;
+}
+
 router.get(
   "/conversationinfo/:conversationID/:type",
   jwtchecker,
@@ -236,64 +276,17 @@ router.get(
       //     });
       //   });
     } else {
-      UserContacts.aggregate([
-        {
-          $match: {
-            contactID: conversationID,
-          },
-        },
-        {
-          $lookup: {
-            from: "groups",
-            localField: "contactID",
-            foreignField: "groupID",
-            as: "conversationInfo",
-          },
-        },
-        {
-          $unwind: "$conversationInfo",
-        },
-        {
-          $lookup: {
-            from: "useraccount",
-            localField: "users.userID",
-            foreignField: "userID",
-            as: "usersWithInfo",
-          },
-        },
-        {
-          $lookup: {
-            from: "files",
-            localField: "contactID",
-            foreignField: "foreignID",
-            as: "conversationfiles",
-          },
-        },
-        {
-          $project: {
-            "usersWithInfo.birthdate": 0,
-            "usersWithInfo.dateCreated": 0,
-            "usersWithInfo.email": 0,
-            "usersWithInfo.gender": 0,
-            "usersWithInfo.password": 0,
-            "usersWithInfo.coverphoto": 0,
-          },
-        },
-      ])
+      const result = await getRealmWithUsers(conversationID);
+      const formattedResult = formatToDesiredStructure(result);
+
+      UploadedFiles.find({ foreignID: conversationID })
         .then((result) => {
-          if (result.length > 0) {
-            var flattenedResults = result[0];
-            const encodedResult = createJWT({
-              data: flattenedResults,
-            });
-            res.send({ status: true, result: encodedResult });
-          } else {
-            // respond as no records
-            res.send({
-              status: false,
-              message: "No conversation details matched",
-            });
-          }
+          formattedResult.conversationfiles = result;
+          var flattenedResults = formattedResult;
+          const encodedResult = createJWT({
+            data: flattenedResults,
+          });
+          res.send({ status: true, result: encodedResult });
         })
         .catch((err) => {
           console.log(err);
@@ -302,6 +295,73 @@ router.get(
             message: "Cannot determine conversation details",
           });
         });
+
+      // UserContacts.aggregate([
+      //   {
+      //     $match: {
+      //       contactID: conversationID,
+      //     },
+      //   },
+      //   {
+      //     $lookup: {
+      //       from: "groups",
+      //       localField: "contactID",
+      //       foreignField: "groupID",
+      //       as: "conversationInfo",
+      //     },
+      //   },
+      //   {
+      //     $unwind: "$conversationInfo",
+      //   },
+      //   {
+      //     $lookup: {
+      //       from: "useraccount",
+      //       localField: "users.userID",
+      //       foreignField: "userID",
+      //       as: "usersWithInfo",
+      //     },
+      //   },
+      //   {
+      //     $lookup: {
+      //       from: "files",
+      //       localField: "contactID",
+      //       foreignField: "foreignID",
+      //       as: "conversationfiles",
+      //     },
+      //   },
+      //   {
+      //     $project: {
+      //       "usersWithInfo.birthdate": 0,
+      //       "usersWithInfo.dateCreated": 0,
+      //       "usersWithInfo.email": 0,
+      //       "usersWithInfo.gender": 0,
+      //       "usersWithInfo.password": 0,
+      //       "usersWithInfo.coverphoto": 0,
+      //     },
+      //   },
+      // ])
+      //   .then((result) => {
+      //     if (result.length > 0) {
+      //       var flattenedResults = result[0];
+      //       const encodedResult = createJWT({
+      //         data: flattenedResults,
+      //       });
+      //       res.send({ status: true, result: encodedResult });
+      //     } else {
+      //       // respond as no records
+      //       res.send({
+      //         status: false,
+      //         message: "No conversation details matched",
+      //       });
+      //     }
+      //   })
+      //   .catch((err) => {
+      //     console.log(err);
+      //     res.send({
+      //       status: false,
+      //       message: "Cannot determine conversation details",
+      //     });
+      //   });
     }
   }
 );

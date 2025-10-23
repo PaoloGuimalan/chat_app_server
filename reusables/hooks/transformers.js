@@ -144,8 +144,52 @@ function formatConnectionData(rows) {
   return connection;
 }
 
+function formatToDesiredStructure(input) {
+  const data = {
+    _id: input.id,
+    contactID: input.realm_id,
+    actionBy: input.usersWithInfo[0]?.userID || null, // Or supply correctly
+    actionDate: {
+      date: "", // supply real date if available
+      time: "", // supply real time if available
+    },
+    status: true, // supply real value if available
+    type: input.parent_id ? "server" : input.type, // supply real value if available
+    users: input.usersWithInfo.map((u) => ({
+      userID: u.userID,
+      _id: u._id, // replace with correct mongo _id if different
+    })),
+    conversationInfo: {
+      _id: input.realm_id, // supply actual conversation id
+      serverID: input.parent_id,
+      groupID: input.realm_id,
+      groupName: input.name,
+      profile: input.profile,
+      dateCreated: {
+        date: "", // supply real date
+        time: "", // supply real time
+      },
+      createdBy: input.usersWithInfo[0]?.userID || null,
+      type: input.parent_id ? "server" : input.type, // supply real type
+      privacy: input.privacy, // supply real privacy
+    },
+    usersWithInfo: input.usersWithInfo.map((u) => ({
+      _id: u._id,
+      userID: u.userID,
+      fullname: u.fullname,
+      profile: u.profile,
+      isActivated: u.isActivated,
+      isVerified: u.isVerified,
+    })),
+    conversationfiles: [],
+  };
+
+  return data;
+}
+
 module.exports = {
   transformUser,
   generateUUID,
   formatConnectionData,
+  formatToDesiredStructure,
 };
