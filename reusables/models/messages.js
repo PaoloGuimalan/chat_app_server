@@ -10,6 +10,8 @@ const {
   CONTACT_LIST_TRIGGER_LOOPER,
 } = require("../vars/rabbitmqevents");
 const { publish } = require("../redis/pubsub");
+const pool = require("../../reusables/database/postgres");
+const { v4: uuidv4 } = require("uuid");
 
 const checkExistingMessageID = async (messageID) => {
   return await UserMessage.find({ messageID: messageID })
@@ -40,18 +42,42 @@ const GetMessageReceivers = async (conversationID, messageID) => {
     });
 };
 
-const AddNewMemberToContacts = async (contactID, userID) => {
-  return await UserContacts.updateMany(
-    { contactID: contactID },
-    { $push: { users: { userID: userID } } }
-  )
-    .then(() => {
-      return true;
-    })
-    .catch((err) => {
-      console.log(err);
-      throw new Error(err);
-    });
+const AddNewMemberToContacts = async (
+  contactID,
+  userID,
+  added_by_id = null
+) => {
+  const member_id = uuidv4(); // generate a unique UUID for member_id
+  const date_joined = new Date(); // current timestamp
+
+  const query = `
+    INSERT INTO community_member
+    (member_id, account_id, nickname, realm_id, added_by_id, date_joined)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (member_id) DO NOTHING;
+  `;
+
+  const params = [member_id, userID, null, contactID, added_by_id, date_joined];
+
+  try {
+    await pool.query(query, params);
+    return true;
+  } catch (err) {
+    console.error("Failed to add new member:", err);
+    throw err;
+  }
+
+  // return await UserContacts.updateMany(
+  //   { contactID: contactID },
+  //   { $push: { users: { userID: userID } } }
+  // )
+  //   .then(() => {
+  //     return true;
+  //   })
+  //   .catch((err) => {
+  //     console.log(err);
+  //     throw new Error(err);
+  //   });
 };
 
 const AddNewMemberToAllMessages = async (conversationID, userID) => {
@@ -155,14 +181,34 @@ const NotificationMessageForConversations = async (
 };
 
 const GetAllReceivers = async (contactID) => {
-  return await UserContacts.findOne({ contactID: contactID })
-    .then((result) => {
-      return result;
-    })
-    .catch((err) => {
-      console.log(err);
-      throw new Error(err);
-    });
+  const { rows: rows_connections } = await pool.query(
+    "SELECT ua.username FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
+    [contactID]
+  );
+
+  if (rows_connections.length > 0) {
+    return { users: rows_connections.map((mp) => ({ userID: mp.username })) };
+  }
+
+  const { rows: rows_members } = await pool.query(
+    "SELECT ua.username FROM community_member uc JOIN user_account ua ON ua.id = uc.account_id WHERE uc.realm_id = $1;",
+    [contactID]
+  );
+
+  if (rows_members.length > 0) {
+    return { users: rows_members.map((mp) => ({ userID: mp.username })) };
+  }
+
+  return { users: [] };
+
+  // return await UserContacts.findOne({ contactID: contactID })
+  //   .then((result) => {
+  //     return result;
+  //   })
+  //   .catch((err) => {
+  //     console.log(err);
+  //     throw new Error(err);
+  //   });
 };
 
 const AddNewMemberToChannels = async (userIDProp, tokenProp) => {
