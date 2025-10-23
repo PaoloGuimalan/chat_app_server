@@ -187,9 +187,29 @@ function formatToDesiredStructure(input) {
   return data;
 }
 
+function transformServersData(serversArray) {
+  return serversArray.map((input) => {
+    // const now = new Date();
+    return {
+      dateCreated: {
+        date: "", // now.toLocaleDateString("en-US")
+        time: "", //now.toLocaleTimeString("en-US", { hour12: true })
+      },
+      _id: input.id,
+      serverID: input.realm_id,
+      serverName: input.name,
+      profile: input.profile == "N/A" ? "" : input.profile,
+      members: input.members.map((m) => ({ userID: m.userID })),
+      createdBy: input.created_by_id,
+      privacy: input.is_private,
+    };
+  });
+}
+
 module.exports = {
   transformUser,
   generateUUID,
   formatConnectionData,
   formatToDesiredStructure,
+  transformServersData,
 };
