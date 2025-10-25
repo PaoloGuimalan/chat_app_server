@@ -113,59 +113,135 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         sortID: -1,
       },
     },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "receivers",
-        foreignField: "userID",
-        as: "users",
-      },
-    },
-    {
-      $lookup: {
-        from: "groups",
-        localField: "conversationID",
-        foreignField: "groupID",
-        as: "groupdetails",
-      },
-    },
-    {
-      $unwind: {
-        path: "$groupdetails",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $lookup: {
-        from: "servers",
-        localField: "groupdetails.serverID",
-        foreignField: "serverID",
-        as: "serverdetails",
-      },
-    },
-    {
-      $unwind: {
-        path: "$serverdetails",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $project: {
-        "users.birthdate": 0,
-        "users.dateCreated": 0,
-        "users.email": 0,
-        "users.gender": 0,
-        "users.isActivated": 0,
-        "users.isVerified": 0,
-        "users.password": 0,
-      },
-    },
+    // {
+    //   $lookup: {
+    //     from: "useraccount",
+    //     localField: "receivers",
+    //     foreignField: "userID",
+    //     as: "users",
+    //   },
+    // },
+    // {
+    //   $lookup: {
+    //     from: "groups",
+    //     localField: "conversationID",
+    //     foreignField: "groupID",
+    //     as: "groupdetails",
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: "$groupdetails",
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
+    // {
+    //   $lookup: {
+    //     from: "servers",
+    //     localField: "groupdetails.serverID",
+    //     foreignField: "serverID",
+    //     as: "serverdetails",
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: "$serverdetails",
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
+    // {
+    //   $project: {
+    //     "users.birthdate": 0,
+    //     "users.dateCreated": 0,
+    //     "users.email": 0,
+    //     "users.gender": 0,
+    //     "users.isActivated": 0,
+    //     "users.isVerified": 0,
+    //     "users.password": 0,
+    //   },
+    // },
   ])
-    .then((result) => {
+    .then(async(result) => {
       // console.log(result)
+      const receivers_list = result[0].receivers;
+
+      const { rows } = await pool.query(
+        `
+        SELECT
+          id AS "_id",
+          username AS "userID",
+          json_build_object(
+            'firstName', first_name,
+            'middleName', middle_name,
+            'lastName', last_name
+          ) AS fullname,
+          profile
+        FROM user_account
+        WHERE username = ANY($1)`,
+        [receivers_list]
+      );
+
+      const { rows: details } = await pool.query(
+        `SELECT
+          json_build_object(
+            '_id', cr.id,
+            'serverID', cr.parent_id,
+            'groupID', cr.realm_id,
+            'groupName', cr.name,
+            'profile',
+            CASE
+              WHEN cr.profile = 'N/A' THEN ''
+              ELSE cr.profile
+            END,
+            'dateCreated', json_build_object(
+              'date', '',
+              'time', ''
+            ),
+            'createdBy', ua.username,
+            'privacy', cr.is_private,
+            'type', 'server'
+          ) AS groupdetails,
+          json_build_object(
+            '_id', pcr.id,
+            'serverID', pcr.realm_id,
+            'serverName', pcr.name,
+            'profile',
+            CASE
+              WHEN pcr.profile = 'N/A' THEN ''
+              ELSE pcr.profile
+            END,
+            'dateCreated', json_build_object(
+              'date', '',
+              'time', ''
+            ),
+            'members', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'userID', cm_username.username
+              ))
+              FROM community_member cm
+              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              WHERE cm.realm_id = pcr.realm_id
+            ), '[]'::jsonb),
+            'createdBy', pua.username,
+            'privacy', pcr.is_private
+          ) AS serverdetails
+        FROM community_realm cr
+        LEFT JOIN user_account ua ON cr.created_by_id = ua.id
+        LEFT JOIN community_realm pcr ON cr.parent_id = pcr.id
+        LEFT JOIN user_account pua ON pcr.created_by_id = pua.id
+        WHERE cr.realm_id = $1;`,
+        [conversationID]
+      );
+
+      const details_result = details[0];
+
       const encodedResult = jwt.sign(
         {
-          conversationslist: result,
+          conversationslist: [{
+            ...result[0],
+            users: rows,
+            ...details_result
+          }],
         },
         JWT_SECRET,
         {
