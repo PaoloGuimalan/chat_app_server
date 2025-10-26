@@ -84,7 +84,7 @@ const GetServerMembers = async (serverID, withDetails) => {
     const { rows } = await pool.query(
       `SELECT
        pua.id AS _id,
-       pua.username AS userID,
+       pua.username AS 'userID',
        pua.username AS username,
        json_build_object(
         'firstName', pua.first_name,
