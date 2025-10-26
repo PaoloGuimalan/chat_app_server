@@ -92,8 +92,8 @@ const GetServerMembers = async (serverID, withDetails) => {
         'lastName', pua.last_name
        ) AS fullname,
        pua.profile,
-       pua.is_active AS isActivated,
-       pua.is_verified AS isVerified
+       pua.is_active AS 'isActivated',
+       pua.is_verified AS 'isVerified'
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.account_id = pua.id
        WHERE realm_id = $1;`,
