@@ -161,7 +161,7 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
     //   },
     // },
   ])
-    .then(async(result) => {
+    .then(async (result) => {
       // console.log(result)
       const receivers_list = result[0].receivers;
 
@@ -237,11 +237,13 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
 
       const encodedResult = jwt.sign(
         {
-          conversationslist: [{
-            ...result[0],
-            users: rows,
-            ...details_result
-          }],
+          conversationslist: [
+            {
+              ...result[0],
+              users: rows,
+              ...details_result,
+            },
+          ],
         },
         JWT_SECRET,
         {
@@ -264,65 +266,174 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const serverID = req.params.serverID;
 
-  await UserServer.aggregate([
+  const { rows } = await pool.query(
+    `SELECT 
+      json_build_object(
+      '_id', cr.id,
+      'serverID', cr.realm_id,
+      'serverName', cr.name,
+      'profile',
+            CASE
+              WHEN cr.profile = 'N/A' THEN ''
+              ELSE cr.profile
+            END,
+      'dateCreated', json_build_object(
+              'date', '',
+              'time', ''
+            ),
+      'members', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'userID', cm_username.username
+              ))
+              FROM community_member cm
+              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              WHERE cm.realm_id = cr.realm_id
+            ), '[]'::jsonb),
+      'createdBy', pua.username,
+      'privacy', cr.is_private,
+      'channels', COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            '_id', pcr.realm_id,
+            'serverID', pcr.parent_id,
+            'groupID', pcr.realm_id,
+            'groupName', pcr.name,
+            'profile',
+              CASE
+                WHEN pcr.profile = 'N/A' THEN ''
+                ELSE pcr.profile
+              END,
+              'dateCreated', json_build_object(
+                'date', '',
+                'time', ''
+              ),
+              'createdBy', ppua.username,
+              'type', 'server',
+              'privacy', pcr.is_private,
+              'messages', jsonb_build_array()
+          )
+        )
+        FROM community_realm pcr
+        LEFT JOIN user_account ppua ON pcr.created_by_id = ppua.id
+        WHERE pcr.parent_id = cr.realm_id
+      ), '[]'::jsonb),
+      'usersWithInfo', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                '_id', cmu.id,
+                'userID', cmu.username,
+                'fullname', jsonb_build_object(
+                  'firstName', cmu.first_name,
+                  'middleName', cmu.middle_name,
+                  'lastName', cmu.last_name
+                ),
+                'profile',
+                  CASE
+                    WHEN cmu.profile = 'N/A' THEN 'none'
+                    ELSE cmu.profile
+                  END
+              ))
+              FROM community_member cm
+              JOIN user_account cmu ON cm.account_id = cmu.id
+              WHERE cm.realm_id = cr.realm_id
+            ), '[]'::jsonb)
+      )
+     FROM community_realm cr
+     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
+     WHERE realm_id = $1;`,
+    [serverID]
+  );
+
+  const deconstructedData = {
+    ...rows[0].json_build_object,
+  };
+
+  // await UserServer.aggregate([
+  //   {
+  //     $match: {
+  //       $and: [
+  //         { serverID: serverID },
+  //         { members: { $in: [{ userID: userID }] } },
+  //       ],
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "groups",
+  //       localField: "serverID",
+  //       foreignField: "serverID", //from groups
+  //       pipeline: [
+  //         {
+  //           $lookup: {
+  //             from: "messages",
+  //             localField: "groupID",
+  //             foreignField: "conversationID",
+  //             pipeline: [
+  //               {
+  //                 $match: { seeners: { $nin: [userID] } },
+  //               },
+  //               {
+  //                 $count: "unread",
+  //               },
+  //             ],
+  //             as: "messages",
+  //           },
+  //         },
+  //       ],
+  //       as: "channels",
+  //     },
+  //   },
+  //   {
+  //     $lookup: {
+  //       from: "useraccount",
+  //       localField: "members.userID",
+  //       foreignField: "userID",
+  //       as: "usersWithInfo",
+  //     },
+  //   },
+  //   {
+  //     $project: {
+  //       "usersWithInfo.birthdate": 0,
+  //       "usersWithInfo.dateCreated": 0,
+  //       "usersWithInfo.email": 0,
+  //       "usersWithInfo.gender": 0,
+  //       "usersWithInfo.isActivated": 0,
+  //       "usersWithInfo.isVerified": 0,
+  //       "usersWithInfo.password": 0,
+  //     },
+  //   },
+  // ])
+  UserMessage.aggregate([
     {
       $match: {
-        $and: [
-          { serverID: serverID },
-          { members: { $in: [{ userID: userID }] } },
-        ],
+        conversationID: {
+          $in: deconstructedData.channels.map((mp) => mp.groupID),
+        },
+        seeners: { $nin: [userID] },
       },
     },
-    {
-      $lookup: {
-        from: "groups",
-        localField: "serverID",
-        foreignField: "serverID", //from groups
-        pipeline: [
-          {
-            $lookup: {
-              from: "messages",
-              localField: "groupID",
-              foreignField: "conversationID",
-              pipeline: [
-                {
-                  $match: { seeners: { $nin: [userID] } },
-                },
-                {
-                  $count: "unread",
-                },
-              ],
-              as: "messages",
-            },
-          },
-        ],
-        as: "channels",
-      },
-    },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "members.userID",
-        foreignField: "userID",
-        as: "usersWithInfo",
-      },
-    },
-    {
-      $project: {
-        "usersWithInfo.birthdate": 0,
-        "usersWithInfo.dateCreated": 0,
-        "usersWithInfo.email": 0,
-        "usersWithInfo.gender": 0,
-        "usersWithInfo.isActivated": 0,
-        "usersWithInfo.isVerified": 0,
-        "usersWithInfo.password": 0,
-      },
-    },
+    { $group: { _id: "$conversationID", unreadCount: { $sum: 1 } } },
   ])
     .then((result) => {
-      // console.log(result[0].usersWithInfo)
+      const channelsWithReadsCount = deconstructedData.channels.map((mp) => ({
+        ...mp,
+        messages: result
+          .map((mpp) => {
+            if (mpp._id === mp.groupID) {
+              return {
+                unread: mpp.unreadCount,
+              };
+            }
+          })
+          .filter((flt) => flt),
+      }));
+
+      const finalData = {
+        ...deconstructedData,
+        channels: channelsWithReadsCount,
+      };
+
       const encodedResult = createJWT({
-        data: result,
+        data: [finalData],
       });
       res.send({ status: true, result: encodedResult });
     })
