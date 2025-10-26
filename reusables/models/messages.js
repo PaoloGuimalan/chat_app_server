@@ -226,7 +226,7 @@ const AddNewMemberToChannels = async (userIDProp, tokenProp) => {
     ];
 
     memberstoadd.map((mp) => {
-      AddNewMemberToContacts(conversationID, mp.userID)
+      AddNewMemberToContacts(conversationID, mp.id, userID)
         .then(() => {
           AddNewMemberToAllMessages(conversationID, mp.userID)
             .then(() => {

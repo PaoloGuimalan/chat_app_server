@@ -445,52 +445,74 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
 
 router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.memberstoadd;
-    const memberstoaddinserverdts = memberstoadd.map((mp) => ({
-      userID: mp.userID,
-    }));
+    // const memberstoaddinserverdts = memberstoadd.map((mp) => ({
+    //   userID: mp.userID,
+    // }));
 
-    const GetServerDts = await GetServerDetails(serverID);
+    const { rows } = await pool.query(
+      `SELECT id, username AS userID FROM user_account WHERE username = ANY($1);`,
+      [memberstoadd.map((mp) => mp.userID)]
+    );
+
+    // const GetServerDts = await GetServerDetails(serverID);
     const ServerChannelsList = await GetServerChannels(serverID, false);
     const mappedGroupID = ServerChannelsList.map((mp) => mp.groupID);
 
-    const currentmembers = GetServerDts.members;
+    // const currentmembers = GetServerDts.members;
 
-    const newsetofmembers = [...memberstoaddinserverdts, ...currentmembers];
+    // const newsetofmembers = [...memberstoaddinserverdts, ...currentmembers];
 
-    const uniquenewsetofmembers = newsetofmembers.filter((value, index) => {
-      const _value = JSON.stringify(value);
-      return (
-        index ===
-        newsetofmembers.findIndex((obj) => {
-          return JSON.stringify(obj) === _value;
-        })
-      );
+    // const uniquenewsetofmembers = newsetofmembers.filter((value, index) => {
+    //   const _value = JSON.stringify(value);
+    //   return (
+    //     index ===
+    //     newsetofmembers.findIndex((obj) => {
+    //       return JSON.stringify(obj) === _value;
+    //     })
+    //   );
+    // });
+
+    AddNewMemberToChannels(id, {
+      conversationID: serverID,
+      memberstoadd: rows,
+      receivers: decodedToken.receivers,
     });
 
-    UserServer.updateOne(
-      { serverID: serverID },
-      { members: uniquenewsetofmembers }
-    )
-      .then(() => {
-        mappedGroupID.map((mp) => {
-          AddNewMemberToChannels(userID, {
-            conversationID: mp,
-            memberstoadd: memberstoadd,
-            receivers: decodedToken.receivers,
-          });
-        });
-        res.send({ status: true, message: "Server updated" });
-      })
-      .catch((err) => {
-        console.log(err);
-        res.send({ status: false, message: "Error updating server members" });
+    mappedGroupID.map((mp) => {
+      AddNewMemberToChannels(id, {
+        conversationID: mp,
+        memberstoadd: rows,
+        receivers: decodedToken.receivers,
       });
+    });
+
+    // UserServer.updateOne(
+    //   { serverID: serverID },
+    //   { members: uniquenewsetofmembers }
+    // )
+    //   .then(() => {
+    //     mappedGroupID.map((mp) => {
+    //       AddNewMemberToChannels(userID, {
+    //         conversationID: mp,
+    //         memberstoadd: memberstoadd,
+    //         receivers: decodedToken.receivers,
+    //       });
+    //     });
+    //     res.send({ status: true, message: "Server updated" });
+    //   })
+    //   .catch((err) => {
+    //     console.log(err);
+    //     res.send({ status: false, message: "Error updating server members" });
+    //   });
+
+    res.send({ status: true, message: "Server updated" });
 
     // console.log(decodedToken, mappedGroupID, uniqueArray);
   } catch (ex) {
