@@ -1289,9 +1289,11 @@ router.get(
         const message = result.reverse();
         const flattenedUsersInReactions = message
           .map((mp) => {
-            const reactionUsers = mp.reactions.map((mpp) => mpp.userID);
+            if (mp.reactions) {
+              const reactionUsers = mp.reactions.map((mpp) => mpp.userID);
 
-            return reactionUsers;
+              return reactionUsers;
+            }
           })
           .flat();
 
