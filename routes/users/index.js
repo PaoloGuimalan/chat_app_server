@@ -1320,18 +1320,20 @@ router.get(
           const messageDocument = mp;
           const reactions = mp.reactions;
 
-          if (reactions.length > 0) {
-            messageDocument.reactionsWithInfo = reactions.map((mp) => {
-              const returnedRow = rows.filter(
-                (flt) => flt.userID === mp.userID
-              );
+          if (reactions) {
+            if (reactions.length > 0) {
+              messageDocument.reactionsWithInfo = reactions.map((mp) => {
+                const returnedRow = rows.filter(
+                  (flt) => flt.userID === mp.userID
+                );
 
-              if (returnedRow.length > 0) {
-                return returnedRow[0];
-              }
-            });
-          } else {
-            messageDocument.reactionsWithInfo = [];
+                if (returnedRow.length > 0) {
+                  return returnedRow[0];
+                }
+              });
+            } else {
+              messageDocument.reactionsWithInfo = [];
+            }
           }
 
           return messageDocument;
