@@ -389,6 +389,17 @@ const ContactListTrigger = async (id, details) => {
   // });
 };
 
+function removeNullServerDetails(obj) {
+  // Check if serverdetails key exists and its value is null or undefined
+  if (
+    Object.hasOwn(obj, "serverdetails") &&
+    (obj.serverdetails === null || obj.serverdetails === undefined)
+  ) {
+    delete obj.serverdetails;
+  }
+  return obj;
+}
+
 const MessagesTrigger = async (id, details, onseen) => {
   const userID = id;
   const sseWithUserID = sseNotificationsWaiters[userID];
