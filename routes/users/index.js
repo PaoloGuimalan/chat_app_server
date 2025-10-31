@@ -1002,7 +1002,10 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
 
 function removeNullServerDetails(obj) {
   // Check if serverdetails key exists and its value is null or undefined
-  if (Object.hasOwn(obj, 'serverdetails') && (obj.serverdetails === null || obj.serverdetails === undefined)) {
+  if (
+    Object.hasOwn(obj, "serverdetails") &&
+    (obj.serverdetails === null || obj.serverdetails === undefined)
+  ) {
     delete obj.serverdetails;
   }
   return obj;
@@ -1114,12 +1117,12 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       const resultGroups = result.map((mp) => mp.conversationID);
 
       const flattenedReceiversArray = resultReceivers.flat();
-      const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)]
+      const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
       const flattenedGroupsArray = resultGroups.flat();
 
       const { rows } = await pool.query(
-            `SELECT 
+        `SELECT 
               id AS _id,
               username AS "userID",
               json_build_object(
@@ -1130,11 +1133,11 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
               COALESCE(profile, 'none') AS profile
             FROM user_account
             WHERE username = ANY($1);`,
-            [removeDuplicateReceivers]
-          );
+        [removeDuplicateReceivers]
+      );
 
-        const { rows: group_rows } = await pool.query(
-            `SELECT 
+      const { rows: group_rows } = await pool.query(
+        `SELECT 
               json_build_object(
                 '_id', cr.id,
                 'serverID', cr.parent_id,
@@ -1178,27 +1181,29 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
             LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
             WHERE cr.realm_id = ANY($1);
             `,
-            [flattenedGroupsArray]
-          );
+        [flattenedGroupsArray]
+      );
 
       const finalResult = result.map((mp) => {
-
-        const details = group_rows.filter((flt) => flt.groupdetails.groupID === mp.conversationID);
+        const details = group_rows.filter(
+          (flt) => flt.groupdetails.groupID === mp.conversationID
+        );
         const final_details = details.length > 0 ? details[0] : null;
 
         let final_mp = mp;
 
-        if(final_details){
+        if (final_details) {
           final_mp = removeNullServerDetails({
             ...final_mp,
-            ...final_details
-          })
+            ...final_details,
+          });
         }
 
-        return({
-        ...final_mp,
-        users: rows.filter((flt) => mp.receivers.includes(flt.userID))
-      })});
+        return {
+          ...final_mp,
+          users: rows.filter((flt) => mp.receivers.includes(flt.userID)),
+        };
+      });
 
       // console.log(result.reverse())
       const encodedResult = jwt.sign(
@@ -1250,14 +1255,14 @@ router.get(
           as: "replyedmessage",
         },
       },
-      {
-        $lookup: {
-          from: "useraccount",
-          localField: "reactions.userID",
-          foreignField: "userID",
-          as: "reactionsWithInfo",
-        },
-      },
+      // {
+      //   $lookup: {
+      //     from: "useraccount",
+      //     localField: "reactions.userID",
+      //     foreignField: "userID",
+      //     as: "reactionsWithInfo",
+      //   },
+      // },
       {
         $project: {
           "reactionsWithInfo._id": 0,
@@ -1280,11 +1285,59 @@ router.get(
         $limit: parseInt(range),
       },
     ])
-      .then((result) => {
-        var message = result.reverse();
+      .then(async (result) => {
+        const message = result.reverse();
+        const flattenedUsersInReactions = message
+          .map((mp) => {
+            const reactionUsers = mp.reactions.map((mpp) => mpp.userID);
+
+            return reactionUsers;
+          })
+          .flat();
+
+        const removeDuplicateReactors = [...new Set(flattenedUsersInReactions)];
+
+        const { rows } = await pool.query(
+          `SELECT 
+              id AS _id,
+              username AS "userID",
+              json_build_object(
+                'firstName', first_name,
+                'middleName', middle_name,
+                'lastName', last_name
+              ) AS fullname,
+              COALESCE(profile, 'none') AS profile,
+              is_active AS "isActivated",
+              is_verified AS "isVerified"
+            FROM user_account
+            WHERE username = ANY($1);`,
+          [removeDuplicateReactors]
+        );
+
+        const mutatedMessagesArray = message.map((mp) => {
+          const messageDocument = mp;
+          const reactions = mp.reactions;
+
+          if (reactions.length > 0) {
+            messageDocument.reactionsWithInfo = reactions.map((mp) => {
+              const returnedRow = rows.filter(
+                (flt) => flt.userID === mp.userID
+              );
+
+              if (returnedRow.length > 0) {
+                return returnedRow[0];
+              }
+            });
+          } else {
+            messageDocument.reactionsWithInfo = [];
+          }
+
+          return messageDocument;
+        });
+
         const encodedResult = jwt.sign(
           {
-            messages: message,
+            messages: mutatedMessagesArray,
             total: totalmessages,
           },
           JWT_SECRET,
@@ -1293,7 +1346,11 @@ router.get(
           }
         );
 
-        res.send({ status: true, message: "OK", result: encodedResult });
+        res.send({
+          status: true,
+          message: "OK",
+          result: encodedResult,
+        });
       })
       .catch((err) => {
         console.log(err);
