@@ -1000,6 +1000,14 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
   }
 });
 
+function removeNullServerDetails(obj) {
+  // Check if serverdetails key exists and its value is null or undefined
+  if (Object.hasOwn(obj, 'serverdetails') && (obj.serverdetails === null || obj.serverdetails === undefined)) {
+    delete obj.serverdetails;
+  }
+  return obj;
+}
+
 router.get("/initConversationList", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const page = req.headers["page"];
@@ -1053,42 +1061,42 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
     {
       $limit: parseInt(range),
     },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "receivers",
-        foreignField: "userID",
-        as: "users",
-      },
-    },
-    {
-      $lookup: {
-        from: "groups",
-        localField: "conversationID",
-        foreignField: "groupID",
-        as: "groupdetails",
-      },
-    },
-    {
-      $unwind: {
-        path: "$groupdetails",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $lookup: {
-        from: "servers",
-        localField: "groupdetails.serverID",
-        foreignField: "serverID",
-        as: "serverdetails",
-      },
-    },
-    {
-      $unwind: {
-        path: "$serverdetails",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
+    // {
+    //   $lookup: {
+    //     from: "useraccount",
+    //     localField: "receivers",
+    //     foreignField: "userID",
+    //     as: "users",
+    //   },
+    // },
+    // {
+    //   $lookup: {
+    //     from: "groups",
+    //     localField: "conversationID",
+    //     foreignField: "groupID",
+    //     as: "groupdetails",
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: "$groupdetails",
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
+    // {
+    //   $lookup: {
+    //     from: "servers",
+    //     localField: "groupdetails.serverID",
+    //     foreignField: "serverID",
+    //     as: "serverdetails",
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: "$serverdetails",
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
     {
       $project: {
         "users.birthdate": 0,
@@ -1101,11 +1109,101 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       },
     },
   ])
-    .then((result) => {
+    .then(async (result) => {
+      const resultReceivers = result.map((mp) => mp.receivers);
+      const resultGroups = result.map((mp) => mp.conversationID);
+
+      const flattenedReceiversArray = resultReceivers.flat();
+      const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)]
+
+      const flattenedGroupsArray = resultGroups.flat();
+
+      const { rows } = await pool.query(
+            `SELECT 
+              id AS _id,
+              username AS "userID",
+              json_build_object(
+                'firstName', first_name,
+                'middleName', middle_name,
+                'lastName', last_name
+              ) AS fullname,
+              COALESCE(profile, 'none') AS profile
+            FROM user_account
+            WHERE username = ANY($1);`,
+            [removeDuplicateReceivers]
+          );
+
+        const { rows: group_rows } = await pool.query(
+            `SELECT 
+              json_build_object(
+                '_id', cr.id,
+                'serverID', cr.parent_id,
+                'groupID', cr.realm_id,
+                'profile', COALESCE(cr.profile, 'N/A'),
+                'dateCreated', json_build_object(
+                  'date', '',
+                  'time', ''
+                ),
+                'createdBy', created_by.username,
+                'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                'privacy', cr.is_private,
+                'groupName', cr.name
+              ) AS groupdetails,
+              
+              CASE
+                WHEN cr.parent_id IS NOT NULL THEN
+                  json_build_object(
+                    '_id', pr.id,
+                    'serverID', pr.realm_id,
+                    'serverName', pr.name,
+                    'profile', COALESCE(pr.profile, 'N/A'),
+                    'dateCreated', json_build_object(
+                      'date', '',
+                      'time', ''
+                    ),
+                    'members', (
+                      SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
+                      FROM community_member m
+                      JOIN user_account a ON m.account_id = a.id
+                      WHERE m.realm_id = pr.realm_id
+                    ),
+                    'createdBy', parent_created_by.username,
+                    'privacy', pr.is_private
+                  )
+                ELSE NULL
+              END AS serverdetails
+            FROM community_realm cr
+            LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
+            LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
+            LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+            WHERE cr.realm_id = ANY($1);
+            `,
+            [flattenedGroupsArray]
+          );
+
+      const finalResult = result.map((mp) => {
+
+        const details = group_rows.filter((flt) => flt.groupdetails.groupID === mp.conversationID);
+        const final_details = details.length > 0 ? details[0] : null;
+
+        let final_mp = mp;
+
+        if(final_details){
+          final_mp = removeNullServerDetails({
+            ...final_mp,
+            ...final_details
+          })
+        }
+
+        return({
+        ...final_mp,
+        users: rows.filter((flt) => mp.receivers.includes(flt.userID))
+      })});
+
       // console.log(result.reverse())
       const encodedResult = jwt.sign(
         {
-          conversationslist: result,
+          conversationslist: finalResult,
         },
         JWT_SECRET,
         {
@@ -1113,6 +1211,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         }
       );
 
+      // res.send({ status: true, message: "OK", result: encodedResult });
       res.send({ status: true, message: "OK", result: encodedResult });
     })
     .catch((err) => {
