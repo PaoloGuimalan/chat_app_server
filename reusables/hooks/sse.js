@@ -6,6 +6,7 @@ const UserContacts = require("../../schema/users/contacts");
 const { createJWTwExp } = require("./jwthelper");
 const { CountAllUnreadNotifications } = require("../models/notifications");
 const { publish } = require("../redis/pubsub");
+const pool = require("../../reusables/database/postgres");
 
 const SSENotificationsTrigger = async (type, ids, details) => {
   const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser];
