@@ -25,6 +25,7 @@ const {
 } = require("../../reusables/vars/firebasevars");
 const { listen } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { v4: uuidv4 } = require("uuid");
 
 const firebaseAdminConfig = {
   type: FIREBASE_TYPE,
@@ -377,6 +378,32 @@ const checkContactID = async (cnctID) => {
       console.log(err);
       return false;
     });
+};
+
+const checkGroupID = async (cnctID) => {
+  const { rows } = await pool.query(
+    `SELECT realm_id FROM community_realm WHERE realm_id = $1`,
+    [cnctID]
+  );
+
+  if (rows.length > 0) {
+    return checkGroupID(`${makeID(20)}`);
+  }
+
+  return cnctID;
+
+  // return await UserContacts.find({ contactID: cnctID })
+  //   .then((result) => {
+  //     if (result.length) {
+  //       checkGroupID(`${makeID(20)}`);
+  //     } else {
+  //       return cnctID;
+  //     }
+  //   })
+  //   .catch((err) => {
+  //     console.log(err);
+  //     return false;
+  //   });
 };
 
 const checkServerID = async (cnctID) => {
@@ -1448,12 +1475,15 @@ const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
 
 router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
+
+  const client = await pool.getPool();
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
 
-    const contactID = await checkContactID(`${makeID(20)}`);
+    const contactID = await checkGroupID(`${makeID(20)}`);
     const otherUsers = decodeToken.otherUsers;
     const groupName = decodeToken.groupName;
     const privacy = decodeToken.privacy;
@@ -1464,67 +1494,120 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     // console.log(allReceivers)
 
-    const payload = {
-      contactID: contactID,
-      actionBy: userID,
-      actionDate: {
-        date: dateGetter(),
-        time: timeGetter(),
-      },
-      status: true,
-      type: "group",
-      users: userReceivers,
-    };
+    // const payload = {
+    //   contactID: contactID,
+    //   actionBy: userID,
+    //   actionDate: {
+    //     date: dateGetter(),
+    //     time: timeGetter(),
+    //   },
+    //   status: true,
+    //   type: "group",
+    //   users: userReceivers,
+    // };
 
-    const newContact = new UserContacts(payload);
+    // const newContact = new UserContacts(payload);
 
-    newContact
-      .save()
-      .then(async () => {
-        const groupParams = {
-          groupID: contactID,
-          groupName: groupName,
-          profile: "",
-          dateCreated: {
-            date: dateGetter(),
-            time: timeGetter(),
-          },
-          createdBy: userID,
-          privacy: privacy,
-          type: "group",
-        };
+    // newContact
+    //   .save()
+    //   .then(async () => {
+    // const groupParams = {
+    //   groupID: contactID,
+    //   groupName: groupName,
+    //   profile: "",
+    //   dateCreated: {
+    //     date: dateGetter(),
+    //     time: timeGetter(),
+    //   },
+    //   createdBy: userID,
+    //   privacy: privacy,
+    //   type: "group",
+    // };
 
-        const newGroup = new UserGroups(groupParams);
-        newGroup
-          .save()
-          .then(async () => {
-            sendMessageInitForGC(
-              contactID,
-              userID,
-              allReceivers,
-              "created the group chat",
-              "group"
-            );
-            res.send({ status: true, message: `You created a Group Chat` });
-          })
-          .catch((err) => {
-            res.send({
-              status: false,
-              message: "Creating a group encountered an error!",
-            });
-            console.log(err);
-          });
+    const { rows } = await client.query(
+      `SELECT id from user_account WHERE username = ANY($1)`,
+      [userReceivers.map((mp) => mp.userID)]
+    );
 
-        // res.send({ status: true, message: `You created a Group Chat` })
-      })
-      .catch((err) => {
-        res.send({
-          status: false,
-          message: "Creating a group contact encountered an error!",
-        });
-        console.log(err);
-      });
+    const insertValues = [];
+    const params = [];
+    let paramIndex = 1;
+
+    rows.forEach(({ id: accountId }) => {
+      insertValues.push(
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`
+      );
+      // member_id - generate UUID here or use a package during insert if your DB auto-generates
+      params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
+      params.push(accountId); // account FK
+      params.push(realmId); // pass your realm ID here
+      params.push(addedById); // who added this member (account FK)
+      params.push(new Date()); // date_joined or null as needed
+    });
+
+    await client.query(
+      `INSERT INTO community_realm (
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified
+      ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      )`,
+      [
+        contactID,
+        contactID,
+        groupName,
+        "N/A",
+        "group",
+        id,
+        null,
+        true,
+        privacy,
+        false,
+      ]
+    );
+
+    await client.query(
+      `
+        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
+        VALUES ${insertValues.join(", ")}
+      `,
+      params
+    );
+
+    // const newGroup = new UserGroups(groupParams);
+    // newGroup
+    //   .save()
+    //   .then(async () => {
+    sendMessageInitForGC(
+      contactID,
+      userID,
+      allReceivers,
+      "created the group chat",
+      "group"
+    );
+
+    await client.query("COMMIT");
+
+    res.send({ status: true, message: `You created a Group Chat` });
+    // })
+    // .catch((err) => {
+    //   res.send({
+    //     status: false,
+    //     message: "Creating a group encountered an error!",
+    //   });
+    //   console.log(err);
+    // });
+
+    // res.send({ status: true, message: `You created a Group Chat` })
+    // })
+    // .catch((err) => {
+    //   res.send({
+    //     status: false,
+    //     message: "Creating a group contact encountered an error!",
+    //   });
+    //   console.log(err);
+    // });
   } catch (ex) {
+    await client.query("ROLLBACK");
     res.send({ status: false, message: "Group token encountered an error!" });
     console.log(ex);
   }
