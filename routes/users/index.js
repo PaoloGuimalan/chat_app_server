@@ -1749,13 +1749,15 @@ const creategroupchatreusable = async (
     // newGroup
     //   .save()
     //   .then(async () => {
-    sendMessageInitForGC(
-      contactID,
-      userID,
-      allReceivers,
-      "created the group chat",
-      "group"
-    );
+    if (type !== "server") {
+      sendMessageInitForGC(
+        contactID,
+        userID,
+        allReceivers,
+        "created the group chat",
+        serverID ? "server" : "group"
+      );
+    }
   } catch (ex) {
     await client.query("ROLLBACK");
     console.log(ex);
