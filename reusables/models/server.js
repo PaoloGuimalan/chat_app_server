@@ -139,7 +139,7 @@ const GetServerMembers = async (serverID, withDetails) => {
     const { rows } = await pool.query(
       `SELECT
        pua.id AS _id,
-       pua.username AS userID,
+       pua.username AS "userID",
        pua.username AS username
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.account_id = pua.id
