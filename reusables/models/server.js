@@ -9,15 +9,15 @@ const GetServerChannels = async (serverID, privacy) => {
   const { rows } = await pool.query(
     `SELECT 
     cr.realm_id AS _id, 
-    cr.parent_id AS serverID,
-    cr.realm_id AS groupID,
-    cr.name AS groupName,
+    cr.parent_id AS "serverID",
+    cr.realm_id AS "groupID",
+    cr.name AS "groupName",
     cr.profile,
     json_build_object(
     'date', '',
     'time', ''
     ) AS dateCreated,
-    pua.username AS createdBy,
+    pua.username AS "createdBy",
     'server' AS type,
     cr.is_private AS privacy
     FROM community_realm cr
