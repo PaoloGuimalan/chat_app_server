@@ -1616,6 +1616,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 const creategroupchatreusable = async (
   id,
   serverID,
+  currentID,
   channelName,
   userIDpass,
   tokenpass,
@@ -1629,7 +1630,7 @@ const creategroupchatreusable = async (
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
 
-    const contactID = await checkGroupID(`${makeID(20)}`);
+    const contactID = currentID ?? (await checkGroupID(`${makeID(20)}`));
     const otherUsers = decodeToken.otherUsers;
     const privacy = privacyprop;
     const allReceivers = [userID, ...otherUsers];
@@ -1787,6 +1788,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       creategroupchatreusable(
         id,
         serverID,
+        null,
         groupName,
         userID,
         channeltoken,
@@ -1806,6 +1808,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       creategroupchatreusable(
         id,
         serverID,
+        null,
         groupName,
         userID,
         channeltokenpub,
@@ -1822,13 +1825,14 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
 
 router.post("/createserver", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const defaultchannellist = ["General", "Announcements", "Random"];
 
-    const serverID = await checkServerID(`${makeID(20)}`);
+    const serverID = await checkGroupID(`${makeID(20)}`);
     const otherUsers = decodeToken.otherUsers;
     const serverName = decodeToken.groupName;
     const privacy = decodeToken.privacy;
@@ -1839,35 +1843,45 @@ router.post("/createserver", jwtchecker, async (req, res) => {
 
     // console.log(allReceivers)
 
-    const payload = {
-      serverID: serverID,
-      serverName: serverName,
-      profile: "",
-      dateCreated: {
-        date: dateGetter(),
-        time: timeGetter(),
-      },
-      members: userReceivers,
-      createdBy: userID,
-      privacy: privacy,
-    };
+    // const payload = {
+    //   serverID: serverID,
+    //   serverName: serverName,
+    //   profile: "",
+    //   dateCreated: {
+    //     date: dateGetter(),
+    //     time: timeGetter(),
+    //   },
+    //   members: userReceivers,
+    //   createdBy: userID,
+    //   privacy: privacy,
+    // };
 
-    const newserver = new UserServers(payload);
-    newserver
-      .save()
-      .then(async () => {
-        defaultchannellist.map((mp) => {
-          creategroupchatreusable(id, serverID, mp, userID, token, false);
-        });
-        res.send({ status: true, message: `You created a Group Chat` });
-      })
-      .catch((err) => {
-        res.send({
-          status: false,
-          message: "Creating a server encountered an error!",
-        });
-        console.log(err);
-      });
+    // const newserver = new UserServers(payload);
+    // newserver
+    //   .save()
+    //   .then(async () => {
+    creategroupchatreusable(
+      id,
+      null,
+      serverID,
+      serverName,
+      userID,
+      token,
+      false
+    );
+
+    defaultchannellist.map((mp) => {
+      creategroupchatreusable(id, serverID, null, mp, userID, token, false);
+    });
+    res.send({ status: true, message: `You created a Group Chat` });
+    // })
+    // .catch((err) => {
+    //   res.send({
+    //     status: false,
+    //     message: "Creating a server encountered an error!",
+    //   });
+    //   console.log(err);
+    // });
   } catch (ex) {
     res.send({ status: false, message: "Group token encountered an error!" });
     console.log(ex);
