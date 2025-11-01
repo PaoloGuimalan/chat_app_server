@@ -232,7 +232,7 @@ const AddNewMemberToChannels = async (userIDProp, username, tokenProp) => {
             .then(() => {
               NotificationMessageForConversations(
                 conversationID,
-                userID,
+                username,
                 receivers,
                 `${username} added ${mp.userID}`,
                 "server"
