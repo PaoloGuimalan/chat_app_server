@@ -211,7 +211,7 @@ const GetAllReceivers = async (contactID) => {
   //   });
 };
 
-const AddNewMemberToChannels = async (userIDProp, tokenProp) => {
+const AddNewMemberToChannels = async (userIDProp, username, tokenProp) => {
   const token = tokenProp;
   const userID = userIDProp;
 
@@ -234,7 +234,7 @@ const AddNewMemberToChannels = async (userIDProp, tokenProp) => {
                 conversationID,
                 userID,
                 receivers,
-                `${userID} added ${mp.userID}`,
+                `${username} added ${mp.userID}`,
                 "server"
               );
             })

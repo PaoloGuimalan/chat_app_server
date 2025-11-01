@@ -457,7 +457,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     // }));
 
     const { rows } = await pool.query(
-      `SELECT id, username AS userID FROM user_account WHERE username = ANY($1);`,
+      `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
       [memberstoadd.map((mp) => mp.userID)]
     );
 
@@ -479,14 +479,14 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     //   );
     // });
 
-    AddNewMemberToChannels(id, {
+    AddNewMemberToChannels(id, userID, {
       conversationID: serverID,
       memberstoadd: rows,
       receivers: decodedToken.receivers,
     });
 
     mappedGroupID.map((mp) => {
-      AddNewMemberToChannels(id, {
+      AddNewMemberToChannels(id, userID, {
         conversationID: mp,
         memberstoadd: rows,
         receivers: decodedToken.receivers,
