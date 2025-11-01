@@ -431,7 +431,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     );
 
     rows.map((mp) => {
-      AddNewMemberToContacts(conversationID, mp.id, userID)
+      AddNewMemberToContacts(conversationID, mp.id, id)
         .then(() => {
           AddNewMemberToAllMessages(conversationID, mp.userID)
             .then(() => {
