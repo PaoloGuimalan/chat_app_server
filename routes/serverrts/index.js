@@ -479,18 +479,28 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     //   );
     // });
 
-    AddNewMemberToChannels(id, userID, {
-      conversationID: serverID,
-      memberstoadd: rows,
-      receivers: decodedToken.receivers,
-    });
-
-    mappedGroupID.map((mp) => {
-      AddNewMemberToChannels(id, userID, {
-        conversationID: mp,
+    AddNewMemberToChannels(
+      id,
+      userID,
+      {
+        conversationID: serverID,
         memberstoadd: rows,
         receivers: decodedToken.receivers,
-      });
+      },
+      "server"
+    );
+
+    mappedGroupID.map((mp) => {
+      AddNewMemberToChannels(
+        id,
+        userID,
+        {
+          conversationID: mp,
+          memberstoadd: rows,
+          receivers: decodedToken.receivers,
+        },
+        "group"
+      );
     });
 
     // UserServer.updateOne(

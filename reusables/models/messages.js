@@ -211,7 +211,12 @@ const GetAllReceivers = async (contactID) => {
   //   });
 };
 
-const AddNewMemberToChannels = async (userIDProp, username, tokenProp) => {
+const AddNewMemberToChannels = async (
+  userIDProp,
+  username,
+  tokenProp,
+  type
+) => {
   const token = tokenProp;
   const userID = userIDProp;
 
@@ -228,17 +233,19 @@ const AddNewMemberToChannels = async (userIDProp, username, tokenProp) => {
     memberstoadd.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.id, userID)
         .then(() => {
-          AddNewMemberToAllMessages(conversationID, mp.userID)
-            .then(() => {
-              NotificationMessageForConversations(
-                conversationID,
-                username,
-                receivers,
-                `${username} added ${mp.userID}`,
-                "server"
-              );
-            })
-            .catch((err) => console.log);
+          if (type !== "server") {
+            AddNewMemberToAllMessages(conversationID, mp.userID)
+              .then(() => {
+                NotificationMessageForConversations(
+                  conversationID,
+                  username,
+                  receivers,
+                  `${username} added ${mp.userID}`,
+                  "server"
+                );
+              })
+              .catch((err) => console.log);
+          }
         })
         .catch((err) => console.log);
     });
