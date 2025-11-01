@@ -1573,6 +1573,8 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params
     );
 
+    await client.query("COMMIT");
+
     // const newGroup = new UserGroups(groupParams);
     // newGroup
     //   .save()
@@ -1584,8 +1586,6 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       "created the group chat",
       "group"
     );
-
-    await client.query("COMMIT");
 
     res.send({ status: true, message: `You created a Group Chat` });
     // })
