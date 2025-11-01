@@ -1614,6 +1614,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 });
 
 const creategroupchatreusable = async (
+  id,
   serverID,
   channelName,
   userIDpass,
@@ -1623,10 +1624,12 @@ const creategroupchatreusable = async (
   const userID = userIDpass;
   const token = tokenpass;
 
+  const client = await pool.getPool();
+
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
 
-    const contactID = await checkContactID(`${makeID(20)}`);
+    const contactID = await checkGroupID(`${makeID(20)}`);
     const otherUsers = decodeToken.otherUsers;
     const privacy = privacyprop;
     const allReceivers = [userID, ...otherUsers];
@@ -1636,65 +1639,130 @@ const creategroupchatreusable = async (
 
     // console.log(allReceivers)
 
-    const payload = {
-      contactID: contactID,
-      actionBy: userID,
-      actionDate: {
-        date: dateGetter(),
-        time: timeGetter(),
-      },
-      status: privacy,
-      type: "server",
-      users: userReceivers,
-    };
+    // const payload = {
+    //   contactID: contactID,
+    //   actionBy: userID,
+    //   actionDate: {
+    //     date: dateGetter(),
+    //     time: timeGetter(),
+    //   },
+    //   status: privacy,
+    //   type: "server",
+    //   users: userReceivers,
+    // };
 
-    const newContact = new UserContacts(payload);
+    // const newContact = new UserContacts(payload);
 
-    newContact
-      .save()
-      .then(async () => {
-        const groupParams = {
-          serverID: serverID,
-          groupID: contactID,
-          groupName: channelName,
-          profile: "",
-          dateCreated: {
-            date: dateGetter(),
-            time: timeGetter(),
-          },
-          createdBy: userID,
-          privacy: privacy,
-          type: "server",
-        };
+    // newContact
+    //   .save()
+    //   .then(async () => {
+    //     const groupParams = {
+    //       serverID: serverID,
+    //       groupID: contactID,
+    //       groupName: channelName,
+    //       profile: "",
+    //       dateCreated: {
+    //         date: dateGetter(),
+    //         time: timeGetter(),
+    //       },
+    //       createdBy: userID,
+    //       privacy: privacy,
+    //       type: "server",
+    //     };
 
-        const newGroup = new UserGroups(groupParams);
-        newGroup
-          .save()
-          .then(async () => {
-            sendMessageInitForGC(
-              contactID,
-              userID,
-              allReceivers,
-              "created the channel",
-              "server"
-            );
-          })
-          .catch((err) => {
-            console.log(err);
-          });
+    //     const newGroup = new UserGroups(groupParams);
+    //     newGroup
+    //       .save()
+    //       .then(async () => {
+    //         sendMessageInitForGC(
+    //           contactID,
+    //           userID,
+    //           allReceivers,
+    //           "created the channel",
+    //           "server"
+    //         );
+    //       })
+    //       .catch((err) => {
+    //         console.log(err);
+    //       });
 
-        // res.send({ status: true, message: `You created a Group Chat` })
-      })
-      .catch((err) => {
-        console.log(err);
-      });
+    //     // res.send({ status: true, message: `You created a Group Chat` })
+    //   })
+    //   .catch((err) => {
+    //     console.log(err);
+    //   });
+
+    const { rows } = await client.query(
+      `SELECT id from user_account WHERE username = ANY($1)`,
+      [userReceivers.map((mp) => mp.userID)]
+    );
+
+    const insertValues = [];
+    const params = [];
+    let paramIndex = 1;
+
+    rows.forEach(({ id: accountId }) => {
+      insertValues.push(
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`
+      );
+      // member_id - generate UUID here or use a package during insert if your DB auto-generates
+      params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
+      params.push(accountId); // account FK
+      params.push(contactID); // pass your realm ID here
+      params.push(id); // who added this member (account FK)
+      params.push(new Date()); // date_joined or null as needed
+    });
+
+    await client.query(
+      `INSERT INTO community_realm (
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified
+      ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      )`,
+      [
+        contactID,
+        contactID,
+        channelName,
+        "N/A",
+        "group",
+        id,
+        serverID,
+        true,
+        privacy,
+        false,
+      ]
+    );
+
+    await client.query(
+      `
+        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
+        VALUES ${insertValues.join(", ")}
+      `,
+      params
+    );
+
+    await client.query("COMMIT");
+
+    // const newGroup = new UserGroups(groupParams);
+    // newGroup
+    //   .save()
+    //   .then(async () => {
+    sendMessageInitForGC(
+      contactID,
+      userID,
+      allReceivers,
+      "created the group chat",
+      "group"
+    );
   } catch (ex) {
+    await client.query("ROLLBACK");
     console.log(ex);
   }
 };
 
 router.post("/createchannel", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
@@ -1717,6 +1785,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         JWT_SECRET
       );
       creategroupchatreusable(
+        id,
         serverID,
         groupName,
         userID,
@@ -1735,6 +1804,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       );
       // console.log(privacy, modifiedservermemberspub, jwt.verify(channeltokenpub, JWT_SECRET))
       creategroupchatreusable(
+        id,
         serverID,
         groupName,
         userID,
@@ -1787,7 +1857,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       .save()
       .then(async () => {
         defaultchannellist.map((mp) => {
-          creategroupchatreusable(serverID, mp, userID, token, false);
+          creategroupchatreusable(id, serverID, mp, userID, token, false);
         });
         res.send({ status: true, message: `You created a Group Chat` });
       })
