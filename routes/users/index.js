@@ -1540,8 +1540,8 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
       params.push(accountId); // account FK
-      params.push(realmId); // pass your realm ID here
-      params.push(addedById); // who added this member (account FK)
+      params.push(contactID); // pass your realm ID here
+      params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
     });
 
