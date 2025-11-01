@@ -413,6 +413,7 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
 router.post("/addnewmember", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
+  const id = req.params.id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
@@ -424,8 +425,13 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       ...receiversfetch.users.map((mp) => mp.userID),
     ];
 
-    memberstoadd.map((mp) => {
-      AddNewMemberToContacts(conversationID, mp.userID, userID)
+    const { rows } = await pool.query(
+      `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
+      [memberstoadd.map((mp) => mp.userID)]
+    );
+
+    rows.map((mp) => {
+      AddNewMemberToContacts(conversationID, mp.id, userID)
         .then(() => {
           AddNewMemberToAllMessages(conversationID, mp.userID)
             .then(() => {
