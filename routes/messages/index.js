@@ -430,6 +430,13 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       [memberstoadd.map((mp) => mp.userID)]
     );
 
+    const { rows: get_group } = await pool.query(
+      `SELECT parent_id FROM community_realm WHERE realm_id = $1 AND parent_id IS NOT NULL;`,
+      [conversationID]
+    );
+
+    const conversationType = get_group.length > 0 ? "server" : "group";
+
     rows.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.id, id)
         .then(() => {
@@ -440,7 +447,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
                 userID,
                 receivers,
                 `${userID} added ${mp.userID}`,
-                "group"
+                conversationType
               );
             })
             .catch((err) => console.log);
