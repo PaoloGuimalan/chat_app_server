@@ -1620,7 +1620,8 @@ const creategroupchatreusable = async (
   channelName,
   userIDpass,
   tokenpass,
-  privacyprop
+  privacyprop,
+  type
 ) => {
   const userID = userIDpass;
   const token = tokenpass;
@@ -1725,7 +1726,7 @@ const creategroupchatreusable = async (
         contactID,
         channelName,
         "N/A",
-        "group",
+        type,
         id,
         serverID,
         true,
@@ -1792,7 +1793,8 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         groupName,
         userID,
         channeltoken,
-        privacy
+        privacy,
+        "group"
       );
     } else {
       const modifiedservermemberspub = serverMembers
@@ -1812,7 +1814,8 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         groupName,
         userID,
         channeltokenpub,
-        privacy
+        privacy,
+        "group"
       );
     }
 
@@ -1867,11 +1870,21 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       serverName,
       userID,
       token,
-      false
+      false,
+      "server"
     );
 
     defaultchannellist.map((mp) => {
-      creategroupchatreusable(id, serverID, null, mp, userID, token, false);
+      creategroupchatreusable(
+        id,
+        serverID,
+        null,
+        mp,
+        userID,
+        token,
+        false,
+        "group"
+      );
     });
     res.send({ status: true, message: `You created a Group Chat` });
     // })
