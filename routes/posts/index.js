@@ -465,11 +465,11 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       const insertPreviewCountsQuery = `
         INSERT INTO newsfeed_previewcount (preview_id, post_id, emoji_id, count)
-        SELECT $1, $2, emoji_id, 0
-        FROM newsfeed_emoji
+        SELECT uuid_generate_v4(), $1, emoji_id, 0
+        FROM newsfeed_emoji;
       `;
 
-      await client.query(insertPreviewCountsQuery, [generateUUID(), postID]);
+      await client.query(insertPreviewCountsQuery, [postID]);
 
       await client.query("COMMIT");
 
