@@ -404,234 +404,234 @@ const MessagesTrigger = async (id, details, onseen) => {
   const userID = id;
   const sseWithUserID = sseNotificationsWaiters[userID];
 
-  await UserMessage.aggregate([
-    {
-      $match: {
-        receivers: { $in: [userID] },
-      },
-    },
-    {
-      $group: {
-        _id: "$conversationID",
-        sortID: { $last: "$_id" },
-        conversationID: { $last: "$conversationID" },
-        messageID: { $last: "$messageID" },
-        conversationID: { $last: "$conversationID" },
-        sender: { $last: "$sender" },
-        receivers: { $last: "$receivers" },
-        seeners: { $last: "$seeners" },
-        content: { $last: "$content" },
-        messageDate: { $last: "$messageDate" },
-        isReply: { $last: "$isReply" },
-        replyingTo: { $last: "$replyingTo" },
-        reactions: { $last: "$reactions" },
-        isDeleted: { $last: "$isDeleted" },
-        messageType: { $last: "$messageType" },
-        conversationType: { $last: "$conversationType" },
-        unread: {
-          $sum: {
-            $cond: {
-              if: {
-                $in: [userID, "$seeners"],
-              },
-              then: 0,
-              else: 1,
-            },
-          },
-        },
-      },
-    },
-    {
-      $sort: {
-        sortID: -1,
-      },
-    },
-    {
-      $limit: 20,
-    },
-    // {
-    //   $lookup: {
-    //     from: "useraccount",
-    //     localField: "receivers",
-    //     foreignField: "userID",
-    //     as: "users",
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "groups",
-    //     localField: "conversationID",
-    //     foreignField: "groupID",
-    //     as: "groupdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$groupdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "servers",
-    //     localField: "groupdetails.serverID",
-    //     foreignField: "serverID",
-    //     as: "serverdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$serverdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $project: {
-    //     "users.birthdate": 0,
-    //     "users.dateCreated": 0,
-    //     "users.email": 0,
-    //     "users.gender": 0,
-    //     "users.isActivated": 0,
-    //     "users.isVerified": 0,
-    //     "users.password": 0,
-    //   },
-    // },
-  ])
-    .then(async (result) => {
-      const resultReceivers = result.map((mp) => mp.receivers);
-      const resultGroups = result.map((mp) => mp.conversationID);
+  // await UserMessage.aggregate([
+  //   {
+  //     $match: {
+  //       receivers: { $in: [userID] },
+  //     },
+  //   },
+  //   {
+  //     $group: {
+  //       _id: "$conversationID",
+  //       sortID: { $last: "$_id" },
+  //       conversationID: { $last: "$conversationID" },
+  //       messageID: { $last: "$messageID" },
+  //       conversationID: { $last: "$conversationID" },
+  //       sender: { $last: "$sender" },
+  //       receivers: { $last: "$receivers" },
+  //       seeners: { $last: "$seeners" },
+  //       content: { $last: "$content" },
+  //       messageDate: { $last: "$messageDate" },
+  //       isReply: { $last: "$isReply" },
+  //       replyingTo: { $last: "$replyingTo" },
+  //       reactions: { $last: "$reactions" },
+  //       isDeleted: { $last: "$isDeleted" },
+  //       messageType: { $last: "$messageType" },
+  //       conversationType: { $last: "$conversationType" },
+  //       unread: {
+  //         $sum: {
+  //           $cond: {
+  //             if: {
+  //               $in: [userID, "$seeners"],
+  //             },
+  //             then: 0,
+  //             else: 1,
+  //           },
+  //         },
+  //       },
+  //     },
+  //   },
+  //   {
+  //     $sort: {
+  //       sortID: -1,
+  //     },
+  //   },
+  //   {
+  //     $limit: 20,
+  //   },
+  //   // {
+  //   //   $lookup: {
+  //   //     from: "useraccount",
+  //   //     localField: "receivers",
+  //   //     foreignField: "userID",
+  //   //     as: "users",
+  //   //   },
+  //   // },
+  //   // {
+  //   //   $lookup: {
+  //   //     from: "groups",
+  //   //     localField: "conversationID",
+  //   //     foreignField: "groupID",
+  //   //     as: "groupdetails",
+  //   //   },
+  //   // },
+  //   // {
+  //   //   $unwind: {
+  //   //     path: "$groupdetails",
+  //   //     preserveNullAndEmptyArrays: true,
+  //   //   },
+  //   // },
+  //   // {
+  //   //   $lookup: {
+  //   //     from: "servers",
+  //   //     localField: "groupdetails.serverID",
+  //   //     foreignField: "serverID",
+  //   //     as: "serverdetails",
+  //   //   },
+  //   // },
+  //   // {
+  //   //   $unwind: {
+  //   //     path: "$serverdetails",
+  //   //     preserveNullAndEmptyArrays: true,
+  //   //   },
+  //   // },
+  //   // {
+  //   //   $project: {
+  //   //     "users.birthdate": 0,
+  //   //     "users.dateCreated": 0,
+  //   //     "users.email": 0,
+  //   //     "users.gender": 0,
+  //   //     "users.isActivated": 0,
+  //   //     "users.isVerified": 0,
+  //   //     "users.password": 0,
+  //   //   },
+  //   // },
+  // ])
+  //   .then(async (result) => {
+  //     const resultReceivers = result.map((mp) => mp.receivers);
+  //     const resultGroups = result.map((mp) => mp.conversationID);
 
-      const flattenedReceiversArray = resultReceivers.flat();
-      const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
+  //     const flattenedReceiversArray = resultReceivers.flat();
+  //     const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
-      const flattenedGroupsArray = resultGroups.flat();
+  //     const flattenedGroupsArray = resultGroups.flat();
 
-      const { rows } = await pool.query(
-        `SELECT 
-                    id AS _id,
-                    username AS "userID",
-                    json_build_object(
-                      'firstName', first_name,
-                      'middleName', middle_name,
-                      'lastName', last_name
-                    ) AS fullname,
-                    COALESCE(profile, 'none') AS profile
-                  FROM user_account
-                  WHERE username = ANY($1);`,
-        [removeDuplicateReceivers]
-      );
+  //     const { rows } = await pool.query(
+  //       `SELECT
+  //                   id AS _id,
+  //                   username AS "userID",
+  //                   json_build_object(
+  //                     'firstName', first_name,
+  //                     'middleName', middle_name,
+  //                     'lastName', last_name
+  //                   ) AS fullname,
+  //                   COALESCE(profile, 'none') AS profile
+  //                 FROM user_account
+  //                 WHERE username = ANY($1);`,
+  //       [removeDuplicateReceivers]
+  //     );
 
-      const { rows: group_rows } = await pool.query(
-        `SELECT 
-                    json_build_object(
-                      '_id', cr.id,
-                      'serverID', cr.parent_id,
-                      'groupID', cr.realm_id,
-                      'profile', COALESCE(cr.profile, 'N/A'),
-                      'dateCreated', json_build_object(
-                        'date', '',
-                        'time', ''
-                      ),
-                      'createdBy', created_by.username,
-                      'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
-                      'privacy', cr.is_private,
-                      'groupName', cr.name
-                    ) AS groupdetails,
-                    
-                    CASE
-                      WHEN cr.parent_id IS NOT NULL THEN
-                        json_build_object(
-                          '_id', pr.id,
-                          'serverID', pr.realm_id,
-                          'serverName', pr.name,
-                          'profile', COALESCE(pr.profile, 'N/A'),
-                          'dateCreated', json_build_object(
-                            'date', '',
-                            'time', ''
-                          ),
-                          'members', (
-                            SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
-                            FROM community_member m
-                            JOIN user_account a ON m.account_id = a.id
-                            WHERE m.realm_id = pr.realm_id
-                          ),
-                          'createdBy', parent_created_by.username,
-                          'privacy', pr.is_private
-                        )
-                      ELSE NULL
-                    END AS serverdetails
-                  FROM community_realm cr
-                  LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-                  LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-                  LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
-                  WHERE cr.realm_id = ANY($1);
-                  `,
-        [flattenedGroupsArray]
-      );
+  //     const { rows: group_rows } = await pool.query(
+  //       `SELECT
+  //                   json_build_object(
+  //                     '_id', cr.id,
+  //                     'serverID', cr.parent_id,
+  //                     'groupID', cr.realm_id,
+  //                     'profile', COALESCE(cr.profile, 'N/A'),
+  //                     'dateCreated', json_build_object(
+  //                       'date', '',
+  //                       'time', ''
+  //                     ),
+  //                     'createdBy', created_by.username,
+  //                     'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+  //                     'privacy', cr.is_private,
+  //                     'groupName', cr.name
+  //                   ) AS groupdetails,
 
-      const finalResult = result.map((mp) => {
-        const details = group_rows.filter(
-          (flt) => flt.groupdetails.groupID === mp.conversationID
-        );
-        const final_details = details.length > 0 ? details[0] : null;
+  //                   CASE
+  //                     WHEN cr.parent_id IS NOT NULL THEN
+  //                       json_build_object(
+  //                         '_id', pr.id,
+  //                         'serverID', pr.realm_id,
+  //                         'serverName', pr.name,
+  //                         'profile', COALESCE(pr.profile, 'N/A'),
+  //                         'dateCreated', json_build_object(
+  //                           'date', '',
+  //                           'time', ''
+  //                         ),
+  //                         'members', (
+  //                           SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
+  //                           FROM community_member m
+  //                           JOIN user_account a ON m.account_id = a.id
+  //                           WHERE m.realm_id = pr.realm_id
+  //                         ),
+  //                         'createdBy', parent_created_by.username,
+  //                         'privacy', pr.is_private
+  //                       )
+  //                     ELSE NULL
+  //                   END AS serverdetails
+  //                 FROM community_realm cr
+  //                 LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
+  //                 LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
+  //                 LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+  //                 WHERE cr.realm_id = ANY($1);
+  //                 `,
+  //       [flattenedGroupsArray]
+  //     );
 
-        let final_mp = mp;
+  //     const finalResult = result.map((mp) => {
+  //       const details = group_rows.filter(
+  //         (flt) => flt.groupdetails.groupID === mp.conversationID
+  //       );
+  //       const final_details = details.length > 0 ? details[0] : null;
 
-        if (final_details) {
-          final_mp = removeNullServerDetails({
-            ...final_mp,
-            ...final_details,
-          });
-        }
+  //       let final_mp = mp;
 
-        return {
-          ...final_mp,
-          users: rows.filter((flt) => mp.receivers.includes(flt.userID)),
-        };
-      });
+  //       if (final_details) {
+  //         final_mp = removeNullServerDetails({
+  //           ...final_mp,
+  //           ...final_details,
+  //         });
+  //       }
 
-      const encodedResult = createJWTwExp({
-        conversationslist: finalResult,
-      });
+  //       return {
+  //         ...final_mp,
+  //         users: rows.filter((flt) => mp.receivers.includes(flt.userID)),
+  //       };
+  //     });
 
-      // if(sseWithUserID){
-      //     sseWithUserID.response.map((itr, i) => {
-      //         itr.res.sse(`messages_list`, {
-      //             status: true,
-      //             auth: true,
-      //             onseen: onseen,
-      //             message: details,
-      //             result: encodedResult
-      //         })
-      //     })
-      // }
+  //     const encodedResult = createJWTwExp({
+  //       conversationslist: finalResult,
+  //     });
 
-      publish(`events_${userID}`, "messages_list", {
-        status: true,
-        auth: true,
-        onseen: onseen,
-        message: details,
-        result: encodedResult,
-      });
-    })
-    .catch((err) => {
-      console.log(err);
-      //   if (sseWithUserID) {
-      //     sseWithUserID.response.map((itr, i) => {
-      //       itr.res.sse(`messages_list`, {
-      //         status: false,
-      //         auth: true,
-      //         message: "Error generating conversations list",
-      //       });
-      //     });
-      //   }
+  // if(sseWithUserID){
+  //     sseWithUserID.response.map((itr, i) => {
+  //         itr.res.sse(`messages_list`, {
+  //             status: true,
+  //             auth: true,
+  //             onseen: onseen,
+  //             message: details,
+  //             result: encodedResult
+  //         })
+  //     })
+  // }
 
-      publish(`events_${userID}`, "messages_list", {
-        status: false,
-        auth: true,
-        message: "Error generating conversations list",
-      });
-    });
+  publish(`events_${userID}`, "messages_list", {
+    status: true,
+    auth: true,
+    onseen: onseen,
+    message: details,
+    result: "",
+  });
+  // })
+  // .catch((err) => {
+  //   console.log(err);
+  //   //   if (sseWithUserID) {
+  //   //     sseWithUserID.response.map((itr, i) => {
+  //   //       itr.res.sse(`messages_list`, {
+  //   //         status: false,
+  //   //         auth: true,
+  //   //         message: "Error generating conversations list",
+  //   //       });
+  //   //     });
+  //   //   }
+
+  //   publish(`events_${userID}`, "messages_list", {
+  //     status: false,
+  //     auth: true,
+  //     message: "Error generating conversations list",
+  //   });
+  // });
 };
 
 const ReloadUserNotification = async (id, details) => {
