@@ -348,7 +348,60 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       : await uploadFirebaseMultiple(filereferences);
 
     if (decodeToken.content.isShared) {
-      finaluploadedreferences.forEach((mp) => {
+      finaluploadedreferences.forEach(async (mp) => {
+        const { rows: query_post_user } = await pool.query(
+          `SELECT 
+                ua.username 
+            FROM 
+                newsfeed_post np 
+            JOIN 
+                user_account ua  
+            ON 
+                np.user_id  = ua.id 
+            WHERE
+                np.post_id = $1
+          `,
+          [mp.reference]
+        );
+
+        if (query_post_user.length > 0) {
+          const post_user = query_post_user[0].username;
+
+          const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+          const notifParams = {
+            notificationID: awaitNotifID,
+            referenceID: postID,
+            referenceStatus: false,
+            toUserID: post_user,
+            fromUserID: userID,
+            content: {
+              headline: `Shared post`,
+              details: `@${userID} shared your post.`,
+            },
+            date: {
+              date: dateGetter(),
+              time: timeGetter(),
+            },
+            type: "shared_post_notification",
+            isRead: false,
+          };
+
+          const newNotif = new UserNotifications(notifParams);
+          newNotif
+            .save()
+            .then(() => {
+              publish(`events_${id}`, `notifications`, {
+                status: true,
+                auth: true,
+                message: `@${userID} shared your post.`,
+                result: "", //encodedResult
+              });
+            })
+            .catch((err) => {
+              console.log(err);
+            });
+        }
+
         saveFileRecordToDatabase(
           [mp.referenceID],
           mp.reference,
