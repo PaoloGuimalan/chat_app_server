@@ -390,7 +390,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           newNotif
             .save()
             .then(() => {
-              publish(`events_${id}`, `notifications`, {
+              publish(`events_${post_user}`, `notifications`, {
                 status: true,
                 auth: true,
                 message: `@${userID} shared your post.`,
