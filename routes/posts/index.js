@@ -524,6 +524,15 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       await client.query(insertPreviewCountsQuery, [postID]);
 
+      const insertActivityCount = `
+        INSERT INTO newsfeed_activitycount (count_id, count_type, count, post_id)
+        VALUES
+        (uuid_generate_v4(), "share", 0, $1),
+        (uuid_generate_v4(), "comment", 0, $1);
+      `;
+
+      await client.query(insertActivityCount, [postID]);
+
       await client.query("COMMIT");
 
       // Notify tagged users if any
