@@ -386,6 +386,14 @@ router.post("/createpost", jwtchecker, async (req, res) => {
             isRead: false,
           };
 
+          await pool.query(
+            `UPDATE newsfeed_activitycount
+            SET count = count + 1
+            WHERE post_id = $1 AND count_type = 'share'
+          `,
+            [mp.reference]
+          );
+
           const newNotif = new UserNotifications(notifParams);
           newNotif
             .save()
