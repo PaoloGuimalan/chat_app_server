@@ -389,7 +389,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           await pool.query(
             `UPDATE newsfeed_postscore
             SET shares_count = shares_count + 1
-            WHERE post_id = $1'
+            WHERE post_id = $1
           `,
             [mp.reference]
           );
