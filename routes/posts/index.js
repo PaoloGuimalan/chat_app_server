@@ -387,9 +387,9 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           };
 
           await pool.query(
-            `UPDATE newsfeed_activitycount
-            SET count = count + 1
-            WHERE post_id = $1 AND count_type = 'share'
+            `UPDATE newsfeed_postscore
+            SET shares_count = shares_count + 1
+            WHERE post_id = $1'
           `,
             [mp.reference]
           );
@@ -532,14 +532,71 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       await client.query(insertPreviewCountsQuery, [postID]);
 
-      const insertActivityCount = `
-        INSERT INTO newsfeed_activitycount (count_id, count_type, count, post_id)
+      // const insertActivityCount = `
+      //   INSERT INTO newsfeed_activitycount (count_id, count_type, count, post_id)
+      //   VALUES
+      //   (uuid_generate_v4(), 'share', 0, $1),
+      //   (uuid_generate_v4(), 'comment', 0, $1);
+      // `;
+
+      // await client.query(insertActivityCount, [postID]);
+
+      // POST SCORE TABLE SAVE
+
+      let content_t_m = 1.0;
+
+      if (filereferences.length > 0) {
+        filereferences.map((mp) => {
+          if (mp.referenceMediaType === "image") {
+            content_t_m += 1.2;
+          } else if (mp.referenceMediaType === "video") {
+            content_t_m += 1.5;
+          } else {
+            content_t_m += 1.0;
+          }
+        });
+      } else {
+        content_t_m += 0.0;
+      }
+
+      const final_content_score = content_t_m / (filereferences.length + 1);
+
+      const age_hours = currentTimestampInSeconds / (1000 * 60 * 60);
+      const affinity_score = 1.0;
+      const content_type_weight = final_content_score;
+      const recent_update_boost = 1.0;
+      const comments_count = 0;
+      const likes_count = 0;
+      const shares_count = 0;
+
+      const weighted_engagement =
+        comments_count * 3 + likes_count * 1 + shares_count * 5;
+
+      const decay_factor = (age_hours + 1) ** 1.2;
+      const ranking_score =
+        (weighted_engagement / decay_factor) *
+        affinity_score *
+        content_type_weight *
+        recent_update_boost;
+
+      const insertPostScore = `
+        INSERT INTO newsfeed_postscore (affinity_score, content_type_weight, recent_update_boost, likes_count, comments_count, shares_count, ranking_score, post_id)
         VALUES
-        (uuid_generate_v4(), 'share', 0, $1),
-        (uuid_generate_v4(), 'comment', 0, $1);
+        ($1,$2,$3,$4,$5,$6,$7,$8);
       `;
 
-      await client.query(insertActivityCount, [postID]);
+      await client.query(insertPostScore, [
+        affinity_score,
+        content_type_weight,
+        recent_update_boost,
+        likes_count,
+        comments_count,
+        shares_count,
+        ranking_score,
+        postID,
+      ]);
+
+      // END: POST SCORE TABLE SAVE
 
       await client.query("COMMIT");
 
