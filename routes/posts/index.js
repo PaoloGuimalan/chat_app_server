@@ -572,7 +572,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       const weighted_engagement =
         comments_count * 3 + likes_count * 1 + shares_count * 5;
 
-      const decay_factor = (age_hours + 1) ** 1.2;
+      const decay_factor = (age_hours + 1) ** 1.0;
       const ranking_score =
         (weighted_engagement / decay_factor) *
         affinity_score *
