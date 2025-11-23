@@ -569,8 +569,13 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       const likes_count = 0;
       const shares_count = 0;
 
+      const base_engagement = 1;
+
       const weighted_engagement =
-        comments_count * 3 + likes_count * 1 + shares_count * 5;
+        comments_count * 3 +
+        likes_count * 1 +
+        shares_count * 5 +
+        base_engagement;
 
       const decay_factor = (age_hours + 1) ** 0.5;
       const ranking_score =
