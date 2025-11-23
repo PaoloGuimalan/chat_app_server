@@ -548,15 +548,15 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       if (filereferences.length > 0) {
         filereferences.map((mp) => {
           if (mp.referenceMediaType === "image") {
-            content_t_m += 1.2;
+            content_t_m += 6.5;
           } else if (mp.referenceMediaType === "video") {
-            content_t_m += 1.5;
+            content_t_m += 8.5;
           } else {
-            content_t_m += 1.0;
+            content_t_m += 2.0;
           }
         });
       } else {
-        content_t_m += 0.5;
+        content_t_m += 4.0;
       }
 
       const final_content_score = content_t_m / (filereferences.length + 1);
@@ -572,7 +572,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       const weighted_engagement =
         comments_count * 3 + likes_count * 1 + shares_count * 5;
 
-      const decay_factor = (age_hours + 1) ** 1.0;
+      const decay_factor = (age_hours + 1) ** 0.5;
       const ranking_score =
         (weighted_engagement / decay_factor) *
         affinity_score *
