@@ -556,7 +556,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           }
         });
       } else {
-        content_t_m += 0.0;
+        content_t_m += 0.5;
       }
 
       const final_content_score = content_t_m / (filereferences.length + 1);
