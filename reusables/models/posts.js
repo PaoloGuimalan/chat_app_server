@@ -29,7 +29,7 @@ const checkPostIDExisting = async (currentID) => {
 };
 
 const updateRankingScore = async (postID, updateType, isDecrease) => {
-  const { rows: postDataRaw } = await client.query(
+  const { rows: postDataRaw } = await pool.query(
     "SELECT date_posted FROM newsfeed_post WHERE post_id = $1",
     [postID]
   );
@@ -103,8 +103,7 @@ const updateRankingScore = async (postID, updateType, isDecrease) => {
           ranking_score = EXCLUDED.ranking_score;
       `;
 
-      await client.query("BEGIN");
-      await client.query(insertPostScore, [
+      await pool.query(insertPostScore, [
         affinityScore,
         contentTypeWeight,
         recentUpdateBoost,
