@@ -368,24 +368,41 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         if (query_post_user.length > 0) {
           const post_user = query_post_user[0].username;
 
-          const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
-          const notifParams = {
-            notificationID: awaitNotifID,
-            referenceID: postID,
-            referenceStatus: false,
-            toUserID: post_user,
-            fromUserID: userID,
-            content: {
-              headline: `Shared post`,
-              details: `@${userID} shared your post.`,
-            },
-            date: {
-              date: dateGetter(),
-              time: timeGetter(),
-            },
-            type: "shared_post_notification",
-            isRead: false,
-          };
+          if (post_user !== userID) {
+            const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+            const notifParams = {
+              notificationID: awaitNotifID,
+              referenceID: postID,
+              referenceStatus: false,
+              toUserID: post_user,
+              fromUserID: userID,
+              content: {
+                headline: `Shared post`,
+                details: `@${userID} shared your post.`,
+              },
+              date: {
+                date: dateGetter(),
+                time: timeGetter(),
+              },
+              type: "shared_post_notification",
+              isRead: false,
+            };
+
+            const newNotif = new UserNotifications(notifParams);
+            newNotif
+              .save()
+              .then(() => {
+                publish(`events_${post_user}`, `notifications`, {
+                  status: true,
+                  auth: true,
+                  message: `@${userID} shared your post.`,
+                  result: "", //encodedResult
+                });
+              })
+              .catch((err) => {
+                console.log(err);
+              });
+          }
 
           await pool.query(
             `UPDATE newsfeed_postscore
@@ -396,21 +413,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           );
 
           updateRankingScore(mp.reference, "share", false);
-
-          const newNotif = new UserNotifications(notifParams);
-          newNotif
-            .save()
-            .then(() => {
-              publish(`events_${post_user}`, `notifications`, {
-                status: true,
-                auth: true,
-                message: `@${userID} shared your post.`,
-                result: "", //encodedResult
-              });
-            })
-            .catch((err) => {
-              console.log(err);
-            });
         }
 
         saveFileRecordToDatabase(
