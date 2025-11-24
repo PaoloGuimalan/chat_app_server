@@ -16,6 +16,7 @@ const UserNotifications = require("../../schema/users/notifications");
 const {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
+  updateRankingScore,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
 const {
@@ -393,6 +394,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           `,
             [mp.reference]
           );
+
+          updateRankingScore(mp.reference, "share", false);
 
           const newNotif = new UserNotifications(notifParams);
           newNotif
