@@ -34,7 +34,9 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         cr.profile,
         cr.created_by_id,
         cr.is_private,
-        cr.type
+        cr.type,
+        cr.cover_photo,
+        cr.description
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.account_id != $1
@@ -61,6 +63,8 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         cr.created_by_id,
         cr.is_private,
         cr.type,
+        cr.cover_photo,
+        cr.description,
         (
         SELECT jsonb_agg(jsonb_build_object('userID', ua.username))
         FROM community_member cm2

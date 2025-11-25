@@ -202,6 +202,8 @@ function transformServersData(serversArray, preview) {
       members: preview ? [] : input.members.map((m) => ({ userID: m.userID })),
       createdBy: input.created_by_id,
       privacy: input.is_private,
+      cover_photo: input.cover_photo,
+      description: input.description,
     };
   });
 }
