@@ -21,6 +21,32 @@ const { transformServersData } = require("../../reusables/hooks/transformers");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+router.get("/publicserver", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const id = req.params.id;
+
+  const { rows } = await pool.query(
+    `
+    SELECT 
+        cr.id,
+        cr.realm_id,
+        cr.name,
+        cr.profile,
+        cr.created_by_id,
+        cr.is_private,
+        cr.type
+    FROM community_realm cr
+    JOIN community_member cm ON cr.realm_id = cm.realm_id
+    WHERE cm.account_id != $1
+        AND cr.type = 'server' AND cr.is_private = false
+    GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
+    `,
+    [id]
+  );
+
+  res.send({ status: true, result: transformServersData(rows, true) });
+});
+
 router.get("/initserverlist", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;

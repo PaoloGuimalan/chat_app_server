@@ -187,7 +187,7 @@ function formatToDesiredStructure(input) {
   return data;
 }
 
-function transformServersData(serversArray) {
+function transformServersData(serversArray, preview) {
   return serversArray.map((input) => {
     // const now = new Date();
     return {
@@ -199,7 +199,7 @@ function transformServersData(serversArray) {
       serverID: input.realm_id,
       serverName: input.name,
       profile: input.profile == "N/A" ? "" : input.profile,
-      members: input.members.map((m) => ({ userID: m.userID })),
+      members: preview ? [] : input.members.map((m) => ({ userID: m.userID })),
       createdBy: input.created_by_id,
       privacy: input.is_private,
     };
