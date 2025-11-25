@@ -21,7 +21,7 @@ const { transformServersData } = require("../../reusables/hooks/transformers");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-router.get("/publicserver", jwtchecker, async (req, res) => {
+router.get("/publicservers", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
 
