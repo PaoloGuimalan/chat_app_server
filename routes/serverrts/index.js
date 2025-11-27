@@ -36,7 +36,8 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         cr.is_private,
         cr.type,
         cr.cover_photo,
-        cr.description
+        cr.description,
+        COUNT(cm.account_id) AS member_count
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.account_id != $1
