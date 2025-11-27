@@ -23,6 +23,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 router.get("/publicservers", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const account_id = req.params.id;
   const id = req.params.id;
 
   const { rows } = await pool.query(
@@ -37,14 +38,21 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         cr.type,
         cr.cover_photo,
         cr.description,
-        COUNT(cm.account_id) AS member_count
+        COUNT(cm.account_id) AS member_count,
+        CASE 
+            WHEN EXISTS (
+                SELECT 1 FROM community_member cm2 
+                WHERE cm2.realm_id = cr.realm_id AND cm2.account_id = $2
+            ) THEN true 
+            ELSE false 
+        END AS is_joined
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.account_id != $1
         AND cr.type = 'server' AND cr.is_private = false
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [id]
+    [id, account_id]
   );
 
   res.send({ status: true, result: transformServersData(rows, true) });

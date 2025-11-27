@@ -201,6 +201,7 @@ function transformServersData(serversArray, preview) {
       profile: input.profile == "N/A" ? "" : input.profile,
       members: preview ? [] : input.members.map((m) => ({ userID: m.userID })),
       member_count: parseInt(input.member_count) ?? 0,
+      is_joined: input.is_joined,
       createdBy: input.created_by_id,
       privacy: input.is_private,
       cover_photo: input.cover_photo,
