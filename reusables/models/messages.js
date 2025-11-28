@@ -240,7 +240,9 @@ const AddNewMemberToChannels = async (
                   conversationID,
                   username,
                   receivers,
-                  `${username} added ${mp.userID}`,
+                  username === mp.userID
+                    ? `${mp.userID} joined`
+                    : `${username} added ${mp.userID}`,
                   "server"
                 );
               })
