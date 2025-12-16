@@ -591,36 +591,49 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
     {
       $limit: parseInt(range),
     },
-    {
-      $lookup: {
-        from: "useraccount",
-        localField: "fromUserID",
-        foreignField: "userID",
-        as: "fromUser",
-      },
-    },
-    {
-      $unwind: {
-        path: "$fromUser",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $project: {
-        "fromUser._id": 0,
-        "fromUser.birthdate": 0,
-        "fromUser.gender": 0,
-        "fromUser.email": 0,
-        "fromUser.password": 0,
-        "fromUser.dateCreated": 0,
-      },
-    },
+    // {
+    //   $lookup: {
+    //     from: "useraccount",
+    //     localField: "fromUserID",
+    //     foreignField: "userID",
+    //     as: "fromUser",
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: "$fromUser",
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
+    // {
+    //   $project: {
+    //     "fromUser._id": 0,
+    //     "fromUser.birthdate": 0,
+    //     "fromUser.gender": 0,
+    //     "fromUser.email": 0,
+    //     "fromUser.password": 0,
+    //     "fromUser.dateCreated": 0,
+    //   },
+    // },
   ])
-    .then((result) => {
+    .then(async (result) => {
       // console.log(result)
+      const userIDs = result.map((mp) => mp.fromUserID);
+      const uniqueIDs = [...new Set(userIDs)];
+
+      const { rows } = await pool.query(
+        "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE username = ANY($1);",
+        [uniqueIDs]
+      );
+
+      const finalNotification = result.map((mp) => ({
+        ...mp,
+        fromUser: rows.filter((flt) => flt.username === mp.fromUserID).length > 0 ? rows.filter((flt) => flt.username === mp.fromUserID)[0] : null
+      }));
+
       var encodedResult = jwt.sign(
         {
-          notifications: result,
+          notifications: finalNotification,
           totalunread: UnreadNotificationsTotal,
         },
         JWT_SECRET,
