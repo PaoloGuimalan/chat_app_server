@@ -62,6 +62,7 @@ function transformUser(input) {
     _id: input.id,
     userID: input.username,
     profile: input.profile === "N/A" ? "none" : input.profile,
+    coverphoto: input.coverphoto,
     gender: capitalizeFirstLetter(input.gender),
     email: input.email,
     password: null,
