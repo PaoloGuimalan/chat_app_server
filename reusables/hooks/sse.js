@@ -746,6 +746,17 @@ const BroadcastIsTypingStatus = (receiver, data) => {
   });
 };
 
+const BroadcastCoordinates = (receiver, data) => {
+  var encodedResult = createJWTwExp(data);
+
+  publish(`events_${receiver}`, "coordinates_broadcast", {
+    status: true,
+    auth: true,
+    message: "coordinates_broadcast",
+    result: encodedResult,
+  });
+};
+
 const ReachCallRecepients = (rcp, decodedToken) => {
   const sseWithUserID = sseNotificationsWaiters[rcp];
   const message =
@@ -829,7 +840,7 @@ const clearASingleSession = (tokenfromsse, sessionstamp) => {
 
   if (ifexistingsession) {
     const minusmutatesession = ifexistingsession.response.filter(
-      (flt) => flt.sessionstamp != sessionstamp
+      (flt) => flt.sessionstamp != sessionstamp,
     );
 
     if (minusmutatesession.length > 0) {
@@ -860,4 +871,5 @@ module.exports = {
   UpdateContactswSessionStatus,
   clearASingleSession,
   clearAllSession,
+  BroadcastCoordinates,
 };

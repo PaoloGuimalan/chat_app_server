@@ -78,6 +78,7 @@ const {
   ReachCallRecepients,
   UpdateContactswSessionStatus,
   CallRejectNotif,
+  BroadcastCoordinates,
 } = require("../../reusables/hooks/sse");
 const { storage } = require("../../reusables/hooks/firebaseupload");
 const {
@@ -190,7 +191,7 @@ router.get("/search/:searchdata", jwtchecker, async (req, res) => {
           JWT_SECRET,
           {
             expiresIn: 60 * 60 * 24 * 7,
-          }
+          },
         );
 
         res.send({ status: true, result: encodedResult });
@@ -286,7 +287,7 @@ router.get("/search/:searchdata", jwtchecker, async (req, res) => {
           JWT_SECRET,
           {
             expiresIn: 60 * 60 * 24 * 7,
-          }
+          },
         );
 
         res.send({ status: true, result: encodedResult });
@@ -320,7 +321,7 @@ const sendNotification = async (params, actionlog) => {
         {
           sendToDetails: sendToDetails,
           actionlog: actionlog,
-        }
+        },
       );
 
       // const events = [`events_${sendToUser}`, `events_${sendFromUser}`];
@@ -383,7 +384,7 @@ const checkContactID = async (cnctID) => {
 const checkGroupID = async (cnctID) => {
   const { rows } = await pool.query(
     `SELECT realm_id FROM community_realm WHERE realm_id = $1`,
-    [cnctID]
+    [cnctID],
   );
 
   if (rows.length > 0) {
@@ -536,7 +537,7 @@ router.post("/readnotifications", jwtchecker, async (req, res) => {
   if (userID) {
     await UserNotifications.updateMany(
       { toUserID: userID, isRead: false },
-      { isRead: true }
+      { isRead: true },
     )
       .then(async (result) => {
         ReloadUserNotification(userID, "Notifications has been read");
@@ -623,12 +624,15 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
 
       const { rows } = await pool.query(
         "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE username = ANY($1);",
-        [uniqueIDs]
+        [uniqueIDs],
       );
 
       const finalNotification = result.map((mp) => ({
         ...mp,
-        fromUser: rows.filter((flt) => flt.username === mp.fromUserID).length > 0 ? rows.filter((flt) => flt.username === mp.fromUserID)[0] : null
+        fromUser:
+          rows.filter((flt) => flt.username === mp.fromUserID).length > 0
+            ? rows.filter((flt) => flt.username === mp.fromUserID)[0]
+            : null,
       }));
 
       var encodedResult = jwt.sign(
@@ -639,7 +643,7 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
         JWT_SECRET,
         {
           expiresIn: 60 * 60 * 24 * 7,
-        }
+        },
       );
 
       res.send({ status: true, result: encodedResult });
@@ -658,11 +662,11 @@ const updateNotifStatus = async (
   fromUserID,
   notifHeadline,
   notifContent,
-  actionlog
+  actionlog,
 ) => {
   await UserNotifications.updateOne(
     { notificationID: notificationID },
-    { referenceStatus: true }
+    { referenceStatus: true },
   )
     .then(async (result) => {
       const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
@@ -721,7 +725,7 @@ router.post("/declineContactRequest", jwtchecker, async (req, res) => {
         fromUserID,
         notifHeadline,
         notifContent,
-        "You declined a contact request"
+        "You declined a contact request",
       );
     }
     // })
@@ -762,7 +766,7 @@ router.post("/acceptContactRequest", jwtchecker, async (req, res) => {
       fromUserID,
       notifHeadline,
       notifContent,
-      "You accepted a contact request"
+      "You accepted a contact request",
     );
     // })
     // .catch((err) => {
@@ -930,7 +934,7 @@ router.get("/getContacts", jwtchecker, async (req, res) => {
         JWT_SECRET,
         {
           expiresIn: 60 * 60 * 24 * 7,
-        }
+        },
       );
 
       res.send({ status: true, result: encodedResult });
@@ -1174,7 +1178,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
               COALESCE(profile, 'none') AS profile
             FROM user_account
             WHERE username = ANY($1);`,
-        [removeDuplicateReceivers]
+        [removeDuplicateReceivers],
       );
 
       const { rows: group_rows } = await pool.query(
@@ -1222,12 +1226,12 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
             LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
             WHERE cr.realm_id = ANY($1);
             `,
-        [flattenedGroupsArray]
+        [flattenedGroupsArray],
       );
 
       const finalResult = result.map((mp) => {
         const details = group_rows.filter(
-          (flt) => flt.groupdetails.groupID === mp.conversationID
+          (flt) => flt.groupdetails.groupID === mp.conversationID,
         );
         const final_details = details.length > 0 ? details[0] : null;
 
@@ -1254,7 +1258,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         JWT_SECRET,
         {
           expiresIn: 60 * 60 * 24 * 7,
-        }
+        },
       );
 
       // res.send({ status: true, message: "OK", result: encodedResult });
@@ -1277,9 +1281,8 @@ router.get(
     const conversationID = req.params.conversationID;
     const page = req.headers["page"];
     const range = req.headers["range"];
-    const totalmessages = await GetAllMessageCountInAConversation(
-      conversationID
-    );
+    const totalmessages =
+      await GetAllMessageCountInAConversation(conversationID);
 
     await UserMessage.aggregate([
       //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
@@ -1354,7 +1357,7 @@ router.get(
               is_verified AS "isVerified"
             FROM user_account
             WHERE username = ANY($1);`,
-          [removeDuplicateReactors]
+          [removeDuplicateReactors],
         );
 
         const mutatedMessagesArray = message.map((mp) => {
@@ -1365,7 +1368,7 @@ router.get(
             if (reactions.length > 0) {
               messageDocument.reactionsWithInfo = reactions.map((mp) => {
                 const returnedRow = rows.filter(
-                  (flt) => flt.userID === mp.userID
+                  (flt) => flt.userID === mp.userID,
                 );
 
                 if (returnedRow.length > 0) {
@@ -1388,7 +1391,7 @@ router.get(
           JWT_SECRET,
           {
             expiresIn: 60 * 60 * 24 * 7,
-          }
+          },
         );
 
         res.send({
@@ -1401,7 +1404,7 @@ router.get(
         console.log(err);
         res.send({ status: false, message: "Error generating conversation" });
       });
-  }
+  },
 );
 
 const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
@@ -1540,7 +1543,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     const { rows } = await client.query(
       `SELECT id from user_account WHERE username = ANY($1)`,
-      [userReceivers.map((mp) => mp.userID)]
+      [userReceivers.map((mp) => mp.userID)],
     );
 
     const insertValues = [];
@@ -1549,7 +1552,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     rows.forEach(({ id: accountId }) => {
       insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
@@ -1576,7 +1579,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         true,
         privacy,
         false,
-      ]
+      ],
     );
 
     await client.query(
@@ -1584,7 +1587,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
         VALUES ${insertValues.join(", ")}
       `,
-      params
+      params,
     );
 
     await client.query("COMMIT");
@@ -1598,7 +1601,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       userID,
       allReceivers,
       "created the group chat",
-      "group"
+      "group",
     );
 
     res.send({ status: true, message: `You created a Group Chat` });
@@ -1635,7 +1638,7 @@ const creategroupchatreusable = async (
   userIDpass,
   tokenpass,
   privacyprop,
-  type
+  type,
 ) => {
   const userID = userIDpass;
   const token = tokenpass;
@@ -1710,7 +1713,7 @@ const creategroupchatreusable = async (
 
     const { rows } = await client.query(
       `SELECT id from user_account WHERE username = ANY($1)`,
-      [userReceivers.map((mp) => mp.userID)]
+      [userReceivers.map((mp) => mp.userID)],
     );
 
     const insertValues = [];
@@ -1719,7 +1722,7 @@ const creategroupchatreusable = async (
 
     rows.forEach(({ id: accountId }) => {
       insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
@@ -1746,7 +1749,7 @@ const creategroupchatreusable = async (
         true,
         privacy,
         false,
-      ]
+      ],
     );
 
     await client.query(
@@ -1754,7 +1757,7 @@ const creategroupchatreusable = async (
         INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
         VALUES ${insertValues.join(", ")}
       `,
-      params
+      params,
     );
 
     await client.query("COMMIT");
@@ -1769,7 +1772,7 @@ const creategroupchatreusable = async (
         userID,
         allReceivers,
         "created the group chat",
-        serverID ? "server" : "group"
+        serverID ? "server" : "group",
       );
     }
   } catch (ex) {
@@ -1800,7 +1803,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         {
           otherUsers: modifiedservermembers,
         },
-        JWT_SECRET
+        JWT_SECRET,
       );
       creategroupchatreusable(
         id,
@@ -1810,7 +1813,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         channeltoken,
         privacy,
-        "group"
+        "group",
       );
     } else {
       const modifiedservermemberspub = serverMembers
@@ -1820,7 +1823,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         {
           otherUsers: modifiedservermemberspub,
         },
-        JWT_SECRET
+        JWT_SECRET,
       );
       // console.log(privacy, modifiedservermemberspub, jwt.verify(channeltokenpub, JWT_SECRET))
       creategroupchatreusable(
@@ -1831,7 +1834,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         channeltokenpub,
         privacy,
-        "group"
+        "group",
       );
     }
 
@@ -1887,7 +1890,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       userID,
       token,
       false,
-      "server"
+      "server",
     );
 
     defaultchannellist.map((mp) => {
@@ -1899,7 +1902,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
         userID,
         token,
         false,
-        "group"
+        "group",
       );
     });
     res.send({ status: true, message: `You created a Group Chat` });
@@ -1945,7 +1948,7 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
         $push: {
           seeners: userID,
         },
-      }
+      },
     )
       .then(async (result) => {
         // console.log(result.modifiedCount)
@@ -2004,7 +2007,7 @@ const saveFileRecordToDatabase = async (
   fileData,
   action,
   fileType,
-  fileOrigin
+  fileOrigin,
 ) => {
   const payload = {
     fileID: await checkExistingFileID(`FILE_${makeID(20)}`),
@@ -2037,7 +2040,7 @@ const uploadFirebase = async (
   receivers,
   isReply,
   replyingTo,
-  conversationType
+  conversationType,
 ) => {
   var messageID = await checkExistingMessageID(makeID(30));
 
@@ -2106,7 +2109,7 @@ const uploadFirebase = async (
         isReply,
         replyingTo,
         mp.type,
-        conversationType
+        conversationType,
       );
     });
 };
@@ -2121,7 +2124,7 @@ const saveFileMessage = async (
   isReply,
   replyingTo,
   messageType,
-  conversationType
+  conversationType,
 ) => {
   const seeners = [userID]; //Array
   const messageDate = {
@@ -2156,7 +2159,7 @@ const saveFileMessage = async (
         content,
         "message",
         messageType,
-        "firebase"
+        "firebase",
       );
       receivers.map((rcvs, i) => {
         MessagesTrigger(rcvs, userID, false);
@@ -2208,7 +2211,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
         receivers,
         isReply,
         replyingTo,
-        conversationType
+        conversationType,
       );
     });
 
@@ -2439,7 +2442,7 @@ const checkSessionID = async (currentID) => {
             .split("pm")
             .join("_")
             .split("/")
-            .join("_")
+            .join("_"),
         );
       } else {
         return currentID;
@@ -2461,7 +2464,7 @@ const setUserSession = async (userID, status, resolve) => {
       .split("pm")
       .join("_")
       .split("/")
-      .join("_")
+      .join("_"),
   );
   const newSessionPayload = {
     sessionID: newSessionID,
@@ -2500,6 +2503,25 @@ const setUserSession = async (userID, status, resolve) => {
       console.log(err);
     });
 };
+
+router.post("/coordinatesbroadcast", jwtchecker, async (req, res) => {
+  const coordinates = req.body.coordinates;
+  const receivers = req.body.receivers;
+  const userID = req.params.userID;
+
+  try {
+    receivers.map((mp) => {
+      if (mp !== userID) {
+        BroadcastCoordinates(mp, coordinates);
+      }
+    });
+
+    res.send({ status: true, message: "OK" });
+  } catch (ex) {
+    console.log(ex);
+    res.send({ status: false, message: "Error decoding token" });
+  }
+});
 
 router.get(
   "/sseNotifications/:token",
@@ -2601,7 +2623,7 @@ router.get(
         // );
       });
     });
-  }
+  },
 );
 
 router.get("/activecontacts", jwtchecker, async (req, res) => {
