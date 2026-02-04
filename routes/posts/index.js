@@ -336,6 +336,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const filereferencesraw = decodeToken.content.references;
+    const content_type = decodeToken.type.contentType;
     const filereferences = filereferencesraw.map((mp) => ({
       name: mp.name,
       caption: mp.caption,
@@ -362,7 +363,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
             WHERE
                 np.post_id = $1
           `,
-          [mp.reference]
+          [mp.reference],
         );
 
         if (query_post_user.length > 0) {
@@ -409,7 +410,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
             SET shares_count = shares_count + 1
             WHERE post_id = $1
           `,
-            [mp.reference]
+            [mp.reference],
           );
 
           updateRankingScore(mp.reference, "share", false);
@@ -420,7 +421,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           mp.reference,
           "post",
           mp.referenceMediaType,
-          "firebase"
+          "firebase",
         );
       });
     }
@@ -461,6 +462,26 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
+        if (content_type === "profile") {
+          await pool.query(
+            `UPDATE user_account
+            SET profile = $1
+            WHERE username = $2
+          `,
+            [finaluploadedreferences[0].reference, userID],
+          );
+        }
+
+        if (content_type === "cover_photo") {
+          await pool.query(
+            `UPDATE user_account
+            SET coverphoto = $1
+            WHERE username = $2
+          `,
+            [finaluploadedreferences[0].reference, userID],
+          );
+        }
+
         const refValues = [];
         const refRowsSql = finaluploadedreferences
           .map((ref, i) => {
@@ -470,9 +491,10 @@ router.post("/createpost", jwtchecker, async (req, res) => {
               ref.reference,
               ref.caption || null,
               ref.referenceMediaType,
-              ref.name || null
+              ref.name || null,
             );
             const baseIndex = i * 6;
+
             return `($${baseIndex + 1}, $${baseIndex + 2}, $${
               baseIndex + 3
             }, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
