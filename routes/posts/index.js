@@ -660,7 +660,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
                 gen_random_uuid(), $1, $2, 'shared', $3, NOW()
             )
         `,
-            [response_post_id, id, mp.reference],
+            [mp.reference, id, response_post_id],
           );
         }
       }
