@@ -474,7 +474,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("BEGIN");
 
       // Insert Post
-      await client.query(postInsertQuery, postValues);
+      const postResult = await client.query(postInsertQuery, postValues);
 
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
@@ -650,6 +650,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       if (decodeToken.content.isShared) {
         finaluploadedreferences.forEach(async (mp) => {
+          const response_post_id = postResult.rows[0].post_id;
+
           await pool.query(
             `
           INSERT INTO newsfeed_engagementlog (
@@ -663,7 +665,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
               NOW()
           )
         `,
-            [postID, id, mp.reference],
+            [response_post_id, id, mp.reference],
           );
         });
       }
