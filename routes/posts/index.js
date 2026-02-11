@@ -366,6 +366,22 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           [mp.reference],
         );
 
+        await pool.query(
+          `
+          INSERT INTO newsfeed_engagementlog (
+              log_id, post_id, user_id, action, reference_id, created_at
+          ) VALUES (
+              gen_random_uuid(),
+              $1, 
+              $2,
+              'shared',
+              $3, 
+              NOW()
+          )
+      `,
+          [postID, id, mp.reference],
+        );
+
         if (query_post_user.length > 0) {
           const post_user = query_post_user[0].username;
 
