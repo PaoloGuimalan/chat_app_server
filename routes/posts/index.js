@@ -649,20 +649,17 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("COMMIT");
 
       if (decodeToken.content.isShared) {
-        for (const mp of finaluploadedreferences) {
-          const response_post_id = postResult.rows[0].post_id;
-
-          await pool.query(
-            `
+        const reference_post_id = finaluploadedreferences[0].reference;
+        await pool.query(
+          `
             INSERT INTO newsfeed_engagementlog (
                 log_id, post_id, user_id, action, reference_id, created_at
             ) VALUES (
                 gen_random_uuid(), $1, $2, 'shared', $3, NOW()
             )
-        `,
-            [mp.reference, id, response_post_id],
-          );
-        }
+          `,
+          [postID, id, reference_post_id],
+        );
       }
 
       await client.query("COMMIT");
