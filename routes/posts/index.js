@@ -476,26 +476,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       // Insert Post
       await client.query(postInsertQuery, postValues);
 
-      if (decodeToken.content.isShared) {
-        finaluploadedreferences.forEach(async (mp) => {
-          await pool.query(
-            `
-          INSERT INTO newsfeed_engagementlog (
-              log_id, post_id, user_id, action, reference_id, created_at
-          ) VALUES (
-              gen_random_uuid(),
-              $1, 
-              $2,
-              'shared',
-              $3, 
-              NOW()
-          )
-        `,
-            [postID, id, mp.reference],
-          );
-        });
-      }
-
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
         if (content_type === "profile") {
@@ -665,6 +645,28 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       ]);
 
       // END: POST SCORE TABLE SAVE
+
+      await client.query("COMMIT");
+
+      if (decodeToken.content.isShared) {
+        finaluploadedreferences.forEach(async (mp) => {
+          await pool.query(
+            `
+          INSERT INTO newsfeed_engagementlog (
+              log_id, post_id, user_id, action, reference_id, created_at
+          ) VALUES (
+              gen_random_uuid(),
+              $1, 
+              $2,
+              'shared',
+              $3, 
+              NOW()
+          )
+        `,
+            [postID, id, mp.reference],
+          );
+        });
+      }
 
       await client.query("COMMIT");
 
