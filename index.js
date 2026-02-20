@@ -24,6 +24,7 @@ const { initSocketIO } = require("./socketIO/socketIO");
 const { consumeMessages } = require("./reusables/rabbitmq/consumer");
 const { connect_redis } = require("./reusables/redis/pubsub");
 const { getPool } = require("./reusables/database/postgres");
+const rateLimit = require("express-rate-limit");
 
 const connectMongo = async () => {
   return mongoose.connect(MongooseConnection.url, MongooseConnection.params);
@@ -33,20 +34,53 @@ app.use(
   bodyParser.urlencoded({
     limit: "200mb",
     extended: false,
-  })
+  }),
 );
 app.use(
   bodyParser.json({
     limit: "200mb",
-  })
+  }),
 );
 app.use(express.json());
+// app.use(
+//   cors({
+//     origin: "*",
+//     credentials: true,
+//     optionsSuccessStatus: 200,
+//   })
+// );
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // Limit each IP to 100 requests per window
+  message: "Too many requests from this IP, please try again later.",
+});
+app.use(limiter);
+
+const allowedOrigins = [
+  /^https:\/\/([a-zA-Z0-9-]+\.)*chatterloop\.app$/,
+  /^https:\/\/([a-zA-Z0-9-]+\.)*neonsystems\.net$/,
+  /^http:\/\/localhost:5173$/,
+];
+
 app.use(
   cors({
-    origin: "*",
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or Postman)
+      if (!origin) return callback(null, true);
+
+      const isAllowed = allowedOrigins.some((regex) => regex.test(origin));
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        // This blocks malicious sites like google.com or attacker.com
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
     optionsSuccessStatus: 200,
-  })
+  }),
 );
 
 app.use("/auth", Auth);
