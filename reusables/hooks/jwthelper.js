@@ -6,6 +6,12 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const jwtchecker = (req, res, next) => {
   const token = req.headers["x-access-token"];
+  const origin = req.headers["origin"];
+
+  if (!origin) {
+    res.status(403).send({ status: false, message: "Request not allowed!" });
+    return;
+  }
 
   if (token) {
     jwt.verify(token, JWT_SECRET, async (err, decode) => {
@@ -16,7 +22,7 @@ const jwtchecker = (req, res, next) => {
         const id = decode.userID;
         const { rows } = await pool.query(
           "SELECT id, username FROM user_account WHERE username = $1",
-          [id]
+          [id],
         );
 
         if (rows.length > 0) {
@@ -54,6 +60,13 @@ const jwtssechecker = (req, res, next) => {
     const token = decodedToken.token;
     const type = decodedToken.type;
 
+    const origin = req.headers["origin"];
+
+    if (!origin) {
+      res.status(403).send({ status: false, message: "Request not allowed!" });
+      return;
+    }
+
     if (token) {
       jwt.verify(token, JWT_SECRET, async (err, decode) => {
         if (err) {
@@ -62,7 +75,7 @@ const jwtssechecker = (req, res, next) => {
           const id = decode.userID;
           const { rows } = await pool.query(
             "SELECT id, username FROM user_account WHERE username = $1",
-            [id]
+            [id],
           );
 
           if (rows.length > 0) {
@@ -122,7 +135,7 @@ const createJWT = (payload) => {
     {
       data: payload,
     },
-    JWT_SECRET
+    JWT_SECRET,
   );
 
   return encodedResult;
