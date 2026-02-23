@@ -325,6 +325,47 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
 //   }
 // });
 
+router.post("/upload", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const id = req.params.id;
+
+  try {
+    const body = req.body;
+    const filereferencesraw = body.references;
+    const filereferences = filereferencesraw.map((mp) => ({
+      name: mp.name,
+      caption: mp.caption,
+      reference: mp.reference,
+      referenceMediaType: mp.referenceMediaType,
+      referenceID: id,
+    }));
+
+    const finaluploadedreferences =
+      await uploadFirebaseMultiple(filereferences);
+
+    const savedFiles = await Promise.all(
+      finaluploadedreferences.map((mp) =>
+        saveFileRecordToDatabase(
+          [mp.referenceID, `NTR_ATTCH_${makeID(20)}`],
+          mp.reference,
+          "post",
+          mp.referenceMediaType,
+          "firebase",
+        ),
+      ),
+    );
+
+    res.send({ status: true, result: savedFiles });
+  } catch (ex) {
+    console.error(ex);
+    res.status(400).send({
+      status: false,
+      message: "Error processing request",
+      details: ex.message,
+    });
+  }
+});
+
 router.post("/createpost", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
@@ -662,7 +703,11 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     }
   } catch (ex) {
     console.error(ex);
-    res.status(400).send({ status: false, message: "Cannot decode token" });
+    res.status(400).send({
+      status: false,
+      message: "Error processing request",
+      details: ex.message,
+    });
   }
 });
 
