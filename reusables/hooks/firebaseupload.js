@@ -53,13 +53,11 @@ const uploadFirebase = async (mp) => {
     !mp.referenceMediaType.includes("image")
       ? ""
       : `.${fileType}`;
-  let tosplitname = mp.name ? mp.name : "";
+  let tosplitname = ""; // mp.name ? mp.name :
   let split = tosplitname.split(".");
   let splicedStr = split.slice(0, split.length - 1).join(".");
-  var fileNameChecker = mp.name ? `${splicedStr}###` : "IMG_";
-  var fileNameCheckerEncoded = mp.name
-    ? `${encodeURIComponent(splicedStr)}###`
-    : "IMG_";
+  var fileNameChecker = "IMG_"; // mp.name ? `${splicedStr}###` :
+  var fileNameCheckerEncoded = "IMG_"; //mp.name ? `${encodeURIComponent(splicedStr)}###` :
   var fileIDRandomStamp = makeid(20);
   var fileID = `${fileNameChecker}${fileIDRandomStamp}${fileIDTypeChecker}`;
   var fileIDEncoded = `${fileNameCheckerEncoded}${fileIDRandomStamp}${fileIDTypeChecker}`;
@@ -141,9 +139,13 @@ const saveFileRecordToDatabase = async (
   action,
   fileType,
   fileOrigin,
+  fileName = null,
 ) => {
+  const pendingFileID = await checkExistingFileID(`FILE_${makeid(20)}`);
+
   const payload = {
-    fileID: await checkExistingFileID(`FILE_${makeid(20)}`),
+    fileID: pendingFileID,
+    fileName: fileName ? fileName : pendingFileID,
     foreignID: foreignID,
     fileDetails: {
       data: fileData,

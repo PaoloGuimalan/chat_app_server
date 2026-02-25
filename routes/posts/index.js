@@ -351,6 +351,7 @@ router.post("/upload", jwtchecker, async (req, res) => {
           "post",
           mp.referenceMediaType,
           "firebase",
+          mp.name,
         ),
       ),
     );
