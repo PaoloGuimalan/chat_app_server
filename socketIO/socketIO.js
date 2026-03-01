@@ -8,7 +8,7 @@ var io;
 const initSocketIO = (server) => {
   io = new socketIO.Server(server, {
     cors: {
-      origin: ["http://localhost:5173", "https://chatterloop.app/"],
+      origin: ["http://localhost:5173", "https://chatterloop.app"],
       methods: "*",
     },
   });
