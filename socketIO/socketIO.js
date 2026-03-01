@@ -1,305 +1,379 @@
 const socketIO = require("socket.io");
+const { BroadcastCoordinates } = require("../reusables/hooks/sse");
 
 var callCollections = Object.create(null);
 
 var io;
 
 const initSocketIO = (server) => {
-    io = new socketIO.Server(server, {
-        cors:{
-            origin: "*",
-            methods: "*"
+  io = new socketIO.Server(server, {
+    cors: {
+      origin: ["http://localhost:5173", "https://chatterloop.app/"],
+      methods: "*",
+    },
+  });
+
+  const callSocket = io.of("/call");
+  const mapSocket = io.of("/map");
+
+  callSocket.on("connection", (socket) => {
+    var socketID = socket.id;
+    var conversationIDGlobal = [];
+
+    socket.on("init", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
+
+      conversationIDGlobal.push(conversationID);
+
+      if (currentCall) {
+        var newCallMembersSet = [
+          ...currentCall.users,
+          {
+            socketID: socketID,
+            userID: data.userID,
+            offererUserName: data.userID,
+            offer: null,
+            offerIceCandidates: [],
+            answererUserName: null,
+            answer: null,
+            answererIceCandidates: [],
+          },
+        ];
+
+        callCollections[conversationID] = {
+          users: newCallMembersSet,
+        };
+
+        var usersInCallSocketMemory = callCollections[conversationID].users.map(
+          (mp) => mp.userID,
+        );
+        callSocket
+          .to(socketID)
+          .emit("caller_connected", usersInCallSocketMemory);
+
+        newCallMembersSet
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            var usersInCallSocketMemory = callCollections[
+              conversationID
+            ].users.map((mp) => mp.userID);
+            callSocket
+              .to(mp.socketID)
+              .emit("newCaller", usersInCallSocketMemory);
+          });
+      } else {
+        var newCallMembersSet = [
+          {
+            socketID: socketID,
+            userID: data.userID,
+            offererUserName: data.userID,
+            offer: null,
+            offerIceCandidates: [],
+            answererUserName: null,
+            answer: null,
+            answererIceCandidates: [],
+          },
+        ];
+
+        callCollections[conversationID] = {
+          users: newCallMembersSet,
+        };
+
+        callCollections[conversationID] = {
+          users: newCallMembersSet,
+        };
+
+        var usersInCallSocketMemory = callCollections[conversationID].users.map(
+          (mp) => mp.userID,
+        );
+        callSocket
+          .to(socketID)
+          .emit("caller_connected", usersInCallSocketMemory);
+
+        newCallMembersSet
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            var usersInCallSocketMemory = callCollections[
+              conversationID
+            ].users.map((mp) => mp.userID);
+            callSocket
+              .to(mp.socketID)
+              .emit("newCaller", usersInCallSocketMemory);
+          });
+      }
+      console.log(socketID, conversationIDGlobal, data);
+    });
+
+    socket.on("newOffer", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
+
+      if (currentCall) {
+        const myOffer = currentCall.users.filter(
+          (flt) => flt.socketID === socketID,
+        )[0];
+        const otherOffers = currentCall.users.filter(
+          (flt) => flt.socketID !== socketID,
+        );
+
+        var newCallMembersSet = [
+          ...otherOffers,
+          {
+            ...myOffer,
+            offer: data.offer,
+          },
+        ];
+
+        callCollections[conversationID] = {
+          users: newCallMembersSet,
+        };
+
+        // console.log(newCallMembersSet)
+
+        currentCall.users
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+            const peerdata = data;
+            callSocket.to(mp.socketID).emit("newOfferAwaiting", peerdata);
+          });
+      }
+    });
+
+    socket.on("data", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
+
+      if (currentCall) {
+        currentCall.users
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+            const peerdata = data;
+            callSocket.to(mp.socketID).emit("connect_peer_service", peerdata);
+          });
+      }
+
+      // console.log(socket.id, data);
+      // socket.to
+      // console.log(callCollections[data.conversationID].users)
+    });
+
+    socket.on("sendIceCandidateToSignalingServer", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
+
+      if (data.didIOffer) {
+        // console.log("I OFFER")
+        const offerInOffers = currentCall.users.filter(
+          (flt) => flt.offererUserName === data.iceUserName,
+        )[0];
+        if (offerInOffers) {
+          offerInOffers.offerIceCandidates.push(data.iceCandidate);
+          if (offerInOffers.answererUserName) {
+            const socketToSendTo = currentCall.users.filter(
+              (flt) => flt.userID === offerInOffers.answererUserName,
+            )[0];
+            if (socketToSendTo) {
+              callSocket
+                .to(socketToSendTo.socketID)
+                .emit("receivedIceCandidateFromServer", data.iceCandidate);
+            } else {
+              console.log("Ice candidate recieved but could not find answere");
+            }
+          }
         }
-    })
+      } else {
+        // console.log("NO OFFER")
+        const offerInOffers = currentCall.users.filter(
+          (flt) => flt.answererUserName === data.iceUserName,
+        )[0];
+        const socketToSendTo = currentCall.users.filter(
+          (flt) => flt.userID === offerInOffers.offererUserName,
+        )[0];
+        if (socketToSendTo) {
+          socket
+            .to(socketToSendTo.socketID)
+            .emit("receivedIceCandidateFromServer", data.iceCandidate);
+        } else {
+          console.log("Ice candidate recieved but could not find offerer");
+        }
+      }
+    });
 
-    io.on("connection", (socket) => {
-        var socketID = socket.id;
-        var conversationIDGlobal = [];
-        
-        socket.on("init", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+    socket.on("newAnswer", (data, ackFunction) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
 
-            conversationIDGlobal.push(conversationID);
+      if (currentCall) {
+        const socketToAnswer = currentCall.users.filter(
+          (flt) => flt.userID === data.userID,
+        )[0];
 
-            if(currentCall){
-                var newCallMembersSet = [
-                    ...currentCall.users,
-                    {
-                        socketID: socketID,
-                        userID: data.userID,
-                        offererUserName: data.userID,
-                        offer: null,
-                        offerIceCandidates: [],
-                        answererUserName: null,
-                        answer: null,
-                        answererIceCandidates: []
-                    }
-                ]
+        if (socketToAnswer) {
+          const socketIdToAnswer = socketToAnswer.socketID;
+          const offerToUpdate = currentCall.users.filter(
+            (flt) => flt.userID === data.userID,
+          )[0];
 
-                callCollections[conversationID] = {
-                    users: newCallMembersSet
-                }
+          if (!offerToUpdate) {
+            console.log("No OfferToUpdate");
+            return;
+          }
 
-                var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                io.to(socketID).emit('caller_connected', usersInCallSocketMemory);
+          ackFunction(offerToUpdate.offerIceCandidates);
+          // console.log(offerToUpdate.offerIceCandidates)
+          offerToUpdate.answer = data.answer;
+          offerToUpdate.answererUserName = data.userName;
 
-                newCallMembersSet.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    io.to(mp.socketID).emit('newCaller', usersInCallSocketMemory);
-                })
-            }
-            else{
-                var newCallMembersSet = [
-                    {
-                        socketID: socketID,
-                        userID: data.userID,
-                        offererUserName: data.userID,
-                        offer: null,
-                        offerIceCandidates: [],
-                        answererUserName: null,
-                        answer: null,
-                        answererIceCandidates: []
-                    }
-                ]
+          // console.log(socketToAnswer);
 
-                callCollections[conversationID] = {
-                    users: newCallMembersSet
-                }
+          callSocket.to(socketIdToAnswer).emit("answerResponse", offerToUpdate);
+        }
+      }
+    });
 
-                callCollections[conversationID] = {
-                    users: newCallMembersSet
-                }
+    socket.on("answer_data", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
 
-                var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                io.to(socketID).emit('caller_connected', usersInCallSocketMemory);
+      if (currentCall) {
+        currentCall.users
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+            const peerdata = data;
+            callSocket.to(mp.socketID).emit("answer_peer_service", peerdata);
+          });
+      }
 
-                newCallMembersSet.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    io.to(mp.socketID).emit('newCaller', usersInCallSocketMemory);
-                })
-            }
-            console.log(socketID, conversationIDGlobal, data)
-        })
+      // console.log(socket.id, data);
+      // socket.to
+      // console.log(callCollections[data.conversationID].users)
+    });
 
-        socket.on("newOffer", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+    socket.on("answer_negotiation_data", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
 
-            if(currentCall){
-                const myOffer = currentCall.users.filter((flt) => flt.socketID === socketID)[0];
-                const otherOffers = currentCall.users.filter((flt) => flt.socketID !== socketID);
+      if (currentCall) {
+        currentCall.users
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+            const peerdata = data;
+            callSocket.to(mp.socketID).emit("push_negotiation_data", peerdata);
+          });
+      }
 
-                var newCallMembersSet = [
-                    ...otherOffers,
-                    {
-                        ...myOffer,
-                        offer: data.offer
-                    }
-                ]
+      // console.log(socket.id, data);
+      // socket.to
+      // console.log(callCollections[data.conversationID].users)
+    });
 
-                callCollections[conversationID] = {
-                    users: newCallMembersSet
-                }
+    socket.on("finish_negotiation_data", (data) => {
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
 
-                // console.log(newCallMembersSet)
+      if (currentCall) {
+        currentCall.users
+          .filter((flt) => flt.socketID !== socketID)
+          .map((mp) => {
+            // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
+            const peerdata = data;
+            callSocket
+              .to(mp.socketID)
+              .emit("push_finish_negotiation_data", peerdata);
+          });
+      }
 
-                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    const peerdata = data
-                    io.to(mp.socketID).emit('newOfferAwaiting', peerdata);
-                })
-            }
-        })
+      // console.log(socket.id, data);
+      // socket.to
+      // console.log(callCollections[data.conversationID].users)
+    });
 
-        socket.on("data", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+    socket.on("leavecall", (data) => {
+      // console.log("LEAVE CALL", data);
+      var conversationID = data.conversationID;
+      var currentCall = callCollections[conversationID];
 
-            if(currentCall){
-                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    const peerdata = data
-                    io.to(mp.socketID).emit('connect_peer_service', peerdata);
-                })
-            }
+      if (currentCall) {
+        var usersInCall = currentCall.users.filter(
+          (fl) => fl.socketID != socketID,
+        );
 
-            // console.log(socket.id, data);
-            // socket.to
-            // console.log(callCollections[data.conversationID].users)
-        })
+        if (usersInCall.length == 0) {
+          delete callCollections[conversationID];
 
-        socket.on("sendIceCandidateToSignalingServer", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+          console.log("DELETE CALL IN MEMORY LEAVE CALL", usersInCall);
+        } else {
+          callCollections[conversationID] = {
+            users: [...usersInCall],
+          };
 
-            if(data.didIOffer){
-                // console.log("I OFFER")
-                const offerInOffers = currentCall.users.filter((flt) => flt.offererUserName === data.iceUserName)[0];
-                if(offerInOffers){
-                    offerInOffers.offerIceCandidates.push(data.iceCandidate);
-                    if(offerInOffers.answererUserName){
-                        const socketToSendTo = currentCall.users.filter((flt) => flt.userID === offerInOffers.answererUserName)[0]
-                        if(socketToSendTo){
-                            io.to(socketToSendTo.socketID).emit('receivedIceCandidateFromServer', data.iceCandidate)
-                        }else{
-                            console.log("Ice candidate recieved but could not find answere")
-                        }
-                    }
-                }
-            }
-            else{
-                // console.log("NO OFFER")
-                const offerInOffers = currentCall.users.filter((flt) => flt.answererUserName === data.iceUserName)[0];
-                const socketToSendTo = currentCall.users.filter((flt) => flt.userID === offerInOffers.offererUserName)[0];
-                if(socketToSendTo){
-                    socket.to(socketToSendTo.socketID).emit('receivedIceCandidateFromServer', data.iceCandidate)
-                }else{
-                    console.log("Ice candidate recieved but could not find offerer")
-                }
-            }
-        })
+          console.log("LEAVE CALL", usersInCall);
+        }
+      } else {
+        console.log("CALL ALREADY LEFT AND DELETED");
+      }
+    });
 
-        socket.on("newAnswer", (data, ackFunction) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+    socket.on("disconnect", (socket) => {
+      conversationIDGlobal.map((gl) => {
+        var currentCall = callCollections[gl];
+        if (currentCall) {
+          var usersInCall = currentCall.users.filter(
+            (fl) => fl.socketID != socketID,
+          );
 
-            if(currentCall){
-                const socketToAnswer = currentCall.users.filter((flt) => flt.userID === data.userID)[0]
+          if (usersInCall.length == 0) {
+            delete callCollections[gl];
 
-                if(socketToAnswer){
-                    const socketIdToAnswer = socketToAnswer.socketID
-                    const offerToUpdate = currentCall.users.filter((flt) => flt.userID === data.userID)[0]
+            console.log("DELETE CALL IN MEMORY DISCONNECT", usersInCall);
+          } else {
+            callCollections[gl] = {
+              users: [...usersInCall],
+            };
 
-                    if(!offerToUpdate){
-                        console.log("No OfferToUpdate")
-                        return;
-                    }
+            console.log("DISCONNECT CALL", usersInCall);
+          }
+        } else {
+          console.log("CALL ALREADY DISCONNECTED AND DELETED");
+        }
+      });
+    });
 
-                    ackFunction(offerToUpdate.offerIceCandidates);
-                    // console.log(offerToUpdate.offerIceCandidates)
-                    offerToUpdate.answer = data.answer
-                    offerToUpdate.answererUserName = data.userName
+    socket.on("close", (socket) => {
+      console.log("END SOCKET:", socket.id);
+    });
+  });
 
-                    // console.log(socketToAnswer);
+  mapSocket.on("connection", (socket) => {
+    console.log("MAP SOCKET CONNECTED", socket.id);
 
-                    io.to(socketIdToAnswer).emit('answerResponse', offerToUpdate)
-                }
-            }
-        })
+    socket.on("coordinatesbroadcast", (data) => {
+      const receivers = data.receivers;
+      const coordinates = data.coordinates;
+      const userID = data.userID;
 
-        socket.on("answer_data", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
+      receivers.map((mp) => {
+        if (mp !== userID) {
+          BroadcastCoordinates(mp, coordinates);
+        }
+      });
+    });
 
-            if(currentCall){
-                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    const peerdata = data
-                    io.to(mp.socketID).emit('answer_peer_service', peerdata);
-                })
-            }
+    socket.on("disconnect", (socket) => {
+      console.log("DISCONNECTED MAP SOCKET:");
+    });
 
-            // console.log(socket.id, data);
-            // socket.to
-            // console.log(callCollections[data.conversationID].users)
-        })
-
-        socket.on("answer_negotiation_data", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
-
-            if(currentCall){
-                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    const peerdata = data
-                    io.to(mp.socketID).emit('push_negotiation_data', peerdata);
-                })
-            }
-
-            // console.log(socket.id, data);
-            // socket.to
-            // console.log(callCollections[data.conversationID].users)
-        })
-
-        socket.on("finish_negotiation_data", (data) => {
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
-
-            if(currentCall){
-                currentCall.users.filter((flt) => flt.socketID !== socketID).map((mp) => {
-                    // var usersInCallSocketMemory = callCollections[conversationID].users.map((mp) => mp.userID);
-                    const peerdata = data
-                    io.to(mp.socketID).emit('push_finish_negotiation_data', peerdata);
-                })
-            }
-
-            // console.log(socket.id, data);
-            // socket.to
-            // console.log(callCollections[data.conversationID].users)
-        })
-
-        socket.on("leavecall", (data) => {
-            // console.log("LEAVE CALL", data);
-            var conversationID = data.conversationID;
-            var currentCall = callCollections[conversationID];
-            
-            if(currentCall){
-                var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
-
-                if(usersInCall.length == 0){
-                    delete callCollections[conversationID];
-
-                    console.log("DELETE CALL IN MEMORY LEAVE CALL", usersInCall);
-                }
-                else{
-                    callCollections[conversationID] = {
-                        users: [
-                            ...usersInCall
-                        ]
-                    }
-    
-                    console.log("LEAVE CALL", usersInCall)
-                }
-            }
-            else{
-                console.log("CALL ALREADY LEFT AND DELETED");
-            }
-        })
-    
-        socket.on("disconnect", (socket) => {
-            conversationIDGlobal.map((gl) => {
-                var currentCall = callCollections[gl];
-                if(currentCall){
-                    var usersInCall = currentCall.users.filter((fl) => fl.socketID != socketID);
-
-                    if(usersInCall.length == 0){
-                        delete callCollections[gl];
-
-                        console.log("DELETE CALL IN MEMORY DISCONNECT", usersInCall);
-                    }
-                    else{
-                        callCollections[gl] = {
-                            users: [
-                                ...usersInCall
-                            ]
-                        }
-    
-                        console.log("DISCONNECT CALL", usersInCall)
-                    }
-                }
-                else{
-                    console.log("CALL ALREADY DISCONNECTED AND DELETED");
-                }
-            })
-        })
-
-        socket.on("close", (socket) => {
-            console.log("END SOCKET:", socket.id);
-        })
-    })
-}
+    socket.on("close", (socket) => {
+      console.log("END MAP SOCKET:", socket.id);
+    });
+  });
+};
 
 module.exports = {
-    initSocketIO
-}
+  initSocketIO,
+};
