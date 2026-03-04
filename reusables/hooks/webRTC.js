@@ -241,7 +241,7 @@ function webRTCEvents(event, message) {
       } = message;
       produce(cnvsID, trnsptID, kind, rtpParameters, usrnm, members, track);
       break;
-    case "":
+    case "consume-relay":
       const {
         conversationID: cnvsIDD,
         username: usrnmm,
