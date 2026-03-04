@@ -51,6 +51,18 @@ async function joinRoom(conversationID, username, members, instance) {
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
   });
+
+  // Late-join sync: tell the newly joined user about producers that were
+  // already active before they entered the room.
+  for (const [producerId, producer] of room.producers.entries()) {
+    await publish(`events_${username}`, "new_producer", {
+      conversationID,
+      producerId,
+      kind: producer.kind,
+      rtpParameters: producer.rtpParameters,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 async function createTransport(conversationID, username, instance, direction) {
