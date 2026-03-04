@@ -10,6 +10,7 @@ const {
   produce,
   consume,
   joinRoom,
+  leaveRoom,
 } = require("../../reusables/hooks/webRTC");
 const router = express.Router();
 
@@ -21,20 +22,22 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   const members = req.body.members;
   const instance = req.body.instance;
   const username = req.params.userID;
+  const clientId = req.body.clientId || username;
 
   if (instance) {
-    if (instance === POD_NAME) {
-      joinRoom(conversationID, username, members, instance);
+    if (!instance || instance === POD_NAME) {
+      joinRoom(conversationID, username, members, instance, clientId);
     } else {
       await publish_pub(instance, "join-room-relay", {
         conversationID,
         username,
         members,
         instance,
+        clientId,
       });
     }
   } else {
-    joinRoom(conversationID, username, members, POD_NAME);
+    joinRoom(conversationID, username, members, POD_NAME, clientId);
   }
 
   res.send({
@@ -46,10 +49,11 @@ router.post("/join-room", jwtchecker, async (req, res) => {
 router.post("/create-transport", jwtchecker, async (req, res) => {
   const { conversationID, instance, direction } = req.body; // 'send' or 'recv'
   const username = req.params.userID;
+  const clientId = req.body.clientId || username;
 
   try {
-    if (instance === POD_NAME) {
-      createTransport(conversationID, username, instance, direction);
+    if (!instance || instance === POD_NAME) {
+      createTransport(conversationID, username, instance, direction, clientId);
 
       res.send({ status: true, message: "OK" });
     } else {
@@ -58,6 +62,7 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
         username,
         instance,
         direction,
+        clientId,
       });
 
       res.send({ status: true, message: "OK" });
@@ -71,10 +76,17 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
 router.post("/transport-connect", jwtchecker, async (req, res) => {
   const { conversationID, transportId, dtlsParameters, instance } = req.body;
   const username = req.params.userID;
+  const clientId = req.body.clientId || username;
 
   try {
-    if (instance === POD_NAME) {
-      transportConnect(conversationID, username, transportId, dtlsParameters);
+    if (!instance || instance === POD_NAME) {
+      transportConnect(
+        conversationID,
+        username,
+        transportId,
+        dtlsParameters,
+        clientId,
+      );
 
       res.send({ status: true, message: "OK" });
     } else {
@@ -83,6 +95,7 @@ router.post("/transport-connect", jwtchecker, async (req, res) => {
         username,
         transportId,
         dtlsParameters,
+        clientId,
       });
 
       res.send({ status: true, message: "OK" });
@@ -100,12 +113,12 @@ router.post("/produce", jwtchecker, async (req, res) => {
     rtpParameters,
     instance,
     members,
-    track,
   } = req.body;
   const username = req.params.userID;
+  const clientId = req.body.clientId || username;
 
   try {
-    if (instance === POD_NAME) {
+    if (!instance || instance === POD_NAME) {
       produce(
         conversationID,
         transportId,
@@ -113,7 +126,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         rtpParameters,
         username,
         members,
-        track,
+        clientId,
       );
 
       res.send({ status: true, message: "OK" });
@@ -125,7 +138,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         rtpParameters,
         username,
         members,
-        track,
+        clientId,
       });
 
       res.send({ status: true, message: "OK" });
@@ -137,9 +150,15 @@ router.post("/produce", jwtchecker, async (req, res) => {
 });
 
 router.post("/consume", jwtchecker, async (req, res) => {
-  const { conversationID, transportId, producerId, rtpCapabilities, instance } =
-    req.body;
+  const {
+    conversationID,
+    transportId,
+    producerId,
+    rtpCapabilities,
+    instance,
+  } = req.body;
   const username = req.params.userID;
+  const clientId = req.body.clientId || username;
 
   try {
     if (instance === POD_NAME) {
@@ -149,6 +168,7 @@ router.post("/consume", jwtchecker, async (req, res) => {
         transportId,
         producerId,
         rtpCapabilities,
+        clientId,
       );
 
       res.send({ status: true, message: "OK" });
@@ -159,12 +179,36 @@ router.post("/consume", jwtchecker, async (req, res) => {
         transportId,
         producerId,
         rtpCapabilities,
+        clientId,
       });
 
       res.send({ status: true, message: "OK" });
     }
   } catch (error) {
     console.error("consume error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/leave-room", jwtchecker, async (req, res) => {
+  const { conversationID, instance } = req.body;
+  const username = req.params.userID;
+  const clientId = req.body.clientId || username;
+
+  try {
+    if (!instance || instance === POD_NAME) {
+      leaveRoom(conversationID, username, clientId);
+      res.send({ status: true, message: "OK" });
+    } else {
+      await publish_pub(instance, "leave-room-relay", {
+        conversationID,
+        username,
+        clientId,
+      });
+      res.send({ status: true, message: "OK" });
+    }
+  } catch (error) {
+    console.error("leave-room error:", error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -25,22 +25,25 @@ async function createRoomRouter(conversationID) {
     const router = await worker.createRouter({ mediaCodecs });
     rooms.set(conversationID, {
       router,
-      producers: new Map(), // producerId → producer
-      members: new Set(), // sessionIds
-      transports: new Map(),
+      producers: new Map(), // producerId -> producer
+      producerOwners: new Map(), // producerId -> clientId
+      members: new Map(), // clientId -> username
+      transports: new Map(), // transportId -> { transport, clientId, username, direction }
     });
   }
+
   return rooms.get(conversationID);
 }
 
-async function joinRoom(conversationID, username, members, instance) {
+async function joinRoom(conversationID, username, members, instance, clientId) {
   const room = await createRoomRouter(conversationID);
-  room.members.add(username);
+  room.members.set(clientId, username);
 
   members.map(async (mp) => {
     await publish(`events_${mp}`, "participant-joined", {
       conversationID,
       username,
+      clientId,
       timestamp: Date.now(),
       instance,
     });
@@ -52,8 +55,7 @@ async function joinRoom(conversationID, username, members, instance) {
     instance,
   });
 
-  // Late-join sync: tell the newly joined user about producers that were
-  // already active before they entered the room.
+  // Late-join sync: send already active producers to newly joined user.
   for (const [producerId, producer] of room.producers.entries()) {
     await publish(`events_${username}`, "new_producer", {
       conversationID,
@@ -65,7 +67,13 @@ async function joinRoom(conversationID, username, members, instance) {
   }
 }
 
-async function createTransport(conversationID, username, instance, direction) {
+async function createTransport(
+  conversationID,
+  username,
+  instance,
+  direction,
+  clientId,
+) {
   const room = await createRoomRouter(conversationID);
 
   const transport = await room.router.createWebRtcTransport({
@@ -81,7 +89,12 @@ async function createTransport(conversationID, username, instance, direction) {
     enableSrtp: false,
   });
 
-  room.transports.set(transport.id, transport);
+  room.transports.set(transport.id, {
+    transport,
+    clientId,
+    username,
+    direction,
+  });
 
   await publish(`events_${username}`, "create-transport-response", {
     response: {
@@ -100,15 +113,16 @@ async function transportConnect(
   username,
   transportId,
   dtlsParameters,
+  clientId,
 ) {
   const room = await createRoomRouter(conversationID);
-  const transport = room.transports.get(transportId);
+  const transportEntry = room.transports.get(transportId);
+  const transport = transportEntry?.transport;
 
-  if (!transport) {
+  if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "transport-connect-error", {
       conversationID,
     });
-
     return;
   }
 
@@ -127,16 +141,16 @@ async function produce(
   rtpParameters,
   username,
   members,
-  track,
+  clientId,
 ) {
   const room = await createRoomRouter(conversationID);
-  const transport = room.transports.get(transportId);
+  const transportEntry = room.transports.get(transportId);
+  const transport = transportEntry?.transport;
 
-  if (!transport) {
+  if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "produce-error", {
       conversationID,
     });
-
     return;
   }
 
@@ -151,13 +165,13 @@ async function produce(
   await producer.resume();
 
   room.producers.set(producer.id, producer);
+  room.producerOwners.set(producer.id, clientId);
 
   console.log(`Producer created [${kind}] ID: ${producer.id}`);
 
   members.map(async (mp) => {
     await publish(`events_${mp}`, "new_producer", {
       conversationID,
-      transportId,
       producerId: producer.id,
       kind,
       rtpParameters,
@@ -177,15 +191,16 @@ async function consume(
   transportId,
   producerId,
   rtpCapabilities,
+  clientId,
 ) {
   const room = await createRoomRouter(conversationID);
-  const transport = room.transports.get(transportId);
+  const transportEntry = room.transports.get(transportId);
+  const transport = transportEntry?.transport;
 
-  if (!transport) {
+  if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "consume-transport-error", {
       conversationID,
     });
-
     return;
   }
 
@@ -198,7 +213,6 @@ async function consume(
     await publish(`events_${username}`, "consume-error", {
       conversationID,
     });
-
     return;
   }
 
@@ -218,30 +232,119 @@ async function consume(
   });
 }
 
+async function leaveRoom(conversationID, username, clientId) {
+  const room = rooms.get(conversationID);
+  if (!room) {
+    return;
+  }
+
+  const closedProducerIds = [];
+  for (const [producerId, owner] of room.producerOwners.entries()) {
+    if (owner !== clientId) continue;
+
+    const producer = room.producers.get(producerId);
+    if (producer) {
+      try {
+        producer.close();
+      } catch (_) {
+        // no-op
+      }
+    }
+
+    room.producers.delete(producerId);
+    room.producerOwners.delete(producerId);
+    closedProducerIds.push(producerId);
+  }
+
+  for (const [transportId, transportEntry] of room.transports.entries()) {
+    if (!transportEntry || transportEntry.clientId !== clientId) continue;
+
+    try {
+      transportEntry.transport.close();
+    } catch (_) {
+      // no-op
+    }
+
+    room.transports.delete(transportId);
+  }
+
+  room.members.delete(clientId);
+  const notifiedUsers = new Set();
+  for (const [memberClientId, memberUsername] of room.members.entries()) {
+    if (memberClientId === clientId || notifiedUsers.has(memberUsername)) {
+      continue;
+    }
+    notifiedUsers.add(memberUsername);
+    await publish(`events_${memberUsername}`, "participant-left", {
+      conversationID,
+      username,
+      clientId,
+      producerIds: closedProducerIds,
+      timestamp: Date.now(),
+    });
+  }
+
+  if (room.members.size === 0) {
+    for (const [, producer] of room.producers.entries()) {
+      try {
+        producer.close();
+      } catch (_) {
+        // no-op
+      }
+    }
+
+    for (const [, transportEntry] of room.transports.entries()) {
+      try {
+        transportEntry.transport.close();
+      } catch (_) {
+        // no-op
+      }
+    }
+
+    rooms.delete(conversationID);
+  }
+}
+
 function webRTCEvents(event, message) {
   switch (event) {
-    case "join-room-relay":
+    case "join-room-relay": {
       const {
         conversationID: cnvsIDDD,
         username: ursnm,
         members: mmbrs,
         instance,
+        clientId,
       } = message;
-      joinRoom(cnvsIDDD, ursnm, mmbrs, instance);
+      joinRoom(cnvsIDDD, ursnm, mmbrs, instance, clientId);
       break;
+    }
     case "create-transport-relay":
       createTransport(
         message.conversationID,
         message.username,
         message.instance,
         message.direction,
+        message.clientId,
       );
       break;
-    case "transport-connect-relay":
-      const { conversationID, username, transportId, dtlsParameters } = message;
-      transportConnect(conversationID, username, transportId, dtlsParameters);
+    case "transport-connect-relay": {
+      const {
+        conversationID,
+        username,
+        transportId,
+        dtlsParameters,
+        clientId,
+      } = message;
+      transportConnect(
+        conversationID,
+        username,
+        transportId,
+        dtlsParameters,
+        clientId,
+      );
       break;
-    case "produce-relay":
+    }
+    case "produce-relay": {
       const {
         conversationID: cnvsID,
         transportId: trnsptID,
@@ -249,19 +352,32 @@ function webRTCEvents(event, message) {
         rtpParameters,
         username: usrnm,
         members,
-        track,
+        clientId,
       } = message;
-      produce(cnvsID, trnsptID, kind, rtpParameters, usrnm, members, track);
+      produce(cnvsID, trnsptID, kind, rtpParameters, usrnm, members, clientId);
       break;
-    case "consume-relay":
+    }
+    case "consume-relay": {
       const {
         conversationID: cnvsIDD,
         username: usrnmm,
         transportId: trnsptIDD,
         producerId,
         rtpCapabilities,
+        clientId,
       } = message;
-      consume(cnvsIDD, usrnmm, trnsptIDD, producerId, rtpCapabilities);
+      consume(
+        cnvsIDD,
+        usrnmm,
+        trnsptIDD,
+        producerId,
+        rtpCapabilities,
+        clientId,
+      );
+      break;
+    }
+    case "leave-room-relay":
+      leaveRoom(message.conversationID, message.username, message.clientId);
       break;
     default:
       break;
@@ -278,4 +394,5 @@ module.exports = {
   transportConnect,
   produce,
   consume,
+  leaveRoom,
 };
