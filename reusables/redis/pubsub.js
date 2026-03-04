@@ -6,7 +6,7 @@ const {
   REDIS_USERNAME,
 } = require("../vars/redis");
 
-const POD_NAME = process.env.POD_NAME || "podless";
+const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 
 const redis_creds = {
   username: REDIS_USERNAME,
@@ -24,7 +24,7 @@ async function connect_redis() {
   const scope_subscriber = redis.createClient(redis_creds);
 
   scope_subscriber.on("error", (err) =>
-    console.error("Redis Subscriber Error", err)
+    console.error("Redis Subscriber Error", err),
   );
   await scope_subscriber.connect();
   console.log("Redis subscriber connected");
@@ -34,7 +34,7 @@ async function connect_redis() {
   const scope_publisher = redis.createClient(redis_creds);
 
   scope_publisher.on("error", (err) =>
-    console.error("Redis Publisher Error", err)
+    console.error("Redis Publisher Error", err),
   );
   await scope_publisher.connect();
   console.log("Redis publisher connected");
@@ -80,9 +80,39 @@ async function stop_listen(channel) {
   }
 }
 
+async function listen_sub(channel, callback) {
+  if (subscriber) {
+    const subscribeName = `SUB_${channel}`;
+    console.log(`Listening to ${subscribeName}`);
+    await subscriber.subscribe(subscribeName, (message) => {
+      const data = JSON.parse(message);
+      callback(data.event, data.message);
+    });
+  }
+}
+
+async function publish_pub(channel, event, message) {
+  if (publisher) {
+    const subscribeName = `SUB_${channel}`;
+    const logDetails = {
+      logType: null,
+      pod: POD_NAME,
+      event: event,
+      message: message,
+      dateTime: new Date(),
+    };
+
+    // publisher.on("error", (err) => console.error("Redis Publisher Error", err));
+    await publisher.publish(subscribeName, JSON.stringify(logDetails));
+    // await publisher.disconnect();
+  }
+}
+
 module.exports = {
   connect_redis,
   listen,
   stop_listen,
   publish,
+  listen_sub,
+  publish_pub,
 };

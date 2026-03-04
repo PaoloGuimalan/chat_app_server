@@ -1,7 +1,7 @@
 const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3001;
-const POD_NAME = process.env.POD_NAME || "podless";
+const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 const mysql = require("mysql");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
@@ -20,11 +20,14 @@ const Profile = require("./routes/profile/index");
 const Posts = require("./routes/posts/index");
 const Server = require("./routes/serverrts/index");
 const Promptings = require("./routes/promptings/index");
+const WebRTC = require("./routes/webrtc/index");
+
 const { initSocketIO } = require("./socketIO/socketIO");
 const { consumeMessages } = require("./reusables/rabbitmq/consumer");
-const { connect_redis } = require("./reusables/redis/pubsub");
+const { connect_redis, listen_sub } = require("./reusables/redis/pubsub");
 const { getPool } = require("./reusables/database/postgres");
 const rateLimit = require("express-rate-limit");
+const { webRTCEvents } = require("./reusables/hooks/webRTC");
 
 const connectMongo = async () => {
   return mongoose.connect(MongooseConnection.url, MongooseConnection.params);
@@ -49,6 +52,8 @@ app.use(express.json());
 //     optionsSuccessStatus: 200,
 //   })
 // );
+
+app.set("trust proxy", 1);
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -90,6 +95,7 @@ app.use("/p", Profile);
 app.use("/s", Server);
 app.use("/posts", Posts);
 app.use("/prompt", Promptings);
+app.use("/webrtc", WebRTC);
 
 app.get("/", (req, res) => {
   res.send("Welcome to Chatterloop V2 API!");
@@ -98,7 +104,9 @@ app.get("/", (req, res) => {
 const server = app.listen(PORT, () => {
   console.log(`Server Running: ${PORT} | ${POD_NAME}`);
   // consumeMessages();
-  connect_redis();
+  connect_redis().then(() => {
+    listen_sub(POD_NAME, webRTCEvents);
+  });
   getPool();
   connectMongo()
     .then(() => {
