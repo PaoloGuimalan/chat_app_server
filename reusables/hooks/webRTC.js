@@ -37,9 +37,13 @@ async function createRoomRouter(conversationID) {
 
 async function joinRoom(conversationID, username, members, instance, clientId) {
   const room = await createRoomRouter(conversationID);
+  const existingUsernames = new Set(room.members.values());
   room.members.set(clientId, username);
 
-  members.map(async (mp) => {
+  // Notify users that are already in the room, instead of trusting client-provided members.
+  Array.from(existingUsernames)
+    .filter((mp) => mp !== username)
+    .map(async (mp) => {
     await publish(`events_${mp}`, "participant-joined", {
       conversationID,
       username,
@@ -53,12 +57,16 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
     status: true,
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
+    clientId,
   });
 
   // Late-join sync: send already active producers to newly joined user.
   for (const [producerId, producer] of room.producers.entries()) {
+    const producerClientId = room.producerOwners.get(producerId);
     await publish(`events_${username}`, "new_producer", {
       conversationID,
+      username: room.members.get(producerClientId) || username,
+      clientId: producerClientId,
       producerId,
       kind: producer.kind,
       rtpParameters: producer.rtpParameters,
@@ -105,6 +113,7 @@ async function createTransport(
     },
     direction,
     instance,
+    clientId,
   });
 }
 
@@ -122,6 +131,7 @@ async function transportConnect(
   if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "transport-connect-error", {
       conversationID,
+      clientId,
     });
     return;
   }
@@ -131,6 +141,7 @@ async function transportConnect(
   await publish(`events_${username}`, "transport-connect-response", {
     conversationID,
     message: "OK",
+    clientId,
   });
 }
 
@@ -150,6 +161,7 @@ async function produce(
   if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "produce-error", {
       conversationID,
+      clientId,
     });
     return;
   }
@@ -169,9 +181,15 @@ async function produce(
 
   console.log(`Producer created [${kind}] ID: ${producer.id}`);
 
-  members.map(async (mp) => {
+  const recipientUsernames = Array.from(new Set(room.members.values())).filter(
+    (mp) => mp !== username,
+  );
+
+  recipientUsernames.map(async (mp) => {
     await publish(`events_${mp}`, "new_producer", {
       conversationID,
+      username,
+      clientId,
       producerId: producer.id,
       kind,
       rtpParameters,
@@ -182,6 +200,7 @@ async function produce(
   await publish(`events_${username}`, "produce-response", {
     conversationID,
     id: producer.id,
+    clientId,
   });
 }
 
@@ -200,6 +219,7 @@ async function consume(
   if (!transport || transportEntry.clientId !== clientId) {
     await publish(`events_${username}`, "consume-transport-error", {
       conversationID,
+      clientId,
     });
     return;
   }
@@ -212,6 +232,7 @@ async function consume(
   ) {
     await publish(`events_${username}`, "consume-error", {
       conversationID,
+      clientId,
     });
     return;
   }
@@ -229,6 +250,7 @@ async function consume(
     producerId,
     kind: consumer.kind,
     rtpParameters: consumer.rtpParameters,
+    clientId,
   });
 }
 

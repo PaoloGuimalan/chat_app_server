@@ -55,11 +55,25 @@ app.use(express.json());
 
 app.set("trust proxy", 1);
 
+const callPaths = ["/webrtc", "/u/call", "/u/rejectcall", "/u/endcall"];
+
+const callLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3000, // Higher cap for bursty call signaling traffic
+  message: "Too many call requests from this IP, please try again later.",
+});
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 500, // Limit each IP to 100 requests per window
   message: "Too many requests from this IP, please try again later.",
+  skip: (req) =>
+    callPaths.some(
+      (prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`),
+    ),
 });
+
+app.use(callPaths, callLimiter);
 app.use(limiter);
 
 const allowedOrigins = [
