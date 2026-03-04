@@ -58,6 +58,9 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
     clientId,
+    participants: Array.from(new Set(room.members.values())).filter(
+      (participant) => participant !== username,
+    ),
   });
 
   // Late-join sync: send already active producers to newly joined user.
