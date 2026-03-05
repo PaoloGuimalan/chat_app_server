@@ -48,7 +48,6 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
 
   // Notify users that are already in the room, instead of trusting client-provided members.
   Array.from(existingUsernames)
-    .filter((mp) => mp !== username)
     .map(async (mp) => {
     await publish(`events_${mp}`, "participant-joined", {
       conversationID,
@@ -188,9 +187,7 @@ async function produce(
 
   console.log(`Producer created [${kind}] ID: ${producer.id}`);
 
-  const recipientUsernames = Array.from(new Set(room.members.values())).filter(
-    (mp) => mp !== username,
-  );
+  const recipientUsernames = Array.from(new Set(room.members.values()));
 
   recipientUsernames.map(async (mp) => {
     await publish(`events_${mp}`, "new_producer", {
