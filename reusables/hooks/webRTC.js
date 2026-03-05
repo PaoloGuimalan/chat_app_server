@@ -39,9 +39,12 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
   const room = await createRoomRouter(conversationID);
   const existingUsernames = new Set(room.members.values());
   room.members.set(clientId, username);
-  const participants = Array.from(new Set(room.members.values())).filter(
-    (participant) => participant !== username,
-  );
+  const participants = Array.from(room.members.entries())
+    .filter(([participantClientId]) => participantClientId !== clientId)
+    .map(([participantClientId, participantUsername]) => ({
+      clientId: participantClientId,
+      username: participantUsername,
+    }));
 
   // Notify users that are already in the room, instead of trusting client-provided members.
   Array.from(existingUsernames)
