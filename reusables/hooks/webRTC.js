@@ -39,6 +39,9 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
   const room = await createRoomRouter(conversationID);
   const existingUsernames = new Set(room.members.values());
   room.members.set(clientId, username);
+  const participants = Array.from(new Set(room.members.values())).filter(
+    (participant) => participant !== username,
+  );
 
   // Notify users that are already in the room, instead of trusting client-provided members.
   Array.from(existingUsernames)
@@ -58,9 +61,7 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
     clientId,
-    participants: Array.from(new Set(room.members.values())).filter(
-      (participant) => participant !== username,
-    ),
+    participants,
   });
 
   // Late-join sync: send already active producers to newly joined user.
