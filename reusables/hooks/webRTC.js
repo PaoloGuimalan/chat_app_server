@@ -28,6 +28,7 @@ async function createRoomRouter(conversationID) {
       producers: new Map(), // producerId -> producer
       producerOwners: new Map(), // producerId -> clientId
       members: new Map(), // clientId -> username
+      memberStatus: new Map(), // clientId -> { muted: boolean, cameraOff: boolean }
       transports: new Map(), // transportId -> { transport, clientId, username, direction }
     });
   }
@@ -35,15 +36,35 @@ async function createRoomRouter(conversationID) {
   return rooms.get(conversationID);
 }
 
-async function joinRoom(conversationID, username, members, instance, clientId) {
+async function joinRoom(
+  conversationID,
+  username,
+  members,
+  instance,
+  clientId,
+  muted,
+  cameraOff,
+) {
   const room = await createRoomRouter(conversationID);
   const existingUsernames = new Set(room.members.values());
   room.members.set(clientId, username);
+  room.memberStatus.set(clientId, {
+    muted: typeof muted === "boolean" ? muted : false,
+    cameraOff: typeof cameraOff === "boolean" ? cameraOff : false,
+  });
+  const joinedStatus = room.memberStatus.get(clientId) || {
+    muted: false,
+    cameraOff: false,
+  };
   const participants = Array.from(room.members.entries())
     .filter(([participantClientId]) => participantClientId !== clientId)
     .map(([participantClientId, participantUsername]) => ({
       clientId: participantClientId,
       username: participantUsername,
+      ...(room.memberStatus.get(participantClientId) || {
+        muted: false,
+        cameraOff: false,
+      }),
     }));
 
   // Notify users that are already in the room, instead of trusting client-provided members.
@@ -53,6 +74,7 @@ async function joinRoom(conversationID, username, members, instance, clientId) {
       conversationID,
       username,
       clientId,
+      ...joinedStatus,
       timestamp: Date.now(),
       instance,
     });
@@ -295,6 +317,7 @@ async function leaveRoom(conversationID, username, clientId) {
   }
 
   room.members.delete(clientId);
+  room.memberStatus.delete(clientId);
   const notifiedUsers = new Set();
   for (const [memberClientId, memberUsername] of room.members.entries()) {
     if (memberClientId === clientId || notifiedUsers.has(memberUsername)) {
@@ -331,6 +354,44 @@ async function leaveRoom(conversationID, username, clientId) {
   }
 }
 
+async function participantStatus(
+  conversationID,
+  username,
+  clientId,
+  muted,
+  cameraOff,
+) {
+  const room = rooms.get(conversationID);
+  if (!room || !room.members.has(clientId)) {
+    return;
+  }
+
+  const prev = room.memberStatus.get(clientId) || {
+    muted: false,
+    cameraOff: false,
+  };
+
+  const nextStatus = {
+    muted: typeof muted === "boolean" ? muted : prev.muted,
+    cameraOff: typeof cameraOff === "boolean" ? cameraOff : prev.cameraOff,
+  };
+
+  room.memberStatus.set(clientId, nextStatus);
+
+  const recipientUsernames = Array.from(new Set(room.members.values()));
+  await Promise.all(
+    recipientUsernames.map(async (memberUsername) => {
+      await publish(`events_${memberUsername}`, "participant-status", {
+        conversationID,
+        username,
+        clientId,
+        ...nextStatus,
+        timestamp: Date.now(),
+      });
+    }),
+  );
+}
+
 function webRTCEvents(event, message) {
   switch (event) {
     case "join-room-relay": {
@@ -340,8 +401,10 @@ function webRTCEvents(event, message) {
         members: mmbrs,
         instance,
         clientId,
+        muted,
+        cameraOff,
       } = message;
-      joinRoom(cnvsIDDD, ursnm, mmbrs, instance, clientId);
+      joinRoom(cnvsIDDD, ursnm, mmbrs, instance, clientId, muted, cameraOff);
       break;
     }
     case "create-transport-relay":
@@ -405,6 +468,15 @@ function webRTCEvents(event, message) {
     case "leave-room-relay":
       leaveRoom(message.conversationID, message.username, message.clientId);
       break;
+    case "participant-status-relay":
+      participantStatus(
+        message.conversationID,
+        message.username,
+        message.clientId,
+        message.muted,
+        message.cameraOff,
+      );
+      break;
     default:
       break;
   }
@@ -421,4 +493,5 @@ module.exports = {
   produce,
   consume,
   leaveRoom,
+  participantStatus,
 };

@@ -11,6 +11,7 @@ const {
   consume,
   joinRoom,
   leaveRoom,
+  participantStatus,
 } = require("../../reusables/hooks/webRTC");
 const router = express.Router();
 
@@ -21,12 +22,22 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   const conversationID = req.body.conversationID;
   const members = req.body.members;
   const instance = req.body.instance;
+  const muted = req.body.muted;
+  const cameraOff = req.body.cameraOff;
   const username = req.params.userID;
   const clientId = req.body.clientId || username;
 
   if (instance) {
     if (!instance || instance === POD_NAME) {
-      joinRoom(conversationID, username, members, instance, clientId);
+      joinRoom(
+        conversationID,
+        username,
+        members,
+        instance,
+        clientId,
+        muted,
+        cameraOff,
+      );
     } else {
       await publish_pub(instance, "join-room-relay", {
         conversationID,
@@ -34,10 +45,20 @@ router.post("/join-room", jwtchecker, async (req, res) => {
         members,
         instance,
         clientId,
+        muted,
+        cameraOff,
       });
     }
   } else {
-    joinRoom(conversationID, username, members, POD_NAME, clientId);
+    joinRoom(
+      conversationID,
+      username,
+      members,
+      POD_NAME,
+      clientId,
+      muted,
+      cameraOff,
+    );
   }
 
   res.send({
@@ -209,6 +230,37 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
     }
   } catch (error) {
     console.error("leave-room error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/participant-status", jwtchecker, async (req, res) => {
+  const { conversationID, instance, muted, cameraOff } = req.body;
+  const username = req.params.userID;
+  const clientId = req.body.clientId || username;
+
+  try {
+    if (!instance || instance === POD_NAME) {
+      participantStatus(
+        conversationID,
+        username,
+        clientId,
+        muted,
+        cameraOff,
+      );
+      res.send({ status: true, message: "OK" });
+    } else {
+      await publish_pub(instance, "participant-status-relay", {
+        conversationID,
+        username,
+        clientId,
+        muted,
+        cameraOff,
+      });
+      res.send({ status: true, message: "OK" });
+    }
+  } catch (error) {
+    console.error("participant-status error:", error);
     res.status(500).json({ error: error.message });
   }
 });
