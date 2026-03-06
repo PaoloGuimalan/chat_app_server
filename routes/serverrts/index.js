@@ -52,7 +52,7 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         AND cr.type = 'server' AND cr.is_private = false
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [id, account_id]
+    [id, account_id],
   );
 
   res.send({ status: true, result: transformServersData(rows, true) });
@@ -86,7 +86,7 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         AND cr.type = 'server'
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [id]
+    [id],
   );
 
   const encodedResult = createJWT(transformServersData(rows));
@@ -152,73 +152,51 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         sortID: -1,
       },
     },
-    // {
-    //   $lookup: {
-    //     from: "useraccount",
-    //     localField: "receivers",
-    //     foreignField: "userID",
-    //     as: "users",
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "groups",
-    //     localField: "conversationID",
-    //     foreignField: "groupID",
-    //     as: "groupdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$groupdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "servers",
-    //     localField: "groupdetails.serverID",
-    //     foreignField: "serverID",
-    //     as: "serverdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$serverdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $project: {
-    //     "users.birthdate": 0,
-    //     "users.dateCreated": 0,
-    //     "users.email": 0,
-    //     "users.gender": 0,
-    //     "users.isActivated": 0,
-    //     "users.isVerified": 0,
-    //     "users.password": 0,
-    //   },
-    // },
   ])
     .then(async (result) => {
       // console.log(result)
-      const receivers_list = result[0].receivers;
+      const receivers_list = result[0]?.receivers;
 
-      const { rows } = await pool.query(
-        `
-        SELECT
-          id AS "_id",
-          username AS "userID",
-          json_build_object(
-            'firstName', first_name,
-            'middleName', middle_name,
-            'lastName', last_name
-          ) AS fullname,
-          profile
-        FROM user_account
-        WHERE username = ANY($1)`,
-        [receivers_list]
-      );
+      let rows_final = [];
+
+      if (receivers_list) {
+        const { rows } = await pool.query(
+          `
+          SELECT
+            id AS "_id",
+            username AS "userID",
+            json_build_object(
+              'firstName', first_name,
+              'middleName', middle_name,
+              'lastName', last_name
+            ) AS fullname,
+            profile
+          FROM user_account
+          WHERE username = ANY($1)`,
+          [receivers_list],
+        );
+
+        rows_final = rows;
+      } else {
+        const { rows } = await pool.query(
+          `
+        SELECT 
+            ua.id AS "_id",
+            ua.username AS "userID",
+            json_build_object(
+              'firstName', ua.first_name,
+              'middleName', ua.middle_name,
+              'lastName', ua.last_name
+            ) AS fullname,
+            ua.profile
+        FROM community_member cm
+        JOIN user_account ua ON cm.account_id = ua.id
+        WHERE cm.realm_id = $1;`,
+          [conversationID],
+        );
+
+        rows_final = rows;
+      }
 
       const { rows: details } = await pool.query(
         `SELECT
@@ -238,7 +216,8 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
             ),
             'createdBy', ua.username,
             'privacy', cr.is_private,
-            'type', 'server'
+            'type', 'server',
+            'channelType', cr.type
           ) AS groupdetails,
           json_build_object(
             '_id', pcr.id,
@@ -269,7 +248,7 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         LEFT JOIN community_realm pcr ON cr.parent_id = pcr.id
         LEFT JOIN user_account pua ON pcr.created_by_id = pua.id
         WHERE cr.realm_id = $1;`,
-        [conversationID]
+        [conversationID],
       );
 
       const details_result = details[0];
@@ -278,8 +257,9 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         {
           conversationslist: [
             {
+              conversationID: conversationID,
               ...result[0],
-              users: rows,
+              users: rows_final,
               ...details_result,
             },
           ],
@@ -287,7 +267,7 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         JWT_SECRET,
         {
           expiresIn: 60 * 60 * 24 * 7,
-        }
+        },
       );
 
       res.send({ status: true, message: "OK", result: encodedResult });
@@ -348,6 +328,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
               ),
               'createdBy', ppua.username,
               'type', 'server',
+              'channelType', pcr.type,
               'privacy', pcr.is_private,
               'messages', jsonb_build_array()
           )
@@ -379,68 +360,13 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
      FROM community_realm cr
      LEFT JOIN user_account pua ON cr.created_by_id = pua.id
      WHERE realm_id = $1;`,
-    [serverID]
+    [serverID],
   );
 
   const deconstructedData = {
     ...rows[0].json_build_object,
   };
 
-  // await UserServer.aggregate([
-  //   {
-  //     $match: {
-  //       $and: [
-  //         { serverID: serverID },
-  //         { members: { $in: [{ userID: userID }] } },
-  //       ],
-  //     },
-  //   },
-  //   {
-  //     $lookup: {
-  //       from: "groups",
-  //       localField: "serverID",
-  //       foreignField: "serverID", //from groups
-  //       pipeline: [
-  //         {
-  //           $lookup: {
-  //             from: "messages",
-  //             localField: "groupID",
-  //             foreignField: "conversationID",
-  //             pipeline: [
-  //               {
-  //                 $match: { seeners: { $nin: [userID] } },
-  //               },
-  //               {
-  //                 $count: "unread",
-  //               },
-  //             ],
-  //             as: "messages",
-  //           },
-  //         },
-  //       ],
-  //       as: "channels",
-  //     },
-  //   },
-  //   {
-  //     $lookup: {
-  //       from: "useraccount",
-  //       localField: "members.userID",
-  //       foreignField: "userID",
-  //       as: "usersWithInfo",
-  //     },
-  //   },
-  //   {
-  //     $project: {
-  //       "usersWithInfo.birthdate": 0,
-  //       "usersWithInfo.dateCreated": 0,
-  //       "usersWithInfo.email": 0,
-  //       "usersWithInfo.gender": 0,
-  //       "usersWithInfo.isActivated": 0,
-  //       "usersWithInfo.isVerified": 0,
-  //       "usersWithInfo.password": 0,
-  //     },
-  //   },
-  // ])
   UserMessage.aggregate([
     {
       $match: {
@@ -497,7 +423,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-      [memberstoadd.map((mp) => mp.userID)]
+      [memberstoadd.map((mp) => mp.userID)],
     );
 
     // const GetServerDts = await GetServerDetails(serverID);
@@ -526,7 +452,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
         memberstoadd: rows,
         receivers: decodedToken.receivers,
       },
-      "server"
+      "server",
     );
 
     mappedGroupID.map((mp) => {
@@ -538,7 +464,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
           memberstoadd: rows,
           receivers: decodedToken.receivers,
         },
-        "group"
+        "group",
       );
     });
 
@@ -583,7 +509,7 @@ router.get("/getservermembers/:serverID", jwtchecker, async (req, res) => {
     JWT_SECRET,
     {
       expiresIn: 60 * 60 * 24 * 7,
-    }
+    },
   );
 
   res.send({ status: true, result: encodedResult });

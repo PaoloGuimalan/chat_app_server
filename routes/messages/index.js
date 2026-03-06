@@ -60,12 +60,12 @@ router.post("/deletemessage", jwtchecker, (req, res) => {
         conversationID: decodedToken.conversationID,
         messageID: decodedToken.messageID,
       },
-      { isDeleted: true }
+      { isDeleted: true },
     )
       .then(async (result) => {
         const messageReceivers = await GetMessageReceivers(
           decodedToken.conversationID,
-          decodedToken.messageID
+          decodedToken.messageID,
         );
 
         messageReceivers.map((user) => {
@@ -112,12 +112,12 @@ router.post("/addreaction", jwtchecker, (req, res) => {
         conversationID: decodedToken.conversationID,
         messageID: decodedToken.messageID,
       },
-      { $push: { reactions: decodedToken.newreaction } }
+      { $push: { reactions: decodedToken.newreaction } },
     )
       .then(async (result) => {
         const messageReceivers = await GetMessageReceivers(
           decodedToken.conversationID,
-          decodedToken.messageID
+          decodedToken.messageID,
         );
 
         messageReceivers.map((user) => {
@@ -191,179 +191,60 @@ router.get(
   "/conversationinfo/:conversationID/:type",
   jwtchecker,
   async (req, res) => {
-    const userID = req.params.userID;
-    const conversationID = req.params.conversationID;
-    const type = req.params.type;
+    try {
+      const userID = req.params.userID;
+      const conversationID = req.params.conversationID;
+      const type = req.params.type;
 
-    if (type === "single") {
-      const { rows } = await pool.query(
-        "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
-        [conversationID]
-      );
+      if (type === "single") {
+        const { rows } = await pool.query(
+          "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
+          [conversationID],
+        );
 
-      const formattedResult = formatConnectionData(rows);
+        const formattedResult = formatConnectionData(rows);
 
-      UploadedFiles.find({ foreignID: conversationID })
-        .then((result) => {
-          formattedResult.conversationfiles = result;
-          var flattenedResults = formattedResult;
-          const encodedResult = createJWT({
-            data: flattenedResults,
+        UploadedFiles.find({ foreignID: conversationID })
+          .then((result) => {
+            formattedResult.conversationfiles = result;
+            var flattenedResults = formattedResult;
+            const encodedResult = createJWT({
+              data: flattenedResults,
+            });
+            res.send({ status: true, result: encodedResult });
+          })
+          .catch((err) => {
+            console.log(err);
+            res.send({
+              status: false,
+              message: "Cannot determine conversation details",
+            });
           });
-          res.send({ status: true, result: encodedResult });
-        })
-        .catch((err) => {
-          console.log(err);
-          res.send({
-            status: false,
-            message: "Cannot determine conversation details",
-          });
-        });
+      } else {
+        const result = await getRealmWithUsers(conversationID);
+        const formattedResult = formatToDesiredStructure(result);
 
-      // UserContacts.aggregate([
-      //   {
-      //     $match: {
-      //       contactID: conversationID,
-      //     },
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "useraccount",
-      //       localField: "users.userID",
-      //       foreignField: "userID",
-      //       as: "usersWithInfo",
-      //     },
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "files",
-      //       localField: "contactID",
-      //       foreignField: "foreignID",
-      //       as: "conversationfiles",
-      //     },
-      //   },
-      //   {
-      //     $project: {
-      //       "usersWithInfo.birthdate": 0,
-      //       "usersWithInfo.dateCreated": 0,
-      //       "usersWithInfo.email": 0,
-      //       "usersWithInfo.gender": 0,
-      //       "usersWithInfo.password": 0,
-      //       "usersWithInfo.coverphoto": 0,
-      //     },
-      //   },
-      // ])
-      //   .then((result) => {
-      //     if (result.length > 0) {
-      //       var flattenedResults = result[0];
-      //       const encodedResult = createJWT({
-      //         data: flattenedResults,
-      //       });
-      //       res.send({ status: true, result: encodedResult });
-      //     } else {
-      //       // respond as no records
-      //       res.send({
-      //         status: false,
-      //         message: "No conversation details matched",
-      //       });
-      //     }
-      //   })
-      //   .catch((err) => {
-      //     console.log(err);
-      //     res.send({
-      //       status: false,
-      //       message: "Cannot determine conversation details",
-      //     });
-      //   });
-    } else {
-      const result = await getRealmWithUsers(conversationID);
-      const formattedResult = formatToDesiredStructure(result);
-
-      UploadedFiles.find({ foreignID: conversationID })
-        .then((result) => {
-          formattedResult.conversationfiles = result;
-          var flattenedResults = formattedResult;
-          const encodedResult = createJWT({
-            data: flattenedResults,
+        UploadedFiles.find({ foreignID: conversationID })
+          .then((result) => {
+            formattedResult.conversationfiles = result;
+            var flattenedResults = formattedResult;
+            const encodedResult = createJWT({
+              data: flattenedResults,
+            });
+            res.send({ status: true, result: encodedResult });
+          })
+          .catch((err) => {
+            console.log(err);
+            res.send({
+              status: false,
+              message: "Cannot determine conversation details",
+            });
           });
-          res.send({ status: true, result: encodedResult });
-        })
-        .catch((err) => {
-          console.log(err);
-          res.send({
-            status: false,
-            message: "Cannot determine conversation details",
-          });
-        });
-
-      // UserContacts.aggregate([
-      //   {
-      //     $match: {
-      //       contactID: conversationID,
-      //     },
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "groups",
-      //       localField: "contactID",
-      //       foreignField: "groupID",
-      //       as: "conversationInfo",
-      //     },
-      //   },
-      //   {
-      //     $unwind: "$conversationInfo",
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "useraccount",
-      //       localField: "users.userID",
-      //       foreignField: "userID",
-      //       as: "usersWithInfo",
-      //     },
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "files",
-      //       localField: "contactID",
-      //       foreignField: "foreignID",
-      //       as: "conversationfiles",
-      //     },
-      //   },
-      //   {
-      //     $project: {
-      //       "usersWithInfo.birthdate": 0,
-      //       "usersWithInfo.dateCreated": 0,
-      //       "usersWithInfo.email": 0,
-      //       "usersWithInfo.gender": 0,
-      //       "usersWithInfo.password": 0,
-      //       "usersWithInfo.coverphoto": 0,
-      //     },
-      //   },
-      // ])
-      //   .then((result) => {
-      //     if (result.length > 0) {
-      //       var flattenedResults = result[0];
-      //       const encodedResult = createJWT({
-      //         data: flattenedResults,
-      //       });
-      //       res.send({ status: true, result: encodedResult });
-      //     } else {
-      //       // respond as no records
-      //       res.send({
-      //         status: false,
-      //         message: "No conversation details matched",
-      //       });
-      //     }
-      //   })
-      //   .catch((err) => {
-      //     console.log(err);
-      //     res.send({
-      //       status: false,
-      //       message: "Cannot determine conversation details",
-      //     });
-      //   });
+      }
+    } catch (err) {
+      res.status(500).send({ status: false, message: "Invalid Group/Channel" });
     }
-  }
+  },
 );
 
 router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
@@ -427,12 +308,12 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-      [memberstoadd.map((mp) => mp.userID)]
+      [memberstoadd.map((mp) => mp.userID)],
     );
 
     const { rows: get_group } = await pool.query(
       `SELECT parent_id FROM community_realm WHERE realm_id = $1 AND parent_id IS NOT NULL;`,
-      [conversationID]
+      [conversationID],
     );
 
     const conversationType = get_group.length > 0 ? "server" : "group";
@@ -447,7 +328,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
                 userID,
                 receivers,
                 `${userID} added ${mp.userID}`,
-                conversationType
+                conversationType,
               );
             })
             .catch((err) => console.log);

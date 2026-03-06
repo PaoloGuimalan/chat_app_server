@@ -1766,7 +1766,7 @@ const creategroupchatreusable = async (
     // newGroup
     //   .save()
     //   .then(async () => {
-    if (type !== "server") {
+    if (type !== "server" && type !== "voice") {
       sendMessageInitForGC(
         contactID,
         userID,
@@ -1792,6 +1792,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const memberstoadd = decodedToken.otherUsers;
     // const memberstoaddinserverdts = memberstoadd.map((mp) => ({ userID: mp }));
     const privacy = decodedToken.privacy;
+    const type = decodedToken.type; // group (channel) or voice
     const groupName = decodedToken.groupName;
 
     const serverMembers = await GetServerMembers(serverID, false);
@@ -1813,7 +1814,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         channeltoken,
         privacy,
-        "group",
+        type, // "group"
       );
     } else {
       const modifiedservermemberspub = serverMembers
@@ -1834,7 +1835,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         channeltokenpub,
         privacy,
-        "group",
+        type, // "group"
       );
     }
 
