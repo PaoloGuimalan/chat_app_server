@@ -23,7 +23,11 @@ const {
   FIREBASE_UNIVERSE_DOMAIN,
   FIREBASE_STORAGE_BUCKET,
 } = require("../../reusables/vars/firebasevars");
-const { listen, addParticipant } = require("../../reusables/redis/pubsub");
+const {
+  listen,
+  addParticipant,
+  getAllParticipants,
+} = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 
@@ -1110,42 +1114,6 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
     {
       $limit: parseInt(range),
     },
-    // {
-    //   $lookup: {
-    //     from: "useraccount",
-    //     localField: "receivers",
-    //     foreignField: "userID",
-    //     as: "users",
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "groups",
-    //     localField: "conversationID",
-    //     foreignField: "groupID",
-    //     as: "groupdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$groupdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $lookup: {
-    //     from: "servers",
-    //     localField: "groupdetails.serverID",
-    //     foreignField: "serverID",
-    //     as: "serverdetails",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$serverdetails",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
     {
       $project: {
         "users.birthdate": 0,
@@ -1251,10 +1219,17 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         };
       });
 
+      const finalResultWParticipants = await Promise.all(
+        finalResult.map(async (mp) => ({
+          ...mp,
+          voice_participants: await getAllParticipants(mp.conversationID),
+        })),
+      );
+
       // console.log(result.reverse())
       const encodedResult = jwt.sign(
         {
-          conversationslist: finalResult,
+          conversationslist: finalResultWParticipants,
         },
         JWT_SECRET,
         {
