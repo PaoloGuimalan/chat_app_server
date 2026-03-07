@@ -171,13 +171,8 @@ router.post("/produce", jwtchecker, async (req, res) => {
 });
 
 router.post("/consume", jwtchecker, async (req, res) => {
-  const {
-    conversationID,
-    transportId,
-    producerId,
-    rtpCapabilities,
-    instance,
-  } = req.body;
+  const { conversationID, transportId, producerId, rtpCapabilities, instance } =
+    req.body;
   const username = req.params.userID;
   const clientId = req.body.clientId || username;
 
@@ -215,8 +210,20 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
   const { conversationID, instance } = req.body;
   const username = req.params.userID;
   const clientId = req.body.clientId || username;
+  const recipients = req.body.recipients || [];
 
   try {
+    recipients.map((mp) => {
+      publish(`events_${mp}`, `update_participants`, {
+        status: true,
+        auth: true,
+        result: {
+          clientId,
+          action: "left",
+        },
+      });
+    });
+
     if (!instance || instance === POD_NAME) {
       leaveRoom(conversationID, username, clientId);
       res.send({ status: true, message: "OK" });
@@ -241,13 +248,7 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
 
   try {
     if (!instance || instance === POD_NAME) {
-      participantStatus(
-        conversationID,
-        username,
-        clientId,
-        muted,
-        cameraOff,
-      );
+      participantStatus(conversationID, username, clientId, muted, cameraOff);
       res.send({ status: true, message: "OK" });
     } else {
       await publish_pub(instance, "participant-status-relay", {
@@ -266,3 +267,4 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
 });
 
 module.exports = router;
+
