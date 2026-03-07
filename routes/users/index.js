@@ -23,7 +23,7 @@ const {
   FIREBASE_UNIVERSE_DOMAIN,
   FIREBASE_STORAGE_BUCKET,
 } = require("../../reusables/vars/firebasevars");
-const { listen } = require("../../reusables/redis/pubsub");
+const { listen, addParticipant } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 
@@ -79,6 +79,7 @@ const {
   UpdateContactswSessionStatus,
   CallRejectNotif,
   BroadcastCoordinates,
+  ReachVoiceRecepients,
 } = require("../../reusables/hooks/sse");
 const { storage } = require("../../reusables/hooks/firebaseupload");
 const {
@@ -2233,23 +2234,41 @@ router.post("/call", jwtchecker, async (req, res) => {
 
     recepients.map((rcp) => {
       ReachCallRecepients(rcp, decodeToken);
-      // publish(`events_${rcp}`, REACH_CALL_RECEPIENTS_LOOPER, {
-      //   parameters: {
-      //     recepients: recepients,
-      //     decodedToken: decodeToken,
-      //   },
-      // });
     });
-    // await producer.publishMessage(
-    //   "INFO:CHATTERLOOP",
-    //   REACH_CALL_RECEPIENTS_LOOPER,
-    //   {
-    //     parameters: {
-    //       recepients: recepients,
-    //       decodedToken: decodeToken,
-    //     },
-    //   }
-    // );
+
+    res.send({ status: true, message: "OK" });
+  } catch (ex) {
+    console.log(ex);
+    res.send({ status: false, message: "Error declaring call!" });
+  }
+});
+
+router.post("/notify-voice-join", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const clientID = req.body.clientID;
+  const profile = req.body.profile;
+  const recipients = req.body.recipients;
+  const channelID = req.body.channelID;
+  const instance = req.body.instance;
+
+  try {
+    recipients.map((rcp) => {
+      ReachVoiceRecepients(rcp, {
+        userID,
+        profile,
+        clientID,
+        channelID,
+        instance,
+      });
+    });
+
+    addParticipant(channelID, {
+      userID,
+      profile,
+      clientID,
+      channelID,
+      instance,
+    });
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {

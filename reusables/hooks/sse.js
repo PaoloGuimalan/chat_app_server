@@ -770,20 +770,22 @@ const ReachCallRecepients = (rcp, decodedToken) => {
     callmetadata: decodedToken,
   });
 
-  //   if (sseWithUserID) {
-  //     sseWithUserID.response.map((itr, i) => {
-  //       itr.res.sse(`incomingcall`, {
-  //         status: true,
-  //         auth: true,
-  //         message: message,
-  //         result: encodedResult,
-  //       });
-  //     });
-  //   }
   publish(`events_${rcp}`, `incomingcall`, {
     status: true,
     auth: true,
     message: message,
+    result: encodedResult,
+  });
+};
+
+const ReachVoiceRecepients = (rcp, decodedToken) => {
+  const encodedResult = createJWTwExp({
+    voice_participant: decodedToken,
+  });
+
+  publish(`events_${rcp}`, `voice-joined`, {
+    status: true,
+    auth: true,
     result: encodedResult,
   });
 };
@@ -872,4 +874,5 @@ module.exports = {
   clearASingleSession,
   clearAllSession,
   BroadcastCoordinates,
+  ReachVoiceRecepients,
 };

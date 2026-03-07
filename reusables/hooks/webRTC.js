@@ -1,6 +1,6 @@
 require("dotenv").config();
 const mediasoup = require("mediasoup");
-const { publish } = require("../redis/pubsub");
+const { publish, removeParticipant } = require("../redis/pubsub");
 
 let worker;
 let rooms = new Map();
@@ -68,8 +68,7 @@ async function joinRoom(
     }));
 
   // Notify users that are already in the room, instead of trusting client-provided members.
-  Array.from(existingUsernames)
-    .map(async (mp) => {
+  Array.from(existingUsernames).map(async (mp) => {
     await publish(`events_${mp}`, "participant-joined", {
       conversationID,
       username,
@@ -282,6 +281,9 @@ async function consume(
 
 async function leaveRoom(conversationID, username, clientId) {
   const room = rooms.get(conversationID);
+
+  removeParticipant(conversationID, clientId);
+
   if (!room) {
     return;
   }
@@ -495,3 +497,4 @@ module.exports = {
   leaveRoom,
   participantStatus,
 };
+

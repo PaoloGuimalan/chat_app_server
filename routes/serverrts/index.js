@@ -18,6 +18,7 @@ const {
 const { AddNewMemberToChannels } = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
 const { transformServersData } = require("../../reusables/hooks/transformers");
+const { getAllParticipants } = require("../../reusables/redis/pubsub");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -378,7 +379,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     },
     { $group: { _id: "$conversationID", unreadCount: { $sum: 1 } } },
   ])
-    .then((result) => {
+    .then(async (result) => {
       const channelsWithReadsCount = deconstructedData.channels.map((mp) => ({
         ...mp,
         messages: result
@@ -392,9 +393,16 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           .filter((flt) => flt),
       }));
 
+      const channelsWParticipants = await Promise.all(
+        channelsWithReadsCount.map(async (mp) => ({
+          ...mp,
+          voice_participants: await getAllParticipants(mp.groupID),
+        })),
+      );
+
       const finalData = {
         ...deconstructedData,
-        channels: channelsWithReadsCount,
+        channels: channelsWParticipants,
       };
 
       const encodedResult = createJWT({

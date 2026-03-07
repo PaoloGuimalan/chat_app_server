@@ -108,6 +108,53 @@ async function publish_pub(channel, event, message) {
   }
 }
 
+async function addParticipant(conversationID, participantData) {
+  if (publisher) {
+    const key = `call:participants:${conversationID}`;
+    const { clientID } = participantData;
+
+    await publisher.hSet(key, clientID, JSON.stringify(participantData));
+  }
+}
+
+async function getParticipant(conversationID, clientID) {
+  if (publisher) {
+    const key = `call:participants:${conversationID}`;
+    const data = await publisher.hGet(key, clientID);
+    return data ? JSON.parse(data) : null;
+  }
+}
+
+async function getAllParticipants(conversationID) {
+  if (publisher) {
+    const key = `call:participants:${conversationID}`;
+    const allData = await publisher.hGetAll(key);
+
+    if (!allData || Object.keys(allData).length === 0) {
+      return [];
+    }
+
+    return Object.values(allData).map((val) => JSON.parse(val));
+  }
+
+  return [];
+}
+
+async function removeParticipant(conversationID, clientID) {
+  if (publisher) {
+    const key = `call:participants:${conversationID}`;
+    await publisher.hDel(key, clientID);
+  }
+}
+
+async function removeAllParticipants(conversationID) {
+  if (publisher) {
+    const key = `call:participants:${conversationID}`;
+    await publisher.del(key);
+    console.log(`Cleared all participants for conversation: ${conversationID}`);
+  }
+}
+
 module.exports = {
   connect_redis,
   listen,
@@ -115,4 +162,7 @@ module.exports = {
   publish,
   listen_sub,
   publish_pub,
+  addParticipant,
+  removeParticipant,
+  getAllParticipants,
 };
