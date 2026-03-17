@@ -9,6 +9,7 @@ const {
   transportConnect,
   produce,
   consume,
+  closeProducer,
   joinRoom,
   leaveRoom,
   participantStatus,
@@ -134,6 +135,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
     rtpParameters,
     instance,
     members,
+    appData,
   } = req.body;
   const username = req.params.userID;
   const clientId = req.body.clientId || username;
@@ -148,6 +150,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         username,
         members,
         clientId,
+        appData,
       );
 
       res.send({ status: true, message: "OK" });
@@ -160,6 +163,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         username,
         members,
         clientId,
+        appData,
       });
 
       res.send({ status: true, message: "OK" });
@@ -202,6 +206,30 @@ router.post("/consume", jwtchecker, async (req, res) => {
     }
   } catch (error) {
     console.error("consume error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/close-producer", jwtchecker, async (req, res) => {
+  const { conversationID, producerId, instance } = req.body;
+  const username = req.params.userID;
+  const clientId = req.body.clientId || username;
+
+  try {
+    if (!instance || instance === POD_NAME) {
+      closeProducer(conversationID, username, clientId, producerId);
+      res.send({ status: true, message: "OK" });
+    } else {
+      await publish_pub(instance, "close-producer-relay", {
+        conversationID,
+        username,
+        clientId,
+        producerId,
+      });
+      res.send({ status: true, message: "OK" });
+    }
+  } catch (error) {
+    console.error("close-producer error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -267,4 +295,3 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
 });
 
 module.exports = router;
-

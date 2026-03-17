@@ -27,6 +27,7 @@ async function createRoomRouter(conversationID) {
       router,
       producers: new Map(), // producerId -> producer
       producerOwners: new Map(), // producerId -> clientId
+      producerSources: new Map(), // producerId -> source label
       members: new Map(), // clientId -> username
       memberStatus: new Map(), // clientId -> { muted: boolean, cameraOff: boolean }
       transports: new Map(), // transportId -> { transport, clientId, username, direction }
@@ -97,6 +98,7 @@ async function joinRoom(
       producerId,
       kind: producer.kind,
       rtpParameters: producer.rtpParameters,
+      source: room.producerSources.get(producerId) || null,
       timestamp: Date.now(),
     });
   }
@@ -180,6 +182,7 @@ async function produce(
   username,
   members,
   clientId,
+  appData,
 ) {
   const room = await createRoomRouter(conversationID);
   const transportEntry = room.transports.get(transportId);
@@ -205,6 +208,9 @@ async function produce(
 
   room.producers.set(producer.id, producer);
   room.producerOwners.set(producer.id, clientId);
+  if (appData?.source) {
+    room.producerSources.set(producer.id, appData.source);
+  }
 
   console.log(`Producer created [${kind}] ID: ${producer.id}`);
 
@@ -218,6 +224,7 @@ async function produce(
       producerId: producer.id,
       kind,
       rtpParameters,
+      source: appData?.source || room.producerSources.get(producer.id) || null,
       timestamp: Date.now(),
     });
   });
@@ -275,8 +282,48 @@ async function consume(
     producerId,
     kind: consumer.kind,
     rtpParameters: consumer.rtpParameters,
+    source: room.producerSources.get(producerId) || null,
     clientId,
   });
+}
+
+async function closeProducer(conversationID, username, clientId, producerId) {
+  const room = rooms.get(conversationID);
+  if (!room) {
+    return;
+  }
+
+  const owner = room.producerOwners.get(producerId);
+  if (owner !== clientId) {
+    return;
+  }
+
+  const producer = room.producers.get(producerId);
+  if (producer) {
+    try {
+      producer.close();
+    } catch (_) {
+      // no-op
+    }
+  }
+
+  room.producers.delete(producerId);
+  room.producerOwners.delete(producerId);
+
+  const notifiedUsers = new Set();
+  for (const [, memberUsername] of room.members.entries()) {
+    if (notifiedUsers.has(memberUsername)) {
+      continue;
+    }
+    notifiedUsers.add(memberUsername);
+    await publish(`events_${memberUsername}`, "producer-closed", {
+      conversationID,
+      username,
+      clientId,
+      producerId,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 async function leaveRoom(conversationID, username, clientId) {
@@ -303,6 +350,7 @@ async function leaveRoom(conversationID, username, clientId) {
 
     room.producers.delete(producerId);
     room.producerOwners.delete(producerId);
+    room.producerSources.delete(producerId);
     closedProducerIds.push(producerId);
   }
 
@@ -444,8 +492,18 @@ function webRTCEvents(event, message) {
         username: usrnm,
         members,
         clientId,
+        appData,
       } = message;
-      produce(cnvsID, trnsptID, kind, rtpParameters, usrnm, members, clientId);
+      produce(
+        cnvsID,
+        trnsptID,
+        kind,
+        rtpParameters,
+        usrnm,
+        members,
+        clientId,
+        appData,
+      );
       break;
     }
     case "consume-relay": {
@@ -467,6 +525,14 @@ function webRTCEvents(event, message) {
       );
       break;
     }
+    case "close-producer-relay":
+      closeProducer(
+        message.conversationID,
+        message.username,
+        message.clientId,
+        message.producerId,
+      );
+      break;
     case "leave-room-relay":
       leaveRoom(message.conversationID, message.username, message.clientId);
       break;
@@ -494,7 +560,7 @@ module.exports = {
   transportConnect,
   produce,
   consume,
+  closeProducer,
   leaveRoom,
   participantStatus,
 };
-
