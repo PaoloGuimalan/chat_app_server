@@ -500,10 +500,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("BEGIN");
 
       // Insert Post
-      if (
-        filereferences.length !== finaluploadedreferences.length &&
-        decodeToken.content.data.trim() === ""
-      ) {
+      if (filereferences.length !== finaluploadedreferences.length) {
         throw new Error("Failed to create post!");
       }
 
