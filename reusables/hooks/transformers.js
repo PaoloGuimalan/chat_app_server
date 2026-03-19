@@ -85,10 +85,10 @@ function generateUUID() {
     let r = Math.random() * 16;
 
     if (dt > 0) {
-      r = (dt + r) % 16 | 0;
+      r = ((dt + r) % 16) | 0;
       dt = Math.floor(dt / 16);
     } else {
-      r = (dt2 + r) % 16 | 0;
+      r = ((dt2 + r) % 16) | 0;
       dt2 = Math.floor(dt2 / 16);
     }
 
@@ -211,10 +211,21 @@ function transformServersData(serversArray, preview) {
   });
 }
 
+function sanitizeForStorage(content) {
+  if (!content) return "";
+  return content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 module.exports = {
   transformUser,
   generateUUID,
   formatConnectionData,
   formatToDesiredStructure,
   transformServersData,
+  sanitizeForStorage,
 };

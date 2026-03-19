@@ -108,6 +108,7 @@ const {
   CALL_REJECT_NOTIF_LOOPER,
 } = require("../../reusables/vars/rabbitmqevents");
 const { publish, stop_listen } = require("../../reusables/redis/pubsub");
+const { sanitizeForStorage } = require("../../reusables/hooks/transformers");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -991,6 +992,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const messageType = decodedToken.messageType;
     const conversationType = decodedToken.conversationType;
 
+    const sanitizedContent = sanitizeForStorage(content);
+
     const payload = {
       messageID: messageID,
       conversationID: conversationID,
@@ -998,7 +1001,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       sender: sender,
       receivers: receivers,
       seeners: seeners,
-      content: content,
+      content: sanitizedContent,
       messageDate: messageDate,
       isReply: isReply,
       replyingTo: replyingTo,
