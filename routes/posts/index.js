@@ -500,7 +500,14 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       await client.query("BEGIN");
 
       // Insert Post
-      const postResult = await client.query(postInsertQuery, postValues);
+      if (
+        finaluploadedreferences.length === 0 &&
+        decodeToken.content.data.trim() === ""
+      ) {
+        throw new Error("Failed to create post!");
+      }
+
+      await client.query(postInsertQuery, postValues);
 
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
@@ -697,7 +704,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     } catch (err) {
       await client.query("ROLLBACK");
       console.error("Transaction error:", err);
-      res.status(500).send({ status: false, message: "Database error." });
+      res.status(500).send({ status: false, message: err });
     } finally {
       // client.release(); // very important!
       pool.releaseClient(client);
