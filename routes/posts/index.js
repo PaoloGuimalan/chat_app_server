@@ -704,7 +704,9 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     } catch (err) {
       await client.query("ROLLBACK");
       console.error("Transaction error:", err);
-      res.status(500).send({ status: false, message: err });
+      res
+        .status(500)
+        .send({ status: false, message: err.message || err.toString() });
     } finally {
       // client.release(); // very important!
       pool.releaseClient(client);
