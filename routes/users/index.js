@@ -2006,7 +2006,7 @@ const saveFileRecordToDatabase = async (
 
   const newFile = new UploadedFiles(payload);
 
-  newFile
+  await newFile
     .save()
     .then(() => {})
     .catch((err) => {
@@ -2021,6 +2021,7 @@ const uploadFirebase = async (
   isReply,
   replyingTo,
   conversationType,
+  onComplete,
 ) => {
   var messageID = await checkExistingMessageID(makeID(30));
 
@@ -2075,11 +2076,11 @@ const uploadFirebase = async (
       contentType: fileTypeBase,
       public: true,
     })
-    .then((url) => {
+    .then(async (url) => {
       const publicUrl = mp.type.includes("image")
         ? `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithID}`
         : `https://storage.googleapis.com/${FIREBASE_STORAGE_BUCKET}/${finalPathwithIDEncoded}%%%${mp.name}`;
-      saveFileMessage(
+      await saveFileMessage(
         userID,
         messageID,
         mp.pendingID,
@@ -2090,9 +2091,11 @@ const uploadFirebase = async (
         replyingTo,
         mp.type,
         conversationType,
+        onComplete,
       );
     })
     .catch((err) => {
+      onComplete(false);
       console.log(err);
     });
 };
@@ -2108,6 +2111,7 @@ const saveFileMessage = async (
   replyingTo,
   messageType,
   conversationType,
+  onComplete,
 ) => {
   const seeners = [userID]; //Array
   const messageDate = {
@@ -2134,10 +2138,11 @@ const saveFileMessage = async (
 
   const newMessage = new UserMessage(payload);
 
-  newMessage
+  await newMessage
     .save()
     .then(async () => {
-      saveFileRecordToDatabase(
+      onComplete(true);
+      await saveFileRecordToDatabase(
         [messageID, conversationID],
         content,
         "message",
@@ -2149,6 +2154,7 @@ const saveFileMessage = async (
       // });
     })
     .catch((err) => {
+      onComplete(false);
       console.log(err);
     });
 };
@@ -2169,6 +2175,8 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     const replyingTo = decodeToken.replyingTo;
     const conversationType = decodeToken.conversationType;
 
+    let settledFiles = 0;
+
     await Promise.allSettled(
       files.map((mp) => {
         uploadFirebase(
@@ -2178,13 +2186,17 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
           isReply,
           replyingTo,
           conversationType,
+          (status) => {
+            settledFiles += 1;
+            if (files.length === settledFiles) {
+              receivers.map((rcvs, i) => {
+                MessagesTrigger(rcvs, userID, false);
+              });
+            }
+          },
         );
       }),
     );
-
-    receivers.map((rcvs, i) => {
-      MessagesTrigger(rcvs, userID, false);
-    });
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
