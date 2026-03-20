@@ -2141,27 +2141,9 @@ const saveFileMessage = async (
         messageType,
         "firebase",
       );
-      receivers.map((rcvs, i) => {
-        MessagesTrigger(rcvs, userID, false);
-        // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers,
-        //     sender: userID,
-        //     onseen: false,
-        //   },
-        // });
-      });
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     MESSAGES_TRIGGER_LOOPER,
-      //     {
-      //       parameters: {
-      //         receivers: receivers,
-      //         sender: userID,
-      //         onseen: false,
-      //       },
-      //     }
-      //   );
+      // receivers.map((rcvs, i) => {
+      //   MessagesTrigger(rcvs, userID, false);
+      // });
     })
     .catch((err) => {
       console.log(err);
@@ -2184,15 +2166,21 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     const replyingTo = decodeToken.replyingTo;
     const conversationType = decodeToken.conversationType;
 
-    files.map((mp) => {
-      uploadFirebase(
-        mp,
-        userID,
-        receivers,
-        isReply,
-        replyingTo,
-        conversationType,
-      );
+    await Promise.allSettled(
+      files.map((mp) => {
+        uploadFirebase(
+          mp,
+          userID,
+          receivers,
+          isReply,
+          replyingTo,
+          conversationType,
+        );
+      }),
+    );
+
+    receivers.map((rcvs, i) => {
+      MessagesTrigger(rcvs, userID, false);
     });
 
     res.send({ status: true, message: "OK" });
