@@ -2091,6 +2091,9 @@ const uploadFirebase = async (
         mp.type,
         conversationType,
       );
+    })
+    .catch((err) => {
+      console.log(err);
     });
 };
 
