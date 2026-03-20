@@ -2113,7 +2113,8 @@ const saveFileMessage = async (
   conversationType,
   onComplete,
 ) => {
-  const seeners = [userID]; //Array
+  // const seeners = [userID]; //Array
+  const seeners = []; //Array
   const messageDate = {
     date: dateGetter(),
     time: timeGetter(),
