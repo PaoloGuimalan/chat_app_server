@@ -230,100 +230,12 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
       .save()
       .then(async () => {
         SendTagPostNotification(`@${userID} tagged you on a post.`, mp);
-        // publish(`events_${mp}`, SEND_TAG_POST_NOTIFICATION, {
-        //   parameters: {
-        //     details: `@${userID} tagged you on a post.`,
-        //     userID: mp,
-        //   },
-        // });
-        // await producer.publishMessage("INFO:CHATTERLOOP", SEND_TAG_POST_NOTIFICATION, {
-        //     parameters: {
-        //         details: `@${userID} tagged you on a post.`,
-        //         userID: mp,
-        //     }
-        // });
-        // sseNotificationstrigger(type, sendFromUser, actionlog)
       })
       .catch((err) => {
         console.log(err);
       });
   });
 };
-
-// router.post("/createpost", jwtchecker, async (req, res) => {
-//   const userID = req.params.userID;
-//   const postID = await checkPostIDExisting(makeID(30));
-//   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
-
-//   const token = req.body.token;
-
-//   try {
-//     const decodeToken = jwt.verify(token, JWT_SECRET);
-//     const filereferencesraw = decodeToken.content.references;
-//     const filereferences = filereferencesraw.map((mp) => ({
-//       name: mp.name,
-//       caption: mp.caption,
-//       reference: mp.reference,
-//       referenceMediaType: mp.referenceMediaType,
-//       referenceID: `${postID}_${makeID(20)}`,
-//     }));
-
-//     const finaluploadedreferences = decodeToken.content.isShared
-//       ? filereferences
-//       : await uploadFirebaseMultiple(filereferences);
-
-//     if (decodeToken.content.isShared) {
-//       finaluploadedreferences.map((mp) => {
-//         saveFileRecordToDatabase(
-//           [mp.referenceID],
-//           mp.reference,
-//           "post",
-//           mp.referenceMediaType,
-//           "firebase"
-//         );
-//       });
-//     }
-
-//     const payload = {
-//       postID: postID,
-//       userID: userID,
-//       isSponsored: false,
-//       isLive: false,
-//       isOnMap: {
-//         status: false,
-//         isStationary: true,
-//       },
-//       fromSystem: true,
-//       dateposted: currentTimestampInSeconds,
-//       ...decodeToken,
-//       content: {
-//         ...decodeToken.content,
-//         references: finaluploadedreferences,
-//       },
-//     };
-
-//     // console.log(userID, payload, payload.content.references);
-
-//     const newPost = new Posts(payload);
-
-//     newPost
-//       .save()
-//       .then(() => {
-//         // use sse to return response with data
-//         if (decodeToken.tagging.isTagged) {
-//           notifyTaggedUser(userID, postID, decodeToken.tagging.users);
-//         }
-//         res.send({ status: true, result: "OK" });
-//       })
-//       .catch((err) => {
-//         res.send({ status: false, message: err.message });
-//         console.log(err);
-//       });
-//   } catch (ex) {
-//     console.log(ex);
-//     res.send({ status: false, message: "Cannot decode token" });
-//   }
-// });
 
 router.post("/upload", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -464,6 +376,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           "post",
           mp.referenceMediaType,
           "firebase",
+          mp.name,
         );
       });
     }
