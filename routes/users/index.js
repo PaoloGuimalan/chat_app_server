@@ -1511,6 +1511,8 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
+      console.log(username, userID);
+
       if (username === userID) {
         params.push("admin"); // member role
       } else {
