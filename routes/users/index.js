@@ -1500,7 +1500,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId, username }) => {
+    rows.forEach(({ id: accountId }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1511,9 +1511,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      console.log(username, userID);
-
-      if (username === userID) {
+      if (accountId === id) {
         params.push("admin"); // member role
       } else {
         params.push("member"); // member role
@@ -1613,7 +1611,7 @@ const createRealmReusable = async (
     const allReceivers = userReceivers.map((mp) => mp.userID);
 
     const { rows } = await client.query(
-      `SELECT id from user_account WHERE username = ANY($1)`,
+      `SELECT id, username from user_account WHERE username = ANY($1)`,
       [allReceivers],
     );
 
