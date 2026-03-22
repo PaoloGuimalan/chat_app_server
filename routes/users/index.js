@@ -1491,38 +1491,6 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       userID: alr,
     }));
 
-    // console.log(allReceivers)
-
-    // const payload = {
-    //   contactID: contactID,
-    //   actionBy: userID,
-    //   actionDate: {
-    //     date: dateGetter(),
-    //     time: timeGetter(),
-    //   },
-    //   status: true,
-    //   type: "group",
-    //   users: userReceivers,
-    // };
-
-    // const newContact = new UserContacts(payload);
-
-    // newContact
-    //   .save()
-    //   .then(async () => {
-    // const groupParams = {
-    //   groupID: contactID,
-    //   groupName: groupName,
-    //   profile: "",
-    //   dateCreated: {
-    //     date: dateGetter(),
-    //     time: timeGetter(),
-    //   },
-    //   createdBy: userID,
-    //   privacy: privacy,
-    //   type: "group",
-    // };
-
     const { rows } = await client.query(
       `SELECT id from user_account WHERE username = ANY($1)`,
       [userReceivers.map((mp) => mp.userID)],
@@ -1534,7 +1502,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     rows.forEach(({ id: accountId }) => {
       insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
@@ -1542,6 +1510,13 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params.push(contactID); // pass your realm ID here
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
+
+      if (accountId === userID) {
+        params.push("admin"); // member role
+        return;
+      }
+
+      params.push("member"); // member role
     });
 
     await client.query(
@@ -1566,7 +1541,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     await client.query(
       `
-        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
+        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined, role)
         VALUES ${insertValues.join(", ")}
       `,
       params,
