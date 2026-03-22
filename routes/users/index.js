@@ -1513,10 +1513,9 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
       if (username === userID) {
         params.push("admin"); // member role
-        return;
+      } else {
+        params.push("member"); // member role
       }
-
-      params.push("member"); // member role
     });
 
     await client.query(
@@ -1633,10 +1632,9 @@ const createRealmReusable = async (
 
       if (username === userID) {
         params.push("admin"); // member role
-        return;
+      } else {
+        params.push("member"); // member role
       }
-
-      params.push("member"); // member role
     });
 
     await client.query(
