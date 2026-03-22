@@ -596,41 +596,26 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       },
     },
     {
-      $sort: { _id: -1 },
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [
+          { $sort: { _id: -1 } },
+          { $skip: (parseInt(page) - 1) * parseInt(range) },
+          { $limit: parseInt(range) },
+        ],
+      },
     },
     {
-      $skip: (parseInt(page) - 1) * parseInt(range),
+      $project: {
+        data: 1,
+        total: { $arrayElemAt: ["$metadata.total", 0] },
+      },
     },
-    {
-      $limit: parseInt(range),
-    },
-    // {
-    //   $lookup: {
-    //     from: "useraccount",
-    //     localField: "fromUserID",
-    //     foreignField: "userID",
-    //     as: "fromUser",
-    //   },
-    // },
-    // {
-    //   $unwind: {
-    //     path: "$fromUser",
-    //     preserveNullAndEmptyArrays: true,
-    //   },
-    // },
-    // {
-    //   $project: {
-    //     "fromUser._id": 0,
-    //     "fromUser.birthdate": 0,
-    //     "fromUser.gender": 0,
-    //     "fromUser.email": 0,
-    //     "fromUser.password": 0,
-    //     "fromUser.dateCreated": 0,
-    //   },
-    // },
   ])
-    .then(async (result) => {
-      // console.log(result)
+    .then(async (result_raw) => {
+      const result = result_raw[0].data;
+      const total = result_raw[0].total;
+      const next = total - range * page > 0;
       const userIDs = result.map((mp) => mp.fromUserID);
       const uniqueIDs = [...new Set(userIDs)];
 
@@ -651,6 +636,8 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
         {
           notifications: finalNotification,
           totalunread: UnreadNotificationsTotal,
+          total,
+          next,
         },
         JWT_SECRET,
         {
@@ -1113,29 +1100,37 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       },
     },
     {
-      $sort: {
-        sortID: -1,
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [
+          { $sort: { sortID: -1 } },
+          { $skip: (parseInt(page) - 1) * parseInt(range) },
+          { $limit: parseInt(range) },
+          {
+            $project: {
+              "users.birthdate": 0,
+              "users.dateCreated": 0,
+              "users.email": 0,
+              "users.gender": 0,
+              "users.isActivated": 0,
+              "users.isVerified": 0,
+              "users.password": 0,
+            },
+          },
+        ],
       },
-    },
-    {
-      $skip: (parseInt(page) - 1) * parseInt(range),
-    },
-    {
-      $limit: parseInt(range),
     },
     {
       $project: {
-        "users.birthdate": 0,
-        "users.dateCreated": 0,
-        "users.email": 0,
-        "users.gender": 0,
-        "users.isActivated": 0,
-        "users.isVerified": 0,
-        "users.password": 0,
+        data: 1,
+        total: { $arrayElemAt: ["$metadata.total", 0] },
       },
     },
   ])
-    .then(async (result) => {
+    .then(async (result_raw) => {
+      const result = result_raw[0].data;
+      const total = result_raw[0].total;
+      const next = total - range * page > 0;
       const resultReceivers = result.map((mp) => mp.receivers);
       const resultGroups = result.map((mp) => mp.conversationID);
 
@@ -1239,6 +1234,8 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       const encodedResult = jwt.sign(
         {
           conversationslist: finalResultWParticipants,
+          total,
+          next,
         },
         JWT_SECRET,
         {
