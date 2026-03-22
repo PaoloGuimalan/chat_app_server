@@ -85,7 +85,10 @@ const {
   BroadcastCoordinates,
   ReachVoiceRecepients,
 } = require("../../reusables/hooks/sse");
-const { storage } = require("../../reusables/hooks/firebaseupload");
+const {
+  storage,
+  uploadFirebaseMultiple,
+} = require("../../reusables/hooks/firebaseupload");
 const {
   CountAllUnreadNotifications,
 } = require("../../reusables/models/notifications");
@@ -1609,90 +1612,33 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
   }
 });
 
-const creategroupchatreusable = async (
+const createRealmReusable = async (
   id,
-  serverID,
-  currentID,
-  channelName,
+  parentRealmID,
+  realmID,
+  realmName,
+  realmProfile,
+  realmCoverPhoto,
+  realmDesc,
   userIDpass,
-  tokenpass,
+  userReceivers,
   privacyprop,
   type,
 ) => {
   const userID = userIDpass;
-  const token = tokenpass;
+  const profile = realmProfile || "N/A";
 
   const client = await pool.getPool();
 
   try {
-    const decodeToken = jwt.verify(token, JWT_SECRET);
-
-    const contactID = currentID ?? (await checkGroupID(`${makeID(20)}`));
-    const otherUsers = decodeToken.otherUsers;
+    const contactID = realmID ?? (await checkGroupID(`${makeID(20)}`));
     const privacy = privacyprop;
-    const allReceivers = [userID, ...otherUsers];
-    const userReceivers = allReceivers.map((alr, i) => ({
-      userID: alr,
-    }));
 
-    // console.log(allReceivers)
-
-    // const payload = {
-    //   contactID: contactID,
-    //   actionBy: userID,
-    //   actionDate: {
-    //     date: dateGetter(),
-    //     time: timeGetter(),
-    //   },
-    //   status: privacy,
-    //   type: "server",
-    //   users: userReceivers,
-    // };
-
-    // const newContact = new UserContacts(payload);
-
-    // newContact
-    //   .save()
-    //   .then(async () => {
-    //     const groupParams = {
-    //       serverID: serverID,
-    //       groupID: contactID,
-    //       groupName: channelName,
-    //       profile: "",
-    //       dateCreated: {
-    //         date: dateGetter(),
-    //         time: timeGetter(),
-    //       },
-    //       createdBy: userID,
-    //       privacy: privacy,
-    //       type: "server",
-    //     };
-
-    //     const newGroup = new UserGroups(groupParams);
-    //     newGroup
-    //       .save()
-    //       .then(async () => {
-    //         sendMessageInitForGC(
-    //           contactID,
-    //           userID,
-    //           allReceivers,
-    //           "created the channel",
-    //           "server"
-    //         );
-    //       })
-    //       .catch((err) => {
-    //         console.log(err);
-    //       });
-
-    //     // res.send({ status: true, message: `You created a Group Chat` })
-    //   })
-    //   .catch((err) => {
-    //     console.log(err);
-    //   });
+    const allReceivers = userReceivers.map((mp) => mp.userID);
 
     const { rows } = await client.query(
       `SELECT id from user_account WHERE username = ANY($1)`,
-      [userReceivers.map((mp) => mp.userID)],
+      [allReceivers],
     );
 
     const insertValues = [];
@@ -1701,7 +1647,7 @@ const creategroupchatreusable = async (
 
     rows.forEach(({ id: accountId }) => {
       insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
@@ -1709,31 +1655,40 @@ const creategroupchatreusable = async (
       params.push(contactID); // pass your realm ID here
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
+
+      if (accountId === userID) {
+        params.push("admin"); // member role
+        return;
+      }
+
+      params.push("member"); // member role
     });
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
       )`,
       [
         contactID,
         contactID,
-        channelName,
-        "N/A",
+        realmName,
+        profile,
         type,
         id,
-        serverID,
+        parentRealmID,
         true,
         privacy,
         false,
+        realmCoverPhoto,
+        realmDesc,
       ],
     );
 
     await client.query(
       `
-        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined)
+        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined, role)
         VALUES ${insertValues.join(", ")}
       `,
       params,
@@ -1741,17 +1696,13 @@ const creategroupchatreusable = async (
 
     await client.query("COMMIT");
 
-    // const newGroup = new UserGroups(groupParams);
-    // newGroup
-    //   .save()
-    //   .then(async () => {
-    if (type !== "server" && type !== "voice") {
+    if (type !== "server" && type !== "voice" && type !== "page") {
       sendMessageInitForGC(
         contactID,
         userID,
         allReceivers,
         "created the group chat",
-        serverID ? "server" : "group",
+        parentRealmID ? "server" : "group",
       );
     }
   } catch (ex) {
@@ -1769,50 +1720,42 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.otherUsers;
-    // const memberstoaddinserverdts = memberstoadd.map((mp) => ({ userID: mp }));
     const privacy = decodedToken.privacy;
     const type = decodedToken.type; // group (channel) or voice
     const groupName = decodedToken.groupName;
 
+    const allReceivers = [userID, ...memberstoadd];
+    const userReceivers = allReceivers.map((alr, i) => ({
+      userID: alr,
+    }));
+
     const serverMembers = await GetServerMembers(serverID, false);
 
     if (privacy) {
-      const modifiedservermembers = memberstoadd;
-      // console.log(privacy, modifiedservermembers);
-      const channeltoken = jwt.sign(
-        {
-          otherUsers: modifiedservermembers,
-        },
-        JWT_SECRET,
-      );
-      creategroupchatreusable(
+      createRealmReusable(
         id,
         serverID,
         null,
         groupName,
+        null,
+        null,
+        null,
         userID,
-        channeltoken,
+        userReceivers,
         privacy,
         type, // "group"
       );
     } else {
-      const modifiedservermemberspub = serverMembers
-        .filter((flt) => flt.userID !== userID)
-        .map((mp) => mp.userID);
-      const channeltokenpub = jwt.sign(
-        {
-          otherUsers: modifiedservermemberspub,
-        },
-        JWT_SECRET,
-      );
-      // console.log(privacy, modifiedservermemberspub, jwt.verify(channeltokenpub, JWT_SECRET))
-      creategroupchatreusable(
+      createRealmReusable(
         id,
         serverID,
         null,
         groupName,
+        null,
+        null,
+        null,
         userID,
-        channeltokenpub,
+        serverMembers,
         privacy,
         type, // "group"
       );
@@ -1843,59 +1786,101 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       userID: alr,
     }));
 
-    // console.log(allReceivers)
-
-    // const payload = {
-    //   serverID: serverID,
-    //   serverName: serverName,
-    //   profile: "",
-    //   dateCreated: {
-    //     date: dateGetter(),
-    //     time: timeGetter(),
-    //   },
-    //   members: userReceivers,
-    //   createdBy: userID,
-    //   privacy: privacy,
-    // };
-
-    // const newserver = new UserServers(payload);
-    // newserver
-    //   .save()
-    //   .then(async () => {
-    creategroupchatreusable(
+    createRealmReusable(
       id,
       null,
       serverID,
       serverName,
+      null,
+      null,
+      null,
       userID,
-      token,
-      false,
+      userReceivers,
+      privacy,
       "server",
     );
 
     defaultchannellist.map((mp) => {
-      creategroupchatreusable(
+      createRealmReusable(
         id,
         serverID,
         null,
         mp,
+        null,
+        null,
+        null,
         userID,
-        token,
+        userReceivers,
         false,
         "group",
       );
     });
     res.send({ status: true, message: `You created a Group Chat` });
-    // })
-    // .catch((err) => {
-    //   res.send({
-    //     status: false,
-    //     message: "Creating a server encountered an error!",
-    //   });
-    //   console.log(err);
-    // });
   } catch (ex) {
     res.send({ status: false, message: "Group token encountered an error!" });
+    console.log(ex);
+  }
+});
+
+router.post("/createpage", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const id = req.params.id;
+  const token = req.body;
+
+  try {
+    const decodeToken = token;
+
+    const pageID = await checkGroupID(`${makeID(20)}`);
+    const otherUsers = decodeToken.otherUsers;
+    const pageName = decodeToken.pageName;
+    const pageDescription = decodeToken.pageDescription;
+    const allReceivers = [userID, ...otherUsers];
+    const userReceivers = allReceivers.map((alr, i) => ({
+      userID: alr,
+    }));
+
+    const filereferencesraw = decodeToken.media;
+    const filereferences = filereferencesraw.map((mp) => ({
+      name: mp.name,
+      reference: mp.reference,
+      referenceMediaType: mp.referenceMediaType,
+      type: mp.type, // cover_photo or profile
+      referenceID: `${postID}_${makeID(20)}`,
+    }));
+
+    const finaluploadedreferences =
+      await uploadFirebaseMultiple(filereferences);
+
+    if (finaluploadedreferences.length === filereferencesraw.length) {
+      const profile = finaluploadedreferences.filter(
+        (flt) => flt.type === "profile",
+      )[0].reference;
+      const coverPhoto = finaluploadedreferences.filter(
+        (flt) => flt.type === "cover_photo",
+      )[0].reference;
+
+      createRealmReusable(
+        id,
+        null,
+        pageID,
+        pageName,
+        profile,
+        coverPhoto,
+        pageDescription,
+        userID,
+        userReceivers,
+        false,
+        "page",
+      );
+
+      res.send({ status: true, message: `You created a Group Chat` });
+    } else {
+      throw new Error("Error occured during upload");
+    }
+  } catch (ex) {
+    res
+      .status(500)
+      .send({ status: false, message: ex.message || ex.toString() });
     console.log(ex);
   }
 });

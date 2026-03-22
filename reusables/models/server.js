@@ -23,7 +23,7 @@ const GetServerChannels = async (serverID, privacy) => {
     FROM community_realm cr
     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
     WHERE cr.parent_id = $1 AND cr.type = 'group' AND cr.is_private = $2;`,
-    [serverID, privacy]
+    [serverID, privacy],
   );
 
   return rows;
@@ -65,7 +65,7 @@ const GetServerDetails = async (serverID) => {
     FROM community_realm cr
     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
     WHERE realm_id = $1 AND type = 'server';`,
-    [serverID]
+    [serverID],
   );
 
   return rows.length > 0 ? rows[0] : null;
@@ -97,44 +97,10 @@ const GetServerMembers = async (serverID, withDetails) => {
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.account_id = pua.id
        WHERE realm_id = $1;`,
-      [serverID]
+      [serverID],
     );
 
     return rows;
-
-    // return await UserServer.aggregate([
-    //   {
-    //     $match: { serverID: serverID },
-    //   },
-    //   {
-    //     $lookup: {
-    //       from: "useraccount",
-    //       localField: "members.userID",
-    //       foreignField: "userID",
-    //       as: "userdetails",
-    //     },
-    //   },
-    //   {
-    //     $project: {
-    //       "userdetails.birthdate": 0,
-    //       "userdetails.dateCreated": 0,
-    //       "userdetails.email": 0,
-    //       "userdetails.gender": 0,
-    //       "userdetails.password": 0,
-    //       "userdetails.coverphoto": 0,
-    //     },
-    //   },
-    // ])
-    //   .then((result) => {
-    //     if (result.length > 0) {
-    //       return result[0].userdetails;
-    //     } else {
-    //       return null;
-    //     }
-    //   })
-    //   .catch((err) => {
-    //     throw new Error(err);
-    //   });
   } else {
     const { rows } = await pool.query(
       `SELECT
@@ -144,7 +110,7 @@ const GetServerMembers = async (serverID, withDetails) => {
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.account_id = pua.id
        WHERE realm_id = $1;`,
-      [serverID]
+      [serverID],
     );
 
     return rows;
