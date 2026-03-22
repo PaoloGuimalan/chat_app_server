@@ -30,6 +30,7 @@ const {
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
+const Storage = require("../../reusables/hooks/storage");
 
 const firebaseAdminConfig = {
   type: FIREBASE_TYPE,
@@ -1823,8 +1824,13 @@ router.post("/createpage", jwtchecker, async (req, res) => {
       referenceID: `${postID}_${makeID(20)}`,
     }));
 
-    const finaluploadedreferences =
-      await uploadFirebaseMultiple(filereferences);
+    // const finaluploadedreferences =
+    //   await uploadFirebaseMultiple(filereferences);
+
+    const finaluploadedreferences = await Storage.uploadMultipleBase64(
+      filereferences,
+      `uploads/pages/${pageID}`,
+    );
 
     if (finaluploadedreferences.length === filereferencesraw.length) {
       const profile = finaluploadedreferences.filter(
@@ -1923,9 +1929,10 @@ const checkExistingFileID = async (checkID) => {
     });
 };
 
-const uploadMessageFirebase = async (
+const uploadMessage = async (
   mp,
   userID,
+  conversationID,
   receivers,
   isReply,
   replyingTo,
@@ -1935,7 +1942,12 @@ const uploadMessageFirebase = async (
   try {
     var messageID = await checkExistingMessageID(makeID(30));
 
-    const publicUrl = await uploadFirebase(mp);
+    // const publicUrl = await uploadFirebase(mp);
+    const publicUrl = await Storage.uploadBase64(
+      mp.reference,
+      mp.name,
+      `uploads/messages/${conversationID}`,
+    );
 
     await saveFileMessage(
       userID,
@@ -2035,9 +2047,10 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
 
     await Promise.allSettled(
       files.map((mp) => {
-        uploadMessageFirebase(
+        uploadMessage(
           mp,
           userID,
+          conversationID,
           receivers,
           isReply,
           replyingTo,

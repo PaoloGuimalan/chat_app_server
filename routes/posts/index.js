@@ -32,6 +32,8 @@ const { publish } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { generateUUID } = require("../../reusables/hooks/transformers");
 
+const Storage = require("../../reusables/hooks/storage");
+
 const JWT_SECRET = process.env.JWT_SECRET;
 
 router.get("/preview/:postID", jwtchecker, async (req, res) => {
@@ -252,15 +254,20 @@ router.post("/upload", jwtchecker, async (req, res) => {
       referenceID: id,
     }));
 
-    const finaluploadedreferences =
-      await uploadFirebaseMultiple(filereferences);
+    // const finaluploadedreferences =
+    //   await uploadFirebaseMultiple(filereferences);
+
+    const finaluploadedreferences = await Storage.uploadMultipleBase64(
+      filereferences,
+      `uploads/entries/${id}`,
+    );
 
     const savedFiles = await Promise.all(
       finaluploadedreferences.map((mp) =>
         saveFileRecordToDatabase(
           [mp.referenceID, `NTR_ATTCH_${makeID(20)}`],
           mp.reference,
-          "post",
+          "entry",
           mp.referenceMediaType,
           "firebase",
           mp.name,
@@ -292,16 +299,23 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     const filereferencesraw = decodeToken.content.references;
     const content_type = decodeToken.type.contentType;
     const filereferences = filereferencesraw.map((mp) => ({
-      name: mp.name,
+      name: mp.name || `${postID}_${makeID(20)}`,
       caption: mp.caption,
       reference: mp.reference,
       referenceMediaType: mp.referenceMediaType,
       referenceID: `${postID}_${makeID(20)}`,
     }));
 
+    // const finaluploadedreferences = decodeToken.content.isShared
+    //   ? filereferences
+    //   : await uploadFirebaseMultiple(filereferences);
+
     const finaluploadedreferences = decodeToken.content.isShared
       ? filereferences
-      : await uploadFirebaseMultiple(filereferences);
+      : await Storage.uploadMultipleBase64(
+          filereferences,
+          `uploads/posts/${id}/${postID}`,
+        );
 
     if (decodeToken.content.isShared) {
       finaluploadedreferences.forEach(async (mp) => {
