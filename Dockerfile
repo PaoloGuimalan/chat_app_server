@@ -10,7 +10,7 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-COPY .env .env
+# COPY .env .env
 COPY package*.json ./
 
 RUN npm install
