@@ -1500,7 +1500,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rows.forEach(({ id: accountId, username }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1511,7 +1511,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      if (accountId === userID) {
+      if (username === userID) {
         params.push("admin"); // member role
         return;
       }
@@ -1620,7 +1620,7 @@ const createRealmReusable = async (
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rows.forEach(({ id: accountId, username }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1631,7 +1631,7 @@ const createRealmReusable = async (
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      if (accountId === userID) {
+      if (username === userID) {
         params.push("admin"); // member role
         return;
       }
