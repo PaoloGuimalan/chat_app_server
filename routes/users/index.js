@@ -1932,32 +1932,37 @@ const uploadMessageFirebase = async (
   conversationType,
   onComplete,
 ) => {
-  var messageID = await checkExistingMessageID(makeID(30));
+  try {
+    var messageID = await checkExistingMessageID(makeID(30));
 
-  const publicUrl = await uploadFirebase(mp);
+    const publicUrl = await uploadFirebase(mp);
 
-  await saveFileMessage(
-    userID,
-    messageID,
-    mp.pendingID,
-    mp.conversationID,
-    receivers,
-    publicUrl,
-    isReply,
-    replyingTo,
-    mp.type,
-    conversationType,
-    onComplete,
-  );
+    await saveFileMessage(
+      userID,
+      messageID,
+      mp.pendingID,
+      mp.conversationID,
+      receivers,
+      publicUrl,
+      isReply,
+      replyingTo,
+      mp.type,
+      conversationType,
+      onComplete,
+    );
 
-  await saveFileRecordToDatabase(
-    [messageID, mp.conversationID],
-    publicUrl,
-    "message",
-    mp.type,
-    "firebase",
-    mp.name,
-  );
+    await saveFileRecordToDatabase(
+      [messageID, mp.conversationID],
+      publicUrl,
+      "message",
+      mp.type,
+      "firebase",
+      mp.name,
+    );
+  } catch (err) {
+    console.log(err);
+    onComplete(false);
+  }
 };
 
 const saveFileMessage = async (
