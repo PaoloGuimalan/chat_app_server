@@ -2,14 +2,33 @@ require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const UserAccount = require("../../schema/auth/useraccount");
 const pool = require("../database/postgres");
+const { decryptNonce } = require("./crypto");
+const { isUniqueNonce } = require("../redis/pubsub");
+const message = require("../../schema/messages/message");
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const jwtchecker = (req, res, next) => {
   const token = req.headers["x-access-token"];
   const origin = req.headers["origin"];
+  const nonce = req.headers["x-nonce"];
 
   if (!origin) {
     res.status(403).send({ status: false, message: "Request not allowed!" });
+    return;
+  }
+
+  if (!nonce) {
+    res.status(403).send({ status: false, message: "Request not allowed!" });
+    return;
+  }
+
+  const decrypted = decryptNonce(nonce);
+
+  if (!decrypted) {
+    res.status(403).send({
+      status: false,
+      message: "Request not allowed! Invalid request.",
+    });
     return;
   }
 
@@ -25,6 +44,24 @@ const jwtchecker = (req, res, next) => {
           [id],
         );
 
+        const now = Math.floor(Date.now() / 1000);
+        if (Math.abs(now - decrypted.timestamp) > 60) {
+          return res.status(401).send({
+            status: false,
+            message: "Request expired. Please sync your clock.",
+          });
+        }
+
+        const isNonceValid = await isUniqueNonce(
+          decrypted.userId,
+          decrypted.timestamp,
+          decrypted.random,
+        );
+        if (!isNonceValid)
+          return res
+            .status(429)
+            .send({ status: false, message: "Replay attack detected!" });
+
         if (rows.length > 0) {
           const currentRow = rows[0];
           req.params.userID = currentRow.username;
@@ -33,19 +70,6 @@ const jwtchecker = (req, res, next) => {
         } else {
           res.send({ status: false, message: "Cannot verify user!" });
         }
-        // await UserAccount.findOne({ userID: id })
-        //   .then((result) => {
-        //     if (result) {
-        //       req.params.userID = result.userID;
-        //       next();
-        //     } else {
-        //       res.send({ status: false, message: "Cannot verify user!" });
-        //     }
-        //   })
-        //   .catch((err) => {
-        //     console.log(err);
-        //     res.send({ status: false, message: "Error verifying user!" });
-        //   });
       }
     });
   } else {
@@ -90,28 +114,6 @@ const jwtssechecker = (req, res, next) => {
             });
           }
         }
-        // await UserAccount.findOne({ userID: id })
-        //   .then((result) => {
-        //     if (result) {
-        //       req.params.userID = result.userID;
-        //       next();
-        //     } else {
-        //       res.sse(type, {
-        //         status: false,
-        //         auth: false,
-        //         message: "Cannot verify user!",
-        //       });
-        //     }
-        //   })
-        //   .catch((err) => {
-        //     console.log(err);
-        //     res.sse(type, {
-        //       status: false,
-        //       auth: false,
-        //       message: "Error verifying user!",
-        //     });
-        // });
-        // }
       });
     } else {
       res.sse(type, {

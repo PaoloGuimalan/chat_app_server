@@ -155,6 +155,22 @@ async function removeAllParticipants(conversationID) {
   }
 }
 
+async function isUniqueNonce(userId, timestamp, random) {
+  if (publisher) {
+    const redisKey = `nonce:${userId}:${timestamp}:${random}`;
+
+    const result = await publisher.set(redisKey, "1", {
+      NX: true,
+      EX: 60,
+    });
+
+    return result === "OK";
+  }
+
+  console.error("Redis publisher not connected for nonce check");
+  return false;
+}
+
 module.exports = {
   connect_redis,
   listen,
@@ -165,4 +181,5 @@ module.exports = {
   addParticipant,
   removeParticipant,
   getAllParticipants,
+  isUniqueNonce,
 };
