@@ -106,6 +106,7 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
 
 router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const conversationID = req.params.conversationID;
 
   await UserMessage.aggregate([
@@ -199,6 +200,14 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         rows_final = rows;
       }
 
+      if (rows_final.filter((flt) => flt._id === id).length === 0) {
+        res.status(401).send({
+          status: false,
+          message: "You do not have access to this channel",
+        });
+        return;
+      }
+
       const { rows: details } = await pool.query(
         `SELECT
           json_build_object(
@@ -284,7 +293,20 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
 
 router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const serverID = req.params.serverID;
+
+  const { rows: row } = await pool.query(
+    `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
+    [id, serverID],
+  );
+
+  if (row.length === 0) {
+    res
+      .status(401)
+      .send({ status: false, message: "You do not have access to this realm" });
+    return;
+  }
 
   const { rows } = await pool.query(
     `SELECT 
@@ -331,7 +353,13 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
               'type', 'server',
               'channelType', pcr.type,
               'privacy', pcr.is_private,
-              'messages', jsonb_build_array()
+              'messages', jsonb_build_array(),
+              'is_joined', EXISTS (
+                SELECT 1
+                FROM community_member cm
+                WHERE cm.account_id = $1
+                  AND cm.realm_id = pcr.realm_id
+              )
           )
         )
         FROM community_realm pcr
@@ -360,8 +388,8 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       )
      FROM community_realm cr
      LEFT JOIN user_account pua ON cr.created_by_id = pua.id
-     WHERE realm_id = $1;`,
-    [serverID],
+     WHERE realm_id = $2;`,
+    [id, serverID],
   );
 
   const deconstructedData = {
@@ -385,9 +413,11 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         messages: result
           .map((mpp) => {
             if (mpp._id === mp.groupID) {
-              return {
-                unread: mpp.unreadCount,
-              };
+              if (mp.is_joined) {
+                return {
+                  unread: mpp.unreadCount,
+                };
+              }
             }
           })
           .filter((flt) => flt),

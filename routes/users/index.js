@@ -1598,6 +1598,8 @@ const createRealmReusable = async (
   userReceivers,
   privacyprop,
   type,
+  email,
+  slug,
 ) => {
   const userID = userIDpass;
   const profile = realmProfile || "N/A";
@@ -1639,9 +1641,9 @@ const createRealmReusable = async (
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
       )`,
       [
         contactID,
@@ -1656,6 +1658,8 @@ const createRealmReusable = async (
         false,
         realmCoverPhoto,
         realmDesc,
+        email,
+        slug,
       ],
     );
 
@@ -1717,6 +1721,8 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userReceivers,
         privacy,
         type, // "group"
+        null,
+        null,
       );
     } else {
       createRealmReusable(
@@ -1731,6 +1737,8 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         serverMembers,
         privacy,
         type, // "group"
+        null,
+        null,
       );
     }
 
@@ -1771,6 +1779,8 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       userReceivers,
       privacy,
       "server",
+      null,
+      null,
     );
 
     defaultchannellist.map((mp) => {
@@ -1786,6 +1796,8 @@ router.post("/createserver", jwtchecker, async (req, res) => {
         userReceivers,
         false,
         "group",
+        null,
+        null,
       );
     });
     res.send({ status: true, message: `You created a Group Chat` });
@@ -1807,6 +1819,8 @@ router.post("/createpage", jwtchecker, async (req, res) => {
     const otherUsers = decodeToken.otherUsers;
     const pageName = decodeToken.pageName;
     const pageDescription = decodeToken.pageDescription;
+    const email = decodeToken.email;
+    const slug = decodeToken.slug;
     const allReceivers = [userID, ...otherUsers];
     const userReceivers = allReceivers.map((alr, i) => ({
       userID: alr,
@@ -1849,6 +1863,8 @@ router.post("/createpage", jwtchecker, async (req, res) => {
         userReceivers,
         false,
         "page",
+        email,
+        slug,
       );
 
       res.send({ status: true, message: `You created a Group Chat` });
