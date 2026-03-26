@@ -6,7 +6,6 @@ const jwt = require("jsonwebtoken");
 const Axios = require("axios");
 const sse = require("sse-express");
 const readable = require("stream").Readable;
-const fs = require("fs");
 const firebase = require("firebase-admin");
 const fstorage = require("firebase-admin/storage");
 const {
@@ -31,6 +30,8 @@ const {
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 const Storage = require("../../reusables/hooks/storage");
+const multiparty = require("multiparty");
+const fs = require("fs/promises");
 
 const firebaseAdminConfig = {
   type: FIREBASE_TYPE,
@@ -1810,73 +1811,92 @@ router.post("/createserver", jwtchecker, async (req, res) => {
 router.post("/createpage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
-  const token = req.body;
 
-  try {
-    const decodeToken = token;
+  new multiparty.Form().parse(req, async (err, fields, files) => {
+    if (err) return res.status(500).json({ error: err.message });
 
-    const pageID = await checkGroupID(`${makeID(20)}`);
-    const otherUsers = decodeToken.otherUsers;
-    const pageName = decodeToken.pageName;
-    const pageDescription = decodeToken.pageDescription;
-    const email = decodeToken.email;
-    const slug = decodeToken.slug;
-    const allReceivers = [userID, ...otherUsers];
-    const userReceivers = allReceivers.map((alr, i) => ({
-      userID: alr,
-    }));
+    try {
+      const decodeToken = fields;
 
-    const filereferencesraw = decodeToken.media;
-    const filereferences = filereferencesraw.map((mp) => ({
-      name: mp.name,
-      reference: mp.reference,
-      referenceMediaType: mp.referenceMediaType,
-      type: mp.type, // cover_photo or profile
-      referenceID: `${postID}_${makeID(20)}`,
-    }));
+      const pageID = await checkGroupID(`${makeID(20)}`);
+      const otherUsers = decodeToken.otherUsers
+        ? JSON.parse(decodeToken.otherUsers[0])
+        : [];
+      const pageName = decodeToken.pageName[0];
+      const pageDescription = decodeToken.pageDescription[0];
+      const email = decodeToken.email[0];
+      const slug = decodeToken.slug[0];
+      const allReceivers = [userID, ...otherUsers];
+      const userReceivers = allReceivers.map((alr, i) => ({
+        userID: alr,
+      }));
 
-    // const finaluploadedreferences =
-    //   await uploadFirebaseMultiple(filereferences);
-
-    const finaluploadedreferences = await Storage.uploadMultipleBase64(
-      filereferences,
-      `uploads/pages/${pageID}`,
-    );
-
-    if (finaluploadedreferences.length === filereferencesraw.length) {
-      const profile = finaluploadedreferences.filter(
-        (flt) => flt.type === "profile",
-      )[0].reference;
-      const coverPhoto = finaluploadedreferences.filter(
-        (flt) => flt.type === "cover_photo",
-      )[0].reference;
-
-      createRealmReusable(
-        id,
-        null,
-        pageID,
-        pageName,
-        profile,
-        coverPhoto,
-        pageDescription,
-        userID,
-        userReceivers,
-        false,
-        "page",
-        email,
-        slug,
+      const { rows } = await pool.query(
+        `
+        SELECT EXISTS (
+          SELECT 1 FROM user_account WHERE username = $1
+          UNION ALL
+          SELECT 1 FROM community_realm WHERE slug = $1
+        ) as slug_exists
+      `,
+        [slug],
       );
 
-      res.send({ status: true, message: `You created a Group Chat` });
-    } else {
-      throw new Error("Error occured during upload");
+      const exists = rows[0]?.slug_exists ?? false;
+
+      if (exists) {
+        return res
+          .status(409)
+          .json({ status: false, error: "page username already taken" });
+      }
+
+      const profile = files.profile[0].path;
+      const cover_photo = files.cover_photo[0].path;
+      const profileBuffer = await fs.readFile(profile);
+      const coverPhotoBuffer = await fs.readFile(cover_photo);
+
+      // const finaluploadedreferences =
+      //   await uploadFirebaseMultiple(filereferences);
+
+      const profileUpload = await Storage.upload(
+        `${makeID(10)}_${files.profile[0].originalFilename}`,
+        profileBuffer,
+        `uploads/pages/${pageID}`,
+      );
+      const coverPhotoUpload = await Storage.upload(
+        `${makeID(10)}_${files.cover_photo[0].originalFilename}`,
+        coverPhotoBuffer,
+        `uploads/pages/${pageID}`,
+      );
+
+      if (coverPhotoUpload && profileUpload) {
+        createRealmReusable(
+          id,
+          null,
+          pageID,
+          pageName,
+          profileUpload,
+          coverPhotoUpload,
+          pageDescription,
+          userID,
+          userReceivers,
+          false,
+          "page",
+          email,
+          slug,
+        );
+
+        res.send({ status: true, message: `Page has been created` });
+      } else {
+        throw new Error("Error occured during upload");
+      }
+    } catch (ex) {
+      res
+        .status(500)
+        .send({ status: false, message: ex.message || ex.toString() });
+      console.log(ex);
     }
-  } catch (ex) {
-    res
-      .status(500)
-      .send({ status: false, message: ex.message || ex.toString() });
-    console.log(ex);
-  }
+  });
 });
 
 router.post("/seenNewMessages", jwtchecker, async (req, res) => {

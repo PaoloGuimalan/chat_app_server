@@ -26,6 +26,7 @@
     "jsonwebtoken": "^9.0.1",
     "mediasoup": "^3.19.17",
     "mongoose": "^7.4.3",
+    "multiparty": "^4.2.3",
     "mysql": "^2.18.1",
     "nodemailer": "^6.9.4",
     "nodemon": "^3.0.1",

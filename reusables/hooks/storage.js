@@ -46,7 +46,9 @@ class S3StorageProvider {
       Body: fileBuffer,
       ACL: "public-read", // Optional: makes it accessible via CDN URL
     });
-    return this.client.send(command);
+    await this.client.send(command);
+
+    return `https://${this.bucket}.${this.cdnEndpoint}/${folder}/${fileName}`;
   }
 
   async uploadBase64(base64WithHeader, customName, folder = "uploads") {
