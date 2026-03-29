@@ -298,6 +298,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const filereferencesraw = decodeToken.content.references;
     const content_type = decodeToken.type.contentType;
+    const realm_id = decodeToken.realm_id;
     const filereferences = filereferencesraw.map((mp) => ({
       name: mp.name || `${postID}_${makeID(20)}`,
       caption: mp.caption,
@@ -399,10 +400,10 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     const postInsertQuery = `
       INSERT INTO newsfeed_post (
         post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
-        is_shared, file_type, caption, content_type, is_tagged, privacy_status
+        is_shared, file_type, caption, content_type, is_tagged, privacy_status, author_realm_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6, to_timestamp($7),
-        $8, $9, $10, $11, $12, $13
+        $8, $9, $10, $11, $12, $13, $14
       );
     `;
     const postValues = [
@@ -419,6 +420,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.type.contentType,
       decodeToken.tagging.isTagged,
       decodeToken.privacy.status,
+      realm_id,
     ];
 
     const client = await pool.getPool();
