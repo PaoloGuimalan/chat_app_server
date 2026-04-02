@@ -610,9 +610,9 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         await pool.query(
           `
             INSERT INTO newsfeed_engagementlog (
-                log_id, post_id, user_id, action, reference_id, created_at
+                log_id, post_id, user_id, action, reference_id, created_at, updated_at
             ) VALUES (
-                gen_random_uuid(), $1, $2, 'shared', $3, NOW()
+                gen_random_uuid(), $1, $2, 'shared', $3, NOW(), NOW()
             )
           `,
           [postID, id, reference_post_id],
