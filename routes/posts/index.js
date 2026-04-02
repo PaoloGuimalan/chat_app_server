@@ -400,10 +400,10 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     const postInsertQuery = `
       INSERT INTO newsfeed_post (
         post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
-        is_shared, file_type, caption, content_type, is_tagged, privacy_status, author_realm_id
+        is_shared, file_type, caption, content_type, is_tagged, privacy_status, author_realm_id, is_archived
       ) VALUES (
         $1, $2, $3, $4, $5, $6, to_timestamp($7),
-        $8, $9, $10, $11, $12, $13, $14
+        $8, $9, $10, $11, $12, $13, $14, $15
       );
     `;
     const postValues = [
@@ -421,6 +421,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.tagging.isTagged,
       decodeToken.privacy.status,
       realm_id,
+      false,
     ];
 
     const client = await pool.getPool();
