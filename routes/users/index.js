@@ -1151,7 +1151,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
               ) AS fullname,
               COALESCE(profile, 'none') AS profile
             FROM user_account
-            WHERE username = ANY($1);`,
+            WHERE id = ANY($1);`,
         [removeDuplicateReceivers],
       );
 
@@ -1220,7 +1220,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
 
         return {
           ...final_mp,
-          users: rows.filter((flt) => mp.receivers.includes(flt.userID)),
+          users: rows.filter((flt) => mp.receivers.includes(flt._id)),
         };
       });
 
