@@ -2138,6 +2138,7 @@ router.post("/call", jwtchecker, async (req, res) => {
 
 router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const username = req.params.username;
   const clientID = req.body.clientID;
   const profile = req.body.profile;
   const recipients = req.body.recipients;
@@ -2148,6 +2149,7 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
     recipients.map((rcp) => {
       ReachVoiceRecepients(rcp, {
         userID,
+        username,
         profile,
         clientID,
         channelID,
@@ -2157,6 +2159,7 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
 
     addParticipant(channelID, {
       userID,
+      username,
       profile,
       clientID,
       channelID,

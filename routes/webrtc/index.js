@@ -25,13 +25,15 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   const instance = req.body.instance;
   const muted = req.body.muted;
   const cameraOff = req.body.cameraOff;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const username = req.body.username || req.body.displayName || userId;
+  const clientId = req.body.clientId || userId;
 
   if (instance) {
     if (!instance || instance === POD_NAME) {
       joinRoom(
         conversationID,
+        userId,
         username,
         members,
         instance,
@@ -42,6 +44,7 @@ router.post("/join-room", jwtchecker, async (req, res) => {
     } else {
       await publish_pub(instance, "join-room-relay", {
         conversationID,
+        userId,
         username,
         members,
         instance,
@@ -53,6 +56,7 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   } else {
     joinRoom(
       conversationID,
+      userId,
       username,
       members,
       POD_NAME,
@@ -70,17 +74,26 @@ router.post("/join-room", jwtchecker, async (req, res) => {
 
 router.post("/create-transport", jwtchecker, async (req, res) => {
   const { conversationID, instance, direction } = req.body; // 'send' or 'recv'
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const username = req.body.username || req.body.displayName || null;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (!instance || instance === POD_NAME) {
-      createTransport(conversationID, username, instance, direction, clientId);
+      createTransport(
+        conversationID,
+        userId,
+        username,
+        instance,
+        direction,
+        clientId,
+      );
 
       res.send({ status: true, message: "OK" });
     } else {
       await publish_pub(instance, "create-transport-relay", {
         conversationID,
+        userId,
         username,
         instance,
         direction,
@@ -97,14 +110,14 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
 
 router.post("/transport-connect", jwtchecker, async (req, res) => {
   const { conversationID, transportId, dtlsParameters, instance } = req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (!instance || instance === POD_NAME) {
       transportConnect(
         conversationID,
-        username,
+        userId,
         transportId,
         dtlsParameters,
         clientId,
@@ -114,7 +127,7 @@ router.post("/transport-connect", jwtchecker, async (req, res) => {
     } else {
       await publish_pub(instance, "transport-connect-relay", {
         conversationID,
-        username,
+        userId,
         transportId,
         dtlsParameters,
         clientId,
@@ -137,8 +150,9 @@ router.post("/produce", jwtchecker, async (req, res) => {
     members,
     appData,
   } = req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const username = req.body.username || req.body.displayName || null;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (!instance || instance === POD_NAME) {
@@ -147,6 +161,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         transportId,
         kind,
         rtpParameters,
+        userId,
         username,
         members,
         clientId,
@@ -160,6 +175,7 @@ router.post("/produce", jwtchecker, async (req, res) => {
         transportId,
         kind,
         rtpParameters,
+        userId,
         username,
         members,
         clientId,
@@ -177,14 +193,14 @@ router.post("/produce", jwtchecker, async (req, res) => {
 router.post("/consume", jwtchecker, async (req, res) => {
   const { conversationID, transportId, producerId, rtpCapabilities, instance } =
     req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (instance === POD_NAME) {
       consume(
         conversationID,
-        username,
+        userId,
         transportId,
         producerId,
         rtpCapabilities,
@@ -195,7 +211,7 @@ router.post("/consume", jwtchecker, async (req, res) => {
     } else {
       await publish_pub(instance, "consume-relay", {
         conversationID,
-        username,
+        userId,
         transportId,
         producerId,
         rtpCapabilities,
@@ -212,17 +228,17 @@ router.post("/consume", jwtchecker, async (req, res) => {
 
 router.post("/close-producer", jwtchecker, async (req, res) => {
   const { conversationID, producerId, instance } = req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (!instance || instance === POD_NAME) {
-      closeProducer(conversationID, username, clientId, producerId);
+      closeProducer(conversationID, userId, clientId, producerId);
       res.send({ status: true, message: "OK" });
     } else {
       await publish_pub(instance, "close-producer-relay", {
         conversationID,
-        username,
+        userId,
         clientId,
         producerId,
       });
@@ -236,8 +252,8 @@ router.post("/close-producer", jwtchecker, async (req, res) => {
 
 router.post("/leave-room", jwtchecker, async (req, res) => {
   const { conversationID, instance } = req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const clientId = req.body.clientId || userId;
   const recipients = req.body.recipients || [];
 
   try {
@@ -253,12 +269,12 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
     });
 
     if (!instance || instance === POD_NAME) {
-      leaveRoom(conversationID, username, clientId);
+      leaveRoom(conversationID, userId, clientId);
       res.send({ status: true, message: "OK" });
     } else {
       await publish_pub(instance, "leave-room-relay", {
         conversationID,
-        username,
+        userId,
         clientId,
       });
       res.send({ status: true, message: "OK" });
@@ -271,17 +287,17 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
 
 router.post("/participant-status", jwtchecker, async (req, res) => {
   const { conversationID, instance, muted, cameraOff } = req.body;
-  const username = req.params.userID;
-  const clientId = req.body.clientId || username;
+  const userId = req.params.userID;
+  const clientId = req.body.clientId || userId;
 
   try {
     if (!instance || instance === POD_NAME) {
-      participantStatus(conversationID, username, clientId, muted, cameraOff);
+      participantStatus(conversationID, userId, clientId, muted, cameraOff);
       res.send({ status: true, message: "OK" });
     } else {
       await publish_pub(instance, "participant-status-relay", {
         conversationID,
-        username,
+        userId,
         clientId,
         muted,
         cameraOff,

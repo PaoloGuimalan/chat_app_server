@@ -28,9 +28,9 @@ async function createRoomRouter(conversationID) {
       producers: new Map(), // producerId -> producer
       producerOwners: new Map(), // producerId -> clientId
       producerSources: new Map(), // producerId -> source label
-      members: new Map(), // clientId -> username
+      members: new Map(), // clientId -> { userId, username }
       memberStatus: new Map(), // clientId -> { muted: boolean, cameraOff: boolean }
-      transports: new Map(), // transportId -> { transport, clientId, username, direction }
+      transports: new Map(), // transportId -> { transport, clientId, userId, username, direction }
     });
   }
 
@@ -39,6 +39,7 @@ async function createRoomRouter(conversationID) {
 
 async function joinRoom(
   conversationID,
+  userId,
   username,
   members,
   instance,
@@ -47,8 +48,10 @@ async function joinRoom(
   cameraOff,
 ) {
   const room = await createRoomRouter(conversationID);
-  const existingUsernames = new Set(room.members.values());
-  room.members.set(clientId, username);
+  const existingUserIds = new Set(
+    Array.from(room.members.values()).map((entry) => entry.userId),
+  );
+  room.members.set(clientId, { userId, username });
   room.memberStatus.set(clientId, {
     muted: typeof muted === "boolean" ? muted : false,
     cameraOff: typeof cameraOff === "boolean" ? cameraOff : false,
@@ -59,20 +62,23 @@ async function joinRoom(
   };
   const participants = Array.from(room.members.entries())
     .filter(([participantClientId]) => participantClientId !== clientId)
-    .map(([participantClientId, participantUsername]) => ({
-      clientId: participantClientId,
-      username: participantUsername,
-      ...(room.memberStatus.get(participantClientId) || {
-        muted: false,
-        cameraOff: false,
-      }),
-    }));
+    .map(([participantClientId, participantData]) => {
+      return {
+        clientId: participantClientId,
+        username: participantData?.username || participantData?.userId || "",
+        ...(room.memberStatus.get(participantClientId) || {
+          muted: false,
+          cameraOff: false,
+        }),
+      };
+    });
 
   // Notify users that are already in the room, instead of trusting client-provided members.
-  Array.from(existingUsernames).map(async (mp) => {
-    await publish(`events_${mp}`, "participant-joined", {
+  Array.from(existingUserIds).map(async (existingUserId) => {
+    await publish(`events_${existingUserId}`, "participant-joined", {
       conversationID,
       username,
+      userId,
       clientId,
       ...joinedStatus,
       timestamp: Date.now(),
@@ -80,7 +86,7 @@ async function joinRoom(
     });
   });
 
-  await publish(`events_${username}`, "join-room-response", {
+  await publish(`events_${userId}`, "join-room-response", {
     status: true,
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
@@ -91,9 +97,13 @@ async function joinRoom(
   // Late-join sync: send already active producers to newly joined user.
   for (const [producerId, producer] of room.producers.entries()) {
     const producerClientId = room.producerOwners.get(producerId);
-    await publish(`events_${username}`, "new_producer", {
+    const ownerEntry = producerClientId
+      ? room.members.get(producerClientId)
+      : null;
+    await publish(`events_${userId}`, "new_producer", {
       conversationID,
-      username: room.members.get(producerClientId) || username,
+      username: ownerEntry?.username || username,
+      userId: ownerEntry?.userId || userId,
       clientId: producerClientId,
       producerId,
       kind: producer.kind,
@@ -106,6 +116,7 @@ async function joinRoom(
 
 async function createTransport(
   conversationID,
+  userId,
   username,
   instance,
   direction,
@@ -129,11 +140,12 @@ async function createTransport(
   room.transports.set(transport.id, {
     transport,
     clientId,
+    userId,
     username,
     direction,
   });
 
-  await publish(`events_${username}`, "create-transport-response", {
+  await publish(`events_${userId}`, "create-transport-response", {
     response: {
       id: transport.id,
       iceParameters: transport.iceParameters,
@@ -148,7 +160,7 @@ async function createTransport(
 
 async function transportConnect(
   conversationID,
-  username,
+  userId,
   transportId,
   dtlsParameters,
   clientId,
@@ -158,7 +170,7 @@ async function transportConnect(
   const transport = transportEntry?.transport;
 
   if (!transport || transportEntry.clientId !== clientId) {
-    await publish(`events_${username}`, "transport-connect-error", {
+    await publish(`events_${userId}`, "transport-connect-error", {
       conversationID,
       clientId,
     });
@@ -167,7 +179,7 @@ async function transportConnect(
 
   await transport.connect({ dtlsParameters });
 
-  await publish(`events_${username}`, "transport-connect-response", {
+  await publish(`events_${userId}`, "transport-connect-response", {
     conversationID,
     message: "OK",
     clientId,
@@ -179,6 +191,7 @@ async function produce(
   transportId,
   kind,
   rtpParameters,
+  userId,
   username,
   members,
   clientId,
@@ -189,7 +202,7 @@ async function produce(
   const transport = transportEntry?.transport;
 
   if (!transport || transportEntry.clientId !== clientId) {
-    await publish(`events_${username}`, "produce-error", {
+    await publish(`events_${userId}`, "produce-error", {
       conversationID,
       clientId,
     });
@@ -214,12 +227,18 @@ async function produce(
 
   console.log(`Producer created [${kind}] ID: ${producer.id}`);
 
-  const recipientUsernames = Array.from(new Set(room.members.values()));
+  const recipientUserIds = Array.from(
+    new Set(Array.from(room.members.values()).map((entry) => entry.userId)),
+  );
+  const producerOwner = room.members.get(clientId);
+  const displayUsername = producerOwner?.username || username;
+  const displayUserId = producerOwner?.userId || userId;
 
-  recipientUsernames.map(async (mp) => {
-    await publish(`events_${mp}`, "new_producer", {
+  recipientUserIds.map(async (memberUserId) => {
+    await publish(`events_${memberUserId}`, "new_producer", {
       conversationID,
-      username,
+      username: displayUsername,
+      userId: displayUserId,
       clientId,
       producerId: producer.id,
       kind,
@@ -229,7 +248,7 @@ async function produce(
     });
   });
 
-  await publish(`events_${username}`, "produce-response", {
+  await publish(`events_${userId}`, "produce-response", {
     conversationID,
     id: producer.id,
     clientId,
@@ -238,7 +257,7 @@ async function produce(
 
 async function consume(
   conversationID,
-  username,
+  userId,
   transportId,
   producerId,
   rtpCapabilities,
@@ -249,7 +268,7 @@ async function consume(
   const transport = transportEntry?.transport;
 
   if (!transport || transportEntry.clientId !== clientId) {
-    await publish(`events_${username}`, "consume-transport-error", {
+    await publish(`events_${userId}`, "consume-transport-error", {
       conversationID,
       clientId,
     });
@@ -262,7 +281,7 @@ async function consume(
       rtpCapabilities,
     })
   ) {
-    await publish(`events_${username}`, "consume-error", {
+    await publish(`events_${userId}`, "consume-error", {
       conversationID,
       clientId,
     });
@@ -276,7 +295,7 @@ async function consume(
 
   console.log(`Consumer created for producer ${producerId}`);
 
-  await publish(`events_${username}`, "consume-response", {
+  await publish(`events_${userId}`, "consume-response", {
     conversationID,
     id: consumer.id,
     producerId,
@@ -287,7 +306,7 @@ async function consume(
   });
 }
 
-async function closeProducer(conversationID, username, clientId, producerId) {
+async function closeProducer(conversationID, userId, clientId, producerId) {
   const room = rooms.get(conversationID);
   if (!room) {
     return;
@@ -311,14 +330,15 @@ async function closeProducer(conversationID, username, clientId, producerId) {
   room.producerOwners.delete(producerId);
 
   const notifiedUsers = new Set();
-  for (const [, memberUsername] of room.members.entries()) {
-    if (notifiedUsers.has(memberUsername)) {
+  for (const [, member] of room.members.entries()) {
+    if (notifiedUsers.has(member.userId)) {
       continue;
     }
-    notifiedUsers.add(memberUsername);
-    await publish(`events_${memberUsername}`, "producer-closed", {
+    notifiedUsers.add(member.userId);
+    await publish(`events_${member.userId}`, "producer-closed", {
       conversationID,
-      username,
+      username: member.username || null,
+      userId,
       clientId,
       producerId,
       timestamp: Date.now(),
@@ -326,7 +346,7 @@ async function closeProducer(conversationID, username, clientId, producerId) {
   }
 }
 
-async function leaveRoom(conversationID, username, clientId) {
+async function leaveRoom(conversationID, userId, clientId) {
   const room = rooms.get(conversationID);
 
   removeParticipant(conversationID, clientId);
@@ -366,17 +386,21 @@ async function leaveRoom(conversationID, username, clientId) {
     room.transports.delete(transportId);
   }
 
+  const leavingMember = room.members.get(clientId);
   room.members.delete(clientId);
   room.memberStatus.delete(clientId);
   const notifiedUsers = new Set();
-  for (const [memberClientId, memberUsername] of room.members.entries()) {
-    if (memberClientId === clientId || notifiedUsers.has(memberUsername)) {
+  const leavingUsername = leavingMember?.username || null;
+  const leavingUserId = leavingMember?.userId || userId;
+  for (const [memberClientId, member] of room.members.entries()) {
+    if (memberClientId === clientId || notifiedUsers.has(member.userId)) {
       continue;
     }
-    notifiedUsers.add(memberUsername);
-    await publish(`events_${memberUsername}`, "participant-left", {
+    notifiedUsers.add(member.userId);
+    await publish(`events_${member.userId}`, "participant-left", {
       conversationID,
-      username,
+      username: leavingUsername,
+      userId: leavingUserId,
       clientId,
       producerIds: closedProducerIds,
       timestamp: Date.now(),
@@ -406,7 +430,7 @@ async function leaveRoom(conversationID, username, clientId) {
 
 async function participantStatus(
   conversationID,
-  username,
+  userId,
   clientId,
   muted,
   cameraOff,
@@ -428,12 +452,18 @@ async function participantStatus(
 
   room.memberStatus.set(clientId, nextStatus);
 
-  const recipientUsernames = Array.from(new Set(room.members.values()));
+  const recipientUserIds = Array.from(
+    new Set(Array.from(room.members.values()).map((entry) => entry.userId)),
+  );
+  const member = room.members.get(clientId);
+  const displayUsername = member?.username || null;
+  const displayUserId = member?.userId || userId;
   await Promise.all(
-    recipientUsernames.map(async (memberUsername) => {
-      await publish(`events_${memberUsername}`, "participant-status", {
+    recipientUserIds.map(async (memberUserId) => {
+      await publish(`events_${memberUserId}`, "participant-status", {
         conversationID,
-        username,
+        username: displayUsername,
+        userId: displayUserId,
         clientId,
         ...nextStatus,
         timestamp: Date.now(),
@@ -447,6 +477,7 @@ function webRTCEvents(event, message) {
     case "join-room-relay": {
       const {
         conversationID: cnvsIDDD,
+        userId: usrId,
         username: ursnm,
         members: mmbrs,
         instance,
@@ -454,12 +485,23 @@ function webRTCEvents(event, message) {
         muted,
         cameraOff,
       } = message;
-      joinRoom(cnvsIDDD, ursnm, mmbrs, instance, clientId, muted, cameraOff);
+      const resolvedUserId = usrId || ursnm;
+      joinRoom(
+        cnvsIDDD,
+        resolvedUserId,
+        ursnm || resolvedUserId,
+        mmbrs,
+        instance,
+        clientId,
+        muted,
+        cameraOff,
+      );
       break;
     }
     case "create-transport-relay":
       createTransport(
         message.conversationID,
+        message.userId || message.username,
         message.username,
         message.instance,
         message.direction,
@@ -469,6 +511,7 @@ function webRTCEvents(event, message) {
     case "transport-connect-relay": {
       const {
         conversationID,
+        userId,
         username,
         transportId,
         dtlsParameters,
@@ -476,7 +519,7 @@ function webRTCEvents(event, message) {
       } = message;
       transportConnect(
         conversationID,
-        username,
+        userId || username,
         transportId,
         dtlsParameters,
         clientId,
@@ -489,6 +532,7 @@ function webRTCEvents(event, message) {
         transportId: trnsptID,
         kind,
         rtpParameters,
+        userId,
         username: usrnm,
         members,
         clientId,
@@ -499,6 +543,7 @@ function webRTCEvents(event, message) {
         trnsptID,
         kind,
         rtpParameters,
+        userId || usrnm,
         usrnm,
         members,
         clientId,
@@ -509,6 +554,7 @@ function webRTCEvents(event, message) {
     case "consume-relay": {
       const {
         conversationID: cnvsIDD,
+        userId,
         username: usrnmm,
         transportId: trnsptIDD,
         producerId,
@@ -517,7 +563,7 @@ function webRTCEvents(event, message) {
       } = message;
       consume(
         cnvsIDD,
-        usrnmm,
+        userId || usrnmm,
         trnsptIDD,
         producerId,
         rtpCapabilities,
@@ -528,18 +574,22 @@ function webRTCEvents(event, message) {
     case "close-producer-relay":
       closeProducer(
         message.conversationID,
-        message.username,
+        message.userId || message.username,
         message.clientId,
         message.producerId,
       );
       break;
     case "leave-room-relay":
-      leaveRoom(message.conversationID, message.username, message.clientId);
+      leaveRoom(
+        message.conversationID,
+        message.userId || message.username,
+        message.clientId,
+      );
       break;
     case "participant-status-relay":
       participantStatus(
         message.conversationID,
-        message.username,
+        message.userId || message.username,
         message.clientId,
         message.muted,
         message.cameraOff,
