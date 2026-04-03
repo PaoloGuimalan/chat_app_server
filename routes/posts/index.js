@@ -444,7 +444,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           await pool.query(
             `UPDATE user_account
             SET profile = $1
-            WHERE username = $2
+            WHERE id = $2
           `,
             [finaluploadedreferences[0].reference, userID],
           );
@@ -454,7 +454,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           await pool.query(
             `UPDATE user_account
             SET coverphoto = $1
-            WHERE username = $2
+            WHERE id = $2
           `,
             [finaluploadedreferences[0].reference, userID],
           );
