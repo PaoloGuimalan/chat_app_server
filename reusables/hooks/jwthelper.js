@@ -40,7 +40,7 @@ const jwtchecker = (req, res, next) => {
       } else {
         const id = decode.userID;
         const { rows } = await pool.query(
-          "SELECT id, username FROM user_account WHERE username = $1",
+          "SELECT id, username FROM user_account WHERE id = $1",
           [id],
         );
 
@@ -64,8 +64,9 @@ const jwtchecker = (req, res, next) => {
 
         if (rows.length > 0) {
           const currentRow = rows[0];
-          req.params.userID = currentRow.username;
+          req.params.userID = currentRow.id;
           req.params.id = currentRow.id;
+          req.params.username = currentRow.username;
           next();
         } else {
           res.send({ status: false, message: "Cannot verify user!" });
@@ -98,13 +99,14 @@ const jwtssechecker = (req, res, next) => {
         } else {
           const id = decode.userID;
           const { rows } = await pool.query(
-            "SELECT id, username FROM user_account WHERE username = $1",
+            "SELECT id, username FROM user_account WHERE id = $1",
             [id],
           );
 
           if (rows.length > 0) {
             const currentRow = rows[0];
-            req.params.userID = currentRow.username;
+            req.params.userID = currentRow.id;
+            req.params.username = currentRow.username;
             next();
           } else {
             res.sse(type, {

@@ -205,7 +205,7 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
     });
 });
 
-const notifyTaggedUser = async (userID, postID, tagged_users) => {
+const notifyTaggedUser = async (userID, username, postID, tagged_users) => {
   tagged_users.map(async (mp) => {
     const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
     const notifParams = {
@@ -216,7 +216,7 @@ const notifyTaggedUser = async (userID, postID, tagged_users) => {
       fromUserID: userID,
       content: {
         headline: `You were tagged`,
-        details: `@${userID} tagged you on a post.`,
+        details: `@${username} tagged you on a post.`,
       },
       date: {
         date: dateGetter(),
@@ -288,6 +288,7 @@ router.post("/upload", jwtchecker, async (req, res) => {
 
 router.post("/createpost", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const username = req.params.username;
   const id = req.params.id;
   const postID = await checkPostIDExisting(makeID(30));
   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
@@ -322,7 +323,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       finaluploadedreferences.forEach(async (mp) => {
         const { rows: query_post_user } = await pool.query(
           `SELECT 
-                ua.username 
+                ua.username,
+                ua.id 
             FROM 
                 newsfeed_post np 
             JOIN 
@@ -336,7 +338,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         );
 
         if (query_post_user.length > 0) {
-          const post_user = query_post_user[0].username;
+          const post_user = query_post_user[0].id;
 
           if (post_user !== userID) {
             const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
@@ -348,7 +350,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
               fromUserID: userID,
               content: {
                 headline: `Shared post`,
-                details: `@${userID} shared your post.`,
+                details: `@${username} shared your post.`,
               },
               date: {
                 date: dateGetter(),
@@ -365,7 +367,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
                 publish(`events_${post_user}`, `notifications`, {
                   status: true,
                   auth: true,
-                  message: `@${userID} shared your post.`,
+                  message: `@${username} shared your post.`,
                   result: "", //encodedResult
                 });
               })
@@ -624,7 +626,24 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       // Notify tagged users if any
       if (decodeToken.tagging.isTagged) {
-        notifyTaggedUser(userID, postID, decodeToken.tagging.users);
+        const taggedUsernames = decodeToken.tagging.users;
+
+        // Query user IDs for all tagged usernames
+        const userQuery = `
+          SELECT id
+          FROM user_account
+          WHERE username = ANY($1)
+        `;
+
+        const { rows: userRows } = await client.query(userQuery, [
+          taggedUsernames,
+        ]);
+        notifyTaggedUser(
+          userID,
+          username,
+          postID,
+          userRows.map((mp) => mp.id),
+        );
       }
 
       res.send({ status: true, result: "OK" });

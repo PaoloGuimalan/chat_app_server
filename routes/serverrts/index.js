@@ -174,7 +174,7 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
             ) AS fullname,
             profile
           FROM user_account
-          WHERE username = ANY($1)`,
+          WHERE id = ANY($1)`,
           [receivers_list],
         );
 
@@ -449,6 +449,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
 router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const username = req.params.username;
   const token = req.body.token;
 
   try {
@@ -484,7 +485,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
 
     AddNewMemberToChannels(
       id,
-      userID,
+      username,
       {
         conversationID: serverID,
         memberstoadd: rows,
@@ -496,7 +497,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     mappedGroupID.map((mp) => {
       AddNewMemberToChannels(
         id,
-        userID,
+        username,
         {
           conversationID: mp,
           memberstoadd: rows,

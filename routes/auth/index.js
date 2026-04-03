@@ -29,7 +29,7 @@ router.get("/sessions", (req, res) => {
     connectionID: mp,
     numberOfSessions: sseNotificationsWaiters[mp].response.length,
     sessions: sseNotificationsWaiters[mp].response.map(
-      (mpi) => mpi.sessionstamp
+      (mpi) => mpi.sessionstamp,
     ),
   }));
 
@@ -161,7 +161,7 @@ router.post("/register", async (req, res) => {
 
     const userID = await checkUserIDExisting(
       firstName.replace(/\s/g, "").toLowerCase(),
-      makeID(10)
+      makeID(10),
     );
     const date = dateGetter();
     const time = timeGetter();
@@ -210,7 +210,7 @@ router.post("/register", async (req, res) => {
             JWT_SECRET,
             {
               expiresIn: 60 * 60 * 24 * 7,
-            }
+            },
           );
 
           const authtoken = jwt.sign(
@@ -220,7 +220,7 @@ router.post("/register", async (req, res) => {
             JWT_SECRET,
             {
               expiresIn: 60 * 60 * 24 * 7,
-            }
+            },
           );
           res.send({
             status: true,
@@ -267,7 +267,7 @@ const verifyCodeUserId = async (userIDProp, code) => {
 const setUserVerified = async (userIDProp) => {
   return await UserAccount.updateOne(
     { userID: userIDProp },
-    { isVerified: true }
+    { isVerified: true },
   )
     .then((result) => {
       if (result.modifiedCount) {
@@ -331,7 +331,7 @@ router.post("/login", async (req, res) => {
               JWT_SECRET,
               {
                 expiresIn: 60 * 60 * 24 * 7,
-              }
+              },
             );
 
             const authtoken = jwt.sign(
@@ -341,7 +341,7 @@ router.post("/login", async (req, res) => {
               JWT_SECRET,
               {
                 expiresIn: 60 * 60 * 24 * 7,
-              }
+              },
             );
 
             res.send({
@@ -371,35 +371,9 @@ router.post("/login", async (req, res) => {
 router.get("/jwtchecker", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
 
-  //   await UserAccount.findOne({ userID: userID })
-  //     .then((result) => {
-  //       if (result) {
-  //         const usertoken = jwt.sign(
-  //           {
-  //             ...result._doc,
-  //             password: null,
-  //           },
-  //           JWT_SECRET,
-  //           {
-  //             expiresIn: 60 * 60 * 24 * 7,
-  //           }
-  //         );
-
-  //         res.send({
-  //           status: true,
-  //           result: {
-  //             usertoken: usertoken,
-  //           },
-  //         });
-  //       }
-  //     })
-  //     .catch((err) => {
-  //       console.log(err);
-  //       res.send({ status: false, message: "Cannot fetch user!" });
-  //     });
   const { rows } = await pool.query(
-    "SELECT * FROM user_account WHERE username = $1",
-    [userID]
+    "SELECT * FROM user_account WHERE id = $1",
+    [userID],
   );
 
   if (rows.length > 0) {
@@ -412,7 +386,7 @@ router.get("/jwtchecker", jwtchecker, async (req, res) => {
       JWT_SECRET,
       {
         expiresIn: 60 * 60 * 24 * 7,
-      }
+      },
     );
 
     res.send({

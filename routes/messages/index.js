@@ -263,26 +263,8 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
           userID: userID,
           conversationID: decodedToken.conversationID,
         });
-        // publish(`events_${mp}`, BROADCAST_IS_TYPING_STATUS_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers.filter((flt) => flt !== userID),
-        //     data: {
-        //       userID: userID,
-        //       conversationID: decodedToken.conversationID,
-        //     },
-        //   },
-        // });
       }
     });
-
-    // await producer.publishMessage("INFO:CHATTERLOOP", BROADCAST_IS_TYPING_STATUS_LOOPER, {
-    //     parameters: {
-    //         receivers: receivers.filter((flt) => flt !== userID),
-    //         data: { userID: userID, conversationID: decodedToken.conversationID }
-    //     }
-    // });
-
-    // console.log(userID, decodedToken.conversationID, decodedToken.receivers);
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
@@ -295,6 +277,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
+  const username = req.params.username;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
@@ -327,7 +310,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
                 conversationID,
                 userID,
                 receivers,
-                `${userID} added ${mp.userID}`,
+                `${username} added ${mp.userID}`,
                 conversationType,
               );
             })

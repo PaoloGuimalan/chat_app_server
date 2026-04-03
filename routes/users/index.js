@@ -621,15 +621,15 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       const uniqueIDs = [...new Set(userIDs)];
 
       const { rows } = await pool.query(
-        "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE username = ANY($1);",
+        "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE id = ANY($1);",
         [uniqueIDs],
       );
 
       const finalNotification = result.map((mp) => ({
         ...mp,
         fromUser:
-          rows.filter((flt) => flt.username === mp.fromUserID).length > 0
-            ? rows.filter((flt) => flt.username === mp.fromUserID)[0]
+          rows.filter((flt) => flt.id === mp.fromUserID).length > 0
+            ? rows.filter((flt) => flt.id === mp.fromUserID)[0]
             : null,
       }));
 
@@ -1390,13 +1390,20 @@ router.get(
   },
 );
 
-const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
+const sendMessageInitForGC = async (
+  convID,
+  userID,
+  username,
+  recs,
+  message,
+  type,
+) => {
   const messageID = await checkExistingMessageID(makeID(30));
   const conversationID = convID;
   const sender = userID;
   const receivers = recs; //Array
   const seeners = []; //Array
-  const content = `${userID} ${message}`;
+  const content = `${username} ${message}`;
   const messageDate = {
     date: dateGetter(),
     time: timeGetter(),
@@ -1476,6 +1483,7 @@ const sendMessageInitForGC = async (convID, userID, recs, message, type) => {
 router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const username = req.params.username;
   const token = req.body.token;
 
   const client = await pool.getPool();
@@ -1493,7 +1501,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     }));
 
     const { rows } = await client.query(
-      `SELECT id from user_account WHERE username = ANY($1)`,
+      `SELECT id from user_account WHERE id = ANY($1)`,
       [userReceivers.map((mp) => mp.userID)],
     );
 
@@ -1556,6 +1564,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     sendMessageInitForGC(
       contactID,
       userID,
+      username,
       allReceivers,
       "created the group chat",
       "group",
@@ -1614,7 +1623,7 @@ const createRealmReusable = async (
     const allReceivers = userReceivers.map((mp) => mp.userID);
 
     const { rows } = await client.query(
-      `SELECT id, username from user_account WHERE username = ANY($1)`,
+      `SELECT id, username from user_account WHERE id = ANY($1)`,
       [allReceivers],
     );
 
@@ -1622,7 +1631,7 @@ const createRealmReusable = async (
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId, username }) => {
+    rows.forEach(({ id: accountId }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1633,7 +1642,7 @@ const createRealmReusable = async (
       params.push(id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      if (username === userID) {
+      if (accountId === userID) {
         params.push("admin"); // member role
       } else {
         params.push("member"); // member role
@@ -1678,6 +1687,7 @@ const createRealmReusable = async (
       sendMessageInitForGC(
         contactID,
         userID,
+        rows.filter((mp) => mp.id === userID)[0].username,
         allReceivers,
         "created the group chat",
         parentRealmID ? "server" : "group",
@@ -2163,13 +2173,13 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
 const getContactsForSession = async (userID) => {
   const sql = `
     SELECT DISTINCT ON (c.connection_id) c.*,
-    a1.username AS action_by_username,
-    a2.username AS involved_user_username
+    a1.id AS action_by_id,
+    a2.id AS involved_user_id
     FROM user_connection c
     JOIN user_account a1 ON c.action_by_id = a1.id
     JOIN user_account a2 ON c.involved_user_id = a2.id
     WHERE 
-      (a1.username = $1 OR a2.username = $1)
+      (a1.id = $1 OR a2.id = $1)
       AND c.action_by_id <> c.involved_user_id
       AND a1.is_active = TRUE
       AND a1.is_verified = TRUE
@@ -2180,156 +2190,14 @@ const getContactsForSession = async (userID) => {
 
   const { rows } = await pool.query(sql, [userID]);
   const flattenedRows = rows.map((mp) => {
-    if (mp.action_by_username == userID) {
-      return mp.involved_user_username;
+    if (mp.action_by_id == userID) {
+      return mp.involved_user_id;
     } else {
-      return mp.action_by_username;
+      return mp.action_by_id;
     }
   });
 
   return flattenedRows;
-
-  // return await UserContacts.aggregate([
-  //   {
-  //     $match: {
-  //       $and: [
-  //         {
-  //           $or: [{ actionBy: userID }, { "users.userID": userID }],
-  //         },
-  //         {
-  //           status: true,
-  //         },
-  //         {
-  //           type: "single",
-  //         },
-  //       ],
-  //     },
-  //   },
-  //   {
-  //     $lookup: {
-  //       from: "contacts",
-  //       localField: "contactID",
-  //       foreignField: "contactID",
-  //       let: {
-  //         firstUserID: { $arrayElemAt: ["$users.userID", 0] },
-  //         secondUserID: { $arrayElemAt: ["$users.userID", 1] },
-  //       },
-  //       pipeline: [
-  //         {
-  //           $lookup: {
-  //             from: "useraccount",
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: {
-  //                     $and: [
-  //                       { $eq: ["$userID", "$$firstUserID"] },
-  //                       { $eq: ["$isVerified", true] },
-  //                       { $eq: ["$isActivated", true] },
-  //                     ],
-  //                   },
-  //                 },
-  //               },
-  //             ],
-  //             as: "userone",
-  //           },
-  //         },
-  //         {
-  //           $unwind: {
-  //             path: "$userone",
-  //             preserveNullAndEmptyArrays: true,
-  //           },
-  //         },
-  //         {
-  //           $lookup: {
-  //             from: "useraccount",
-  //             pipeline: [
-  //               {
-  //                 $match: {
-  //                   $expr: {
-  //                     $and: [
-  //                       { $eq: ["$userID", "$$secondUserID"] },
-  //                       { $eq: ["$isVerified", true] },
-  //                       { $eq: ["$isActivated", true] },
-  //                     ],
-  //                   },
-  //                 },
-  //               },
-  //             ],
-  //             as: "usertwo",
-  //           },
-  //         },
-  //         {
-  //           $unwind: {
-  //             path: "$usertwo",
-  //             preserveNullAndEmptyArrays: true,
-  //           },
-  //         },
-  //       ],
-  //       as: "userdetails",
-  //     },
-  //   },
-  //   {
-  //     $unwind: {
-  //       path: "$userdetails",
-  //       preserveNullAndEmptyArrays: true,
-  //     },
-  //   },
-  //   {
-  //     $lookup: {
-  //       from: "groups",
-  //       localField: "contactID",
-  //       foreignField: "groupID",
-  //       as: "groupdetails",
-  //     },
-  //   },
-  //   {
-  //     $unwind: {
-  //       path: "$groupdetails",
-  //       preserveNullAndEmptyArrays: true,
-  //     },
-  //   },
-  //   {
-  //     $project: {
-  //       "userdetails.actionBy": 0,
-  //       "userdetails.actionDate": 0,
-  //       "userdetails.contactID": 0,
-  //       "userdetails.status": 0,
-  //       "userdetails.users": 0,
-  //       users: 0,
-  //       "userdetails.userone.birthdate": 0,
-  //       "userdetails.userone.dateCreated": 0,
-  //       "userdetails.userone.email": 0,
-  //       "userdetails.userone.gender": 0,
-  //       "userdetails.userone.isActivated": 0,
-  //       "userdetails.userone.isVerified": 0,
-  //       "userdetails.userone.password": 0,
-  //       "userdetails.usertwo.birthdate": 0,
-  //       "userdetails.usertwo.dateCreated": 0,
-  //       "userdetails.usertwo.email": 0,
-  //       "userdetails.usertwo.gender": 0,
-  //       "userdetails.usertwo.isActivated": 0,
-  //       "userdetails.usertwo.isVerified": 0,
-  //       "userdetails.usertwo.password": 0,
-  //     },
-  //   },
-  //   {
-  //     $sort: { _id: -1 },
-  //   },
-  // ])
-  //   .then((result) => {
-  //     return result.map((mp) => {
-  //       if (mp.userdetails.userone.userID == userID) {
-  //         return mp.userdetails.usertwo.userID;
-  //       } else {
-  //         return mp.userdetails.userone.userID;
-  //       }
-  //     });
-  //   })
-  //   .catch((err) => {
-  //     console.log(err);
-  //     return [];
-  //   });
 };
 
 const checkSessionID = async (currentID) => {
@@ -2472,23 +2340,7 @@ router.get(
       // console.log("CONNECTED", userID);
       contacts.map((mp) => {
         UpdateContactswSessionStatus(mp, activeMetaData);
-        // publish(`events_${mp}`, UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, {
-        //   parameters: {
-        //     contacts: contacts,
-        //     decodedToken: activeMetaData,
-        //   },
-        // });
       });
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER,
-      //     {
-      //       parameters: {
-      //         contacts: contacts,
-      //         decodedToken: activeMetaData,
-      //       },
-      //     }
-      //   );
     });
 
     req.on("close", () => {
@@ -2507,23 +2359,7 @@ router.get(
         clearASingleSession(userID, sessionstamp);
         contacts.map((mp) => {
           UpdateContactswSessionStatus(mp, disconnectMetaData);
-          // publish(`events_${mp}`, UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER, {
-          //   parameters: {
-          //     contacts: contacts,
-          //     decodedToken: disconnectMetaData,
-          //   },
-          // });
         });
-        // await producer.publishMessage(
-        //   "INFO:CHATTERLOOP",
-        //   UPDATE_CONTATCS_W_SESSION_STATUS_LOOPER,
-        //   {
-        //     parameters: {
-        //       contacts: contacts,
-        //       decodedToken: disconnectMetaData,
-        //     },
-        //   }
-        // );
       });
     });
   },
