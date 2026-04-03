@@ -69,7 +69,11 @@ router.post("/deletemessage", jwtchecker, (req, res) => {
         );
 
         messageReceivers.map((user) => {
-          MessagesTrigger(user, userID, false);
+          MessagesTrigger(
+            user,
+            { conversationID: decodedToken.conversationID, userID: userID },
+            false,
+          );
           // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
           //   parameters: {
           //     receivers: messageReceivers,
@@ -121,7 +125,11 @@ router.post("/addreaction", jwtchecker, (req, res) => {
         );
 
         messageReceivers.map((user) => {
-          MessagesTrigger(user, userID, false);
+          MessagesTrigger(
+            user,
+            { conversationID: decodedToken.conversationID, userID },
+            false,
+          );
           // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
           //   parameters: {
           //     receivers: messageReceivers,

@@ -975,7 +975,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
     // const seeners = [userID]; //Array
-    const seeners = []; //Array
+    const seeners = [userID]; //Array
     const content = decodedToken.content;
     const messageDate = {
       date: dateGetter(),
@@ -1016,7 +1016,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
           pendingID: pendingID,
         });
         receivers.map((rcvs, i) => {
-          MessagesTrigger(rcvs, sender, false);
+          MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
           // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
           //   parameters: {
           //     receivers: receivers,
@@ -1329,7 +1329,8 @@ router.get(
         const { rows } = await pool.query(
           `SELECT 
               id AS _id,
-              username AS "userID",
+              username,
+              id AS "userID",
               json_build_object(
                 'firstName', first_name,
                 'middleName', middle_name,
@@ -1339,7 +1340,7 @@ router.get(
               is_active AS "isActivated",
               is_verified AS "isVerified"
             FROM user_account
-            WHERE username = ANY($1);`,
+            WHERE id = ANY($1);`,
           [removeDuplicateReactors],
         );
 
@@ -1402,7 +1403,7 @@ const sendMessageInitForGC = async (
   const conversationID = convID;
   const sender = userID;
   const receivers = recs; //Array
-  const seeners = []; //Array
+  const seeners = [userID]; //Array
   const content = `${username} ${message}`;
   const messageDate = {
     date: dateGetter(),
@@ -1436,7 +1437,7 @@ const sendMessageInitForGC = async (
       receivers.map((rcvs, i) => {
         var sseWithUserID = sseNotificationsWaiters[rcvs];
         // if (sseWithUserID) {
-        MessagesTrigger(rcvs, sender, false);
+        MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
         ContactListTrigger(rcvs, `${userID} created a group chat`);
         // }
         // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
@@ -1942,7 +1943,7 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
       .then(async (result) => {
         if (result.modifiedCount > 0) {
           receivers.map((rcvs, i) => {
-            MessagesTrigger(rcvs, userID, true);
+            MessagesTrigger(rcvs, { conversationID, userID }, true);
           });
         }
         res.send({ status: true, message: "Seen OK" });
@@ -2034,7 +2035,7 @@ const saveFileMessage = async (
   onComplete,
 ) => {
   // const seeners = [userID]; //Array
-  const seeners = []; //Array
+  const seeners = [userID]; //Array
   const messageDate = {
     date: dateGetter(),
     time: timeGetter(),
@@ -2102,7 +2103,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
             settledFiles += 1;
             if (files.length === settledFiles) {
               receivers.map((rcvs, i) => {
-                MessagesTrigger(rcvs, userID, false);
+                MessagesTrigger(rcvs, { conversationID, userID }, false);
               });
             }
           },

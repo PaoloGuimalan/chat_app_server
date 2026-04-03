@@ -133,7 +133,7 @@ const NotificationMessageForConversations = async (
     .save()
     .then(async () => {
       receivers.map((rcvs) => {
-        MessagesTrigger(rcvs, sender, false);
+        MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
         ContactListTrigger(rcvs, `${userID} added you on a group chat`);
         // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
         //   parameters: {
