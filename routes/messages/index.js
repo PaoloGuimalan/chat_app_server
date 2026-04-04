@@ -63,15 +63,25 @@ router.post("/deletemessage", jwtchecker, (req, res) => {
       { isDeleted: true },
     )
       .then(async (result) => {
-        const messageReceivers = await GetMessageReceivers(
+        // const messageReceivers = await GetMessageReceivers(
+        //   decodedToken.conversationID,
+        //   decodedToken.messageID,
+        // );
+        const messageReceivers = await GetAllReceivers(
           decodedToken.conversationID,
-          decodedToken.messageID,
+        );
+        const parsedMessageReceivers = messageReceivers.users.map(
+          (mp) => mp.userID,
         );
 
-        messageReceivers.map((user) => {
+        parsedMessageReceivers.map((user) => {
           MessagesTrigger(
             user,
-            { conversationID: decodedToken.conversationID, userID: userID },
+            {
+              conversationID: decodedToken.conversationID,
+              userID: userID,
+              deletedMessageID: decodedToken.messageID,
+            },
             false,
           );
           // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
