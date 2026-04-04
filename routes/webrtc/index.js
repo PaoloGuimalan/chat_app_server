@@ -14,6 +14,7 @@ const {
   leaveRoom,
   participantStatus,
 } = require("../../reusables/hooks/webRTC");
+const { GetAllReceivers } = require("../../reusables/models/messages");
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -254,10 +255,17 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
   const { conversationID, instance } = req.body;
   const userId = req.params.userID;
   const clientId = req.body.clientId || userId;
-  const recipients = req.body.recipients || [];
+
+  const savedRecipients = await GetAllReceivers(conversationID);
+  const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
+
+  const recipients = req.body.recipients
+    ? [...req.body.recipients, ...parsedSavedRecipients, userId]
+    : [...parsedSavedRecipients, userId];
+  const uniqueRecipients = [...new Set(recipients)];
 
   try {
-    recipients.map((mp) => {
+    uniqueRecipients.map((mp) => {
       publish(`events_${mp}`, `update_participants`, {
         status: true,
         auth: true,
@@ -311,3 +319,4 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
 });
 
 module.exports = router;
+

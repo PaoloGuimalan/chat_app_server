@@ -2142,12 +2142,20 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   const username = req.params.username;
   const clientID = req.body.clientID;
   const profile = req.body.profile;
-  const recipients = req.body.recipients;
+  // const recipients = req.body.recipients;
   const channelID = req.body.channelID;
   const instance = req.body.instance;
 
+  const savedRecipients = await GetAllReceivers(channelID);
+  const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
+
+  const recipients = req.body.recipients
+    ? [...req.body.recipients, ...parsedSavedRecipients, userID]
+    : [...parsedSavedRecipients, userID];
+  const uniqueRecipients = [...new Set(recipients)];
+
   try {
-    recipients.map((rcp) => {
+    uniqueRecipients.map((rcp) => {
       ReachVoiceRecepients(rcp, {
         userID,
         username,
