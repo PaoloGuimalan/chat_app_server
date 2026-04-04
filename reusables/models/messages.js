@@ -54,7 +54,7 @@ const AddNewMemberToContacts = async (
     INSERT INTO community_member
     (member_id, account_id, nickname, realm_id, added_by_id, date_joined, role)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    ON CONFLICT (member_id) DO NOTHING;
+    ON CONFLICT (account_id, realm_id) DO NOTHING;
   `;
 
   const params = [
@@ -77,17 +77,19 @@ const AddNewMemberToContacts = async (
 };
 
 const AddNewMemberToAllMessages = async (conversationID, userID) => {
-  return await UserMessage.updateMany(
-    { conversationID: conversationID },
-    { $push: { receivers: userID } },
-  )
-    .then(() => {
-      return true;
-    })
-    .catch((err) => {
-      console.log(err);
-      throw new Error(err);
-    });
+  // return await UserMessage.updateMany(
+  //   { conversationID: conversationID },
+  //   { $push: { receivers: userID } },
+  // )
+  //   .then(() => {
+  //     return true;
+  //   })
+  //   .catch((err) => {
+  //     console.log(err);
+  //     throw new Error(err);
+  //   });
+
+  return true;
 };
 
 const NotificationMessageForConversations = async (
@@ -248,6 +250,21 @@ const AddNewMemberToChannels = async (
   }
 };
 
+const GetRealmsJoined = async (userID) => {
+  const { rows } = await pool.query(
+    `
+    SELECT DISTINCT r.realm_id
+    FROM community_member cm
+    JOIN community_realm r ON cm.realm_id = r.realm_id
+    WHERE cm.account_id = $1
+      AND r.type IN ('group', 'server');
+  `,
+    [userID],
+  );
+
+  return rows.map((r) => r.realm_id);
+};
+
 module.exports = {
   GetMessageReceivers,
   AddNewMemberToContacts,
@@ -255,4 +272,5 @@ module.exports = {
   NotificationMessageForConversations,
   GetAllReceivers,
   AddNewMemberToChannels,
+  GetRealmsJoined,
 };

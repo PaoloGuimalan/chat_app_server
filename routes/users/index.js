@@ -97,7 +97,10 @@ const {
   CountAllUnreadNotifications,
 } = require("../../reusables/models/notifications");
 const makeid = require("../../reusables/hooks/makeID");
-const { GetAllReceivers } = require("../../reusables/models/messages");
+const {
+  GetAllReceivers,
+  GetRealmsJoined,
+} = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
   createJWT,
@@ -116,6 +119,11 @@ const {
 } = require("../../reusables/vars/rabbitmqevents");
 const { publish, stop_listen } = require("../../reusables/redis/pubsub");
 const { sanitizeForStorage } = require("../../reusables/hooks/transformers");
+const {
+  GetListOfContactsV2,
+  GetUsersFromConnections,
+  GetUsersWithConnectionIDs,
+} = require("../../reusables/models/users");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -993,7 +1001,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       conversationID: conversationID,
       pendingID: pendingID,
       sender: sender,
-      receivers: receivers,
+      receivers: [], // receivers
       seeners: seeners,
       content: sanitizedContent,
       messageDate: messageDate,
@@ -1063,10 +1071,19 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
   const page = req.headers["page"];
   const range = req.headers["range"];
 
+  const contacts = await GetListOfContactsV2(userID);
+  const realmsJoined = await GetRealmsJoined(userID);
+  const conversationIDs = [...contacts, ...realmsJoined];
+
   await UserMessage.aggregate([
+    // {
+    //   $match: {
+    //     receivers: { $in: [userID] },
+    //   },
+    // },
     {
       $match: {
-        receivers: { $in: [userID] },
+        conversationID: { $in: conversationIDs },
       },
     },
     {
@@ -1132,13 +1149,30 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       const result = result_raw[0].data;
       const total = result_raw[0].total;
       const next = total - range * page > 0;
-      const resultReceivers = result.map((mp) => mp.receivers);
       const resultGroups = result.map((mp) => mp.conversationID);
 
-      const flattenedReceiversArray = resultReceivers.flat();
+      const flattenedGroupsArray = resultGroups.flat();
+
+      const directConversations = result
+        .filter((flt) => flt.conversationType === "single")
+        .map((mp) => mp.conversationID);
+
+      const usersWCns = await GetUsersWithConnectionIDs(directConversations);
+      const flattenedReceiversArray = usersWCns.map((mp) => mp.user_id).flat();
       const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
-      const flattenedGroupsArray = resultGroups.flat();
+      const usersByConversationID = {};
+
+      for (const item of usersWCns) {
+        const { user_id, connection_ids } = item;
+
+        for (const connID of connection_ids) {
+          if (!usersByConversationID[connID]) {
+            usersByConversationID[connID] = [];
+          }
+          usersByConversationID[connID].push(user_id);
+        }
+      }
 
       const { rows } = await pool.query(
         `SELECT 
@@ -1204,6 +1238,8 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       );
 
       const finalResult = result.map((mp) => {
+        const involvedUserIDs = usersByConversationID[mp.conversationID] || [];
+
         const details = group_rows.filter(
           (flt) => flt.groupdetails.groupID === mp.conversationID,
         );
@@ -1220,7 +1256,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
 
         return {
           ...final_mp,
-          users: rows.filter((flt) => mp.receivers.includes(flt._id)),
+          users: rows.filter((flt) => involvedUserIDs.includes(flt._id)), // mp.receivers.includes(flt._id)
         };
       });
 
@@ -2046,7 +2082,7 @@ const saveFileMessage = async (
     conversationID: conversationID,
     pendingID: pendingID,
     sender: userID,
-    receivers: receivers,
+    receivers: [], // receivers
     seeners: seeners,
     content: content,
     messageDate: messageDate,

@@ -456,39 +456,40 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.memberstoadd;
-    // const memberstoaddinserverdts = memberstoadd.map((mp) => ({
-    //   userID: mp.userID,
-    // }));
+
+    // const { rows } = await pool.query(
+    //   `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
+    //   [memberstoadd.map((mp) => mp.userID)],
+    // );
 
     const { rows } = await pool.query(
-      `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-      [memberstoadd.map((mp) => mp.userID)],
+      `
+          SELECT
+            ua.id,
+            ua.username AS "userID",
+            EXISTS (
+              SELECT 1
+              FROM community_member cm
+              WHERE cm.account_id = ua.id
+                AND cm.realm_id = $2
+            ) AS "alreadyMember"
+          FROM user_account ua
+          WHERE ua.username = ANY($1);
+        `,
+      [memberstoadd.map((mp) => mp.userID), serverID],
     );
 
-    // const GetServerDts = await GetServerDetails(serverID);
     const ServerChannelsList = await GetServerChannels(serverID, false);
     const mappedGroupID = ServerChannelsList.map((mp) => mp.groupID);
 
-    // const currentmembers = GetServerDts.members;
-
-    // const newsetofmembers = [...memberstoaddinserverdts, ...currentmembers];
-
-    // const uniquenewsetofmembers = newsetofmembers.filter((value, index) => {
-    //   const _value = JSON.stringify(value);
-    //   return (
-    //     index ===
-    //     newsetofmembers.findIndex((obj) => {
-    //       return JSON.stringify(obj) === _value;
-    //     })
-    //   );
-    // });
+    const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
     AddNewMemberToChannels(
       id,
       username,
       {
         conversationID: serverID,
-        memberstoadd: rows,
+        memberstoadd: removeAlreadyJoined,
         receivers: decodedToken.receivers,
       },
       "server",
@@ -500,35 +501,18 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
         username,
         {
           conversationID: mp,
-          memberstoadd: rows,
+          memberstoadd: removeAlreadyJoined,
           receivers: decodedToken.receivers,
         },
         "group",
       );
     });
 
-    // UserServer.updateOne(
-    //   { serverID: serverID },
-    //   { members: uniquenewsetofmembers }
-    // )
-    //   .then(() => {
-    //     mappedGroupID.map((mp) => {
-    //       AddNewMemberToChannels(userID, {
-    //         conversationID: mp,
-    //         memberstoadd: memberstoadd,
-    //         receivers: decodedToken.receivers,
-    //       });
-    //     });
-    //     res.send({ status: true, message: "Server updated" });
-    //   })
-    //   .catch((err) => {
-    //     console.log(err);
-    //     res.send({ status: false, message: "Error updating server members" });
-    //   });
-
-    res.send({ status: true, message: "Server updated" });
-
-    // console.log(decodedToken, mappedGroupID, uniqueArray);
+    res.send({
+      status: true,
+      message: "Server updated",
+      result: `Added ${removeAlreadyJoined.length} people`,
+    });
   } catch (ex) {
     console.log(ex);
     res.send({ status: false, message: "Error decoding token" });

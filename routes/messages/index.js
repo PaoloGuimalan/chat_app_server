@@ -297,9 +297,26 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       ...receiversfetch.users.map((mp) => mp.userID),
     ];
 
+    // const { rows } = await pool.query(
+    //   `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
+    //   [memberstoadd.map((mp) => mp.userID)],
+    // );
+
     const { rows } = await pool.query(
-      `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-      [memberstoadd.map((mp) => mp.userID)],
+      `
+        SELECT
+          ua.id,
+          ua.username AS "userID",
+          EXISTS (
+            SELECT 1
+            FROM community_member cm
+            WHERE cm.account_id = ua.id
+              AND cm.realm_id = $2
+          ) AS "alreadyMember"
+        FROM user_account ua
+        WHERE ua.username = ANY($1);
+      `,
+      [memberstoadd.map((mp) => mp.userID), conversationID],
     );
 
     const { rows: get_group } = await pool.query(
@@ -309,7 +326,9 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     const conversationType = get_group.length > 0 ? "server" : "group";
 
-    rows.map((mp) => {
+    const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
+
+    removeAlreadyJoined.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.id, id)
         .then(() => {
           AddNewMemberToAllMessages(conversationID, mp.userID)
@@ -329,7 +348,11 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     // console.log(userID, decodedToken.conversationID, decodedToken.memberstoadd);
 
-    res.send({ status: true, message: "OK" });
+    res.send({
+      status: true,
+      message: "OK",
+      result: `Added ${removeAlreadyJoined.length} people`,
+    });
   } catch (ex) {
     console.log(ex);
     res.send({ status: false, message: "Error decoding token" });
