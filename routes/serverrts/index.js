@@ -310,29 +310,38 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
 
   const { rows } = await pool.query(
     `SELECT 
-      json_build_object(
+    json_build_object(
       '_id', cr.id,
       'serverID', cr.realm_id,
       'serverName', cr.name,
+      'cover_photo', cr.cover_photo,
+      'description', cr.description,
       'profile',
-            CASE
-              WHEN cr.profile = 'N/A' THEN ''
-              ELSE cr.profile
-            END,
+        CASE
+          WHEN cr.profile = 'N/A' THEN ''
+          ELSE cr.profile
+        END,
       'dateCreated', json_build_object(
-              'date', '',
-              'time', ''
-            ),
+        'date', '',
+        'time', ''
+      ),
       'members', COALESCE((
-              SELECT jsonb_agg(jsonb_build_object(
-                'userID', cm_username.username
-              ))
-              FROM community_member cm
-              JOIN user_account cm_username ON cm.account_id = cm_username.id
-              WHERE cm.realm_id = cr.realm_id
-            ), '[]'::jsonb),
+        SELECT jsonb_agg(jsonb_build_object(
+          'userID', cm_username.username
+        ))
+        FROM community_member cm
+        JOIN user_account cm_username ON cm.account_id = cm_username.id
+        WHERE cm.realm_id = cr.realm_id
+      ), '[]'::jsonb),
       'createdBy', pua.username,
       'privacy', cr.is_private,
+      'is_admin', EXISTS (
+        SELECT 1
+        FROM community_member cm
+        WHERE cm.account_id = $1
+          AND cm.realm_id = cr.realm_id
+          AND cm.role = 'admin'
+      ),
       'channels', COALESCE((
         SELECT jsonb_agg(
           jsonb_build_object(
@@ -345,21 +354,21 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
                 WHEN pcr.profile = 'N/A' THEN ''
                 ELSE pcr.profile
               END,
-              'dateCreated', json_build_object(
-                'date', '',
-                'time', ''
-              ),
-              'createdBy', ppua.username,
-              'type', 'server',
-              'channelType', pcr.type,
-              'privacy', pcr.is_private,
-              'messages', jsonb_build_array(),
-              'is_joined', EXISTS (
-                SELECT 1
-                FROM community_member cm
-                WHERE cm.account_id = $1
-                  AND cm.realm_id = pcr.realm_id
-              )
+            'dateCreated', json_build_object(
+              'date', '',
+              'time', ''
+            ),
+            'createdBy', ppua.username,
+            'type', 'server',
+            'channelType', pcr.type,
+            'privacy', pcr.is_private,
+            'messages', jsonb_build_array(),
+            'is_joined', EXISTS (
+              SELECT 1
+              FROM community_member cm
+              WHERE cm.account_id = $1
+                AND cm.realm_id = pcr.realm_id
+            )
           )
         )
         FROM community_realm pcr
@@ -367,28 +376,28 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         WHERE pcr.parent_id = cr.realm_id
       ), '[]'::jsonb),
       'usersWithInfo', COALESCE((
-              SELECT jsonb_agg(jsonb_build_object(
-                '_id', cmu.id,
-                'userID', cmu.username,
-                'fullname', jsonb_build_object(
-                  'firstName', cmu.first_name,
-                  'middleName', cmu.middle_name,
-                  'lastName', cmu.last_name
-                ),
-                'profile',
-                  CASE
-                    WHEN cmu.profile = 'N/A' THEN 'none'
-                    ELSE cmu.profile
-                  END
-              ))
-              FROM community_member cm
-              JOIN user_account cmu ON cm.account_id = cmu.id
-              WHERE cm.realm_id = cr.realm_id
-            ), '[]'::jsonb)
-      )
-     FROM community_realm cr
-     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
-     WHERE realm_id = $2;`,
+        SELECT jsonb_agg(jsonb_build_object(
+          '_id', cmu.id,
+          'userID', cmu.username,
+          'fullname', jsonb_build_object(
+            'firstName', cmu.first_name,
+            'middleName', cmu.middle_name,
+            'lastName', cmu.last_name
+          ),
+          'profile',
+            CASE
+              WHEN cmu.profile = 'N/A' THEN 'none'
+              ELSE cmu.profile
+            END
+        ))
+        FROM community_member cm
+        JOIN user_account cmu ON cm.account_id = cmu.id
+        WHERE cm.realm_id = cr.realm_id
+      ), '[]'::jsonb)
+    )
+   FROM community_realm cr
+   LEFT JOIN user_account pua ON cr.created_by_id = pua.id
+   WHERE cr.realm_id = $2;`,
     [id, serverID],
   );
 

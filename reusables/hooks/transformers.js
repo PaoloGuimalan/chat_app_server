@@ -154,6 +154,7 @@ function formatToDesiredStructure(input) {
       date: "", // supply real date if available
       time: "", // supply real time if available
     },
+    is_admin: input.is_admin,
     status: true, // supply real value if available
     type: input.parent_id ? "server" : input.type, // supply real value if available
     users: input.usersWithInfo.map((u) => ({

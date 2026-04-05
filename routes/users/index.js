@@ -1256,6 +1256,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
 
         return {
           ...final_mp,
+          content: final_mp.isDeleted ? "" : final_mp.content,
           users: rows.filter((flt) => involvedUserIDs.includes(flt._id)), // mp.receivers.includes(flt._id)
         };
       });
@@ -1399,6 +1400,8 @@ router.get(
               messageDocument.reactionsWithInfo = [];
             }
           }
+
+          messageDocument.content = mp.isDeleted ? "" : mp.content;
 
           return messageDocument;
         });

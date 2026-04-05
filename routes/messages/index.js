@@ -168,7 +168,7 @@ router.post("/addreaction", jwtchecker, (req, res) => {
   }
 });
 
-async function getRealmWithUsers(realmId) {
+async function getRealmWithUsers(realmId, userID) {
   const query = `
     SELECT jsonb_build_object(
       'id', cr.id,
@@ -178,6 +178,13 @@ async function getRealmWithUsers(realmId) {
       'privacy', cr.is_private,
       'type', cr.type,
       'parent_id', cr.parent_id,
+      'is_admin', EXISTS (
+        SELECT 1
+        FROM community_member cm_admin
+        WHERE cm_admin.account_id = $2
+          AND cm_admin.realm_id = cr.realm_id
+          AND cm_admin.role = 'admin'
+      ),
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
           '_id', ua.id,
@@ -201,7 +208,7 @@ async function getRealmWithUsers(realmId) {
     GROUP BY cr.id;
   `;
 
-  const { rows } = await pool.query(query, [realmId]);
+  const { rows } = await pool.query(query, [realmId, userID]);
   return rows.length ? rows[0].realm_with_users : null;
 }
 
@@ -239,7 +246,7 @@ router.get(
             });
           });
       } else {
-        const result = await getRealmWithUsers(conversationID);
+        const result = await getRealmWithUsers(conversationID, userID);
         const formattedResult = formatToDesiredStructure(result);
 
         UploadedFiles.find({ foreignID: conversationID })
