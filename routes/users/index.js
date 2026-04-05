@@ -1960,6 +1960,7 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     const decodeToken = jwt.verify(token, JWT_SECRET);
 
     const conversationID = decodeToken.conversationID;
+    const messageIDs = decodeToken.messageIDs;
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
     // const receivers = decodeToken.receivers;
@@ -1969,9 +1970,10 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     UserMessage.updateMany(
       {
         conversationID: conversationID,
-        seeners: {
-          $nin: [userID],
-        },
+        messageID: { $in: messageIDs },
+        // seeners: {
+        //   $nin: [userID],
+        // },
       },
       {
         $push: {
@@ -1985,15 +1987,17 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
             MessagesTrigger(rcvs, { conversationID, userID }, true);
           });
         }
-        res.send({ status: true, message: "Seen OK" });
+        res.send({ status: true, message: "Seen OK", seen: messageIDs });
       })
       .catch((err) => {
         console.log(err);
-        res.send({ status: false, message: "Cannot update seen status" });
+        res
+          .status(400)
+          .send({ status: false, message: "Cannot update seen status" });
       });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error reading messages!" });
+    res.status(500).send({ status: false, message: "Error reading messages!" });
   }
 });
 
