@@ -1976,9 +1976,10 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
         // },
       },
       {
-        $push: {
-          seeners: userID,
-        },
+        $addToSet: { seeners: userID },
+        // $push: {
+        //   seeners: userID,
+        // },
       },
     )
       .then(async (result) => {
