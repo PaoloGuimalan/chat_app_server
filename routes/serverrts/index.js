@@ -104,66 +104,70 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
   //     });
 });
 
-router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
-  const id = req.params.id;
-  const conversationID = req.params.conversationID;
+router.get(
+  "/initserversetup/:parent_realm/:conversationID",
+  jwtchecker,
+  async (req, res) => {
+    const userID = req.params.userID;
+    const id = req.params.id;
+    const conversationID = req.params.conversationID;
+    const parent_realm = req.params.parent_realm;
 
-  await UserMessage.aggregate([
-    {
-      $match: {
-        $and: [
-          { receivers: { $in: [userID] } },
-          { conversationID: conversationID },
-        ],
+    await UserMessage.aggregate([
+      {
+        $match: {
+          $and: [
+            { receivers: { $in: [userID] } },
+            { conversationID: conversationID },
+          ],
+        },
       },
-    },
-    {
-      $group: {
-        _id: "$conversationID",
-        sortID: { $last: "$_id" },
-        conversationID: { $last: "$conversationID" },
-        messageID: { $last: "$messageID" },
-        conversationID: { $last: "$conversationID" },
-        sender: { $last: "$sender" },
-        receivers: { $last: "$receivers" },
-        seeners: { $last: "$seeners" },
-        content: { $last: "$content" },
-        messageDate: { $last: "$messageDate" },
-        isReply: { $last: "$isReply" },
-        replyingTo: { $last: "$replyingTo" },
-        reactions: { $last: "$reactions" },
-        isDeleted: { $last: "$isDeleted" },
-        messageType: { $last: "$messageType" },
-        conversationType: { $last: "$conversationType" },
-        unread: {
-          $sum: {
-            $cond: {
-              if: {
-                $in: [userID, "$seeners"],
+      {
+        $group: {
+          _id: "$conversationID",
+          sortID: { $last: "$_id" },
+          conversationID: { $last: "$conversationID" },
+          messageID: { $last: "$messageID" },
+          conversationID: { $last: "$conversationID" },
+          sender: { $last: "$sender" },
+          receivers: { $last: "$receivers" },
+          seeners: { $last: "$seeners" },
+          content: { $last: "$content" },
+          messageDate: { $last: "$messageDate" },
+          isReply: { $last: "$isReply" },
+          replyingTo: { $last: "$replyingTo" },
+          reactions: { $last: "$reactions" },
+          isDeleted: { $last: "$isDeleted" },
+          messageType: { $last: "$messageType" },
+          conversationType: { $last: "$conversationType" },
+          unread: {
+            $sum: {
+              $cond: {
+                if: {
+                  $in: [userID, "$seeners"],
+                },
+                then: 0,
+                else: 1,
               },
-              then: 0,
-              else: 1,
             },
           },
         },
       },
-    },
-    {
-      $sort: {
-        sortID: -1,
+      {
+        $sort: {
+          sortID: -1,
+        },
       },
-    },
-  ])
-    .then(async (result) => {
-      // console.log(result)
-      const receivers_list = result[0]?.receivers;
+    ])
+      .then(async (result) => {
+        // console.log(result)
+        const receivers_list = result[0]?.receivers;
 
-      let rows_final = [];
+        let rows_final = [];
 
-      if (receivers_list) {
-        const { rows } = await pool.query(
-          `
+        if (receivers_list) {
+          const { rows } = await pool.query(
+            `
           SELECT
             id AS "_id",
             username AS "userID",
@@ -175,13 +179,13 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
             profile
           FROM user_account
           WHERE id = ANY($1)`,
-          [receivers_list],
-        );
+            [receivers_list],
+          );
 
-        rows_final = rows;
-      } else {
-        const { rows } = await pool.query(
-          `
+          rows_final = rows;
+        } else {
+          const { rows } = await pool.query(
+            `
         SELECT 
             ua.id AS "_id",
             ua.username AS "userID",
@@ -193,23 +197,23 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
             ua.profile
         FROM community_member cm
         JOIN user_account ua ON cm.account_id = ua.id
-        WHERE cm.realm_id = $1;`,
-          [conversationID],
-        );
+        WHERE cm.realm_id = $1 AND cm.parent_id = $2;`,
+            [conversationID, parent_realm],
+          );
 
-        rows_final = rows;
-      }
+          rows_final = rows;
+        }
 
-      if (rows_final.filter((flt) => flt._id === id).length === 0) {
-        res.status(401).send({
-          status: false,
-          message: "You do not have access to this channel",
-        });
-        return;
-      }
+        if (rows_final.filter((flt) => flt._id === id).length === 0) {
+          res.status(401).send({
+            status: false,
+            message: "You do not have access to this channel",
+          });
+          return;
+        }
 
-      const { rows: details } = await pool.query(
-        `SELECT
+        const { rows: details } = await pool.query(
+          `SELECT
           json_build_object(
             '_id', cr.id,
             'serverID', cr.parent_id,
@@ -257,39 +261,49 @@ router.get("/initserversetup/:conversationID", jwtchecker, async (req, res) => {
         LEFT JOIN user_account ua ON cr.created_by_id = ua.id
         LEFT JOIN community_realm pcr ON cr.parent_id = pcr.id
         LEFT JOIN user_account pua ON pcr.created_by_id = pua.id
-        WHERE cr.realm_id = $1;`,
-        [conversationID],
-      );
+        WHERE cr.realm_id = $1 AND cr.parent_id = $2;;`,
+          [conversationID, parent_realm],
+        );
 
-      const details_result = details[0];
+        const details_result = details[0];
 
-      const encodedResult = jwt.sign(
-        {
-          conversationslist: [
-            {
-              conversationID: conversationID,
-              ...result[0],
-              users: rows_final,
-              ...details_result,
-            },
-          ],
-        },
-        JWT_SECRET,
-        {
-          expiresIn: 60 * 60 * 24 * 7,
-        },
-      );
+        if (!details_result) {
+          res.status(400).send({
+            status: false,
+            message: "No Channel Matched",
+          });
 
-      res.send({ status: true, message: "OK", result: encodedResult });
-    })
-    .catch((err) => {
-      console.log(err);
-      res.send({
-        status: false,
-        message: "Error generating conversations list",
+          return;
+        }
+
+        const encodedResult = jwt.sign(
+          {
+            conversationslist: [
+              {
+                conversationID: conversationID,
+                ...result[0],
+                users: rows_final,
+                ...details_result,
+              },
+            ],
+          },
+          JWT_SECRET,
+          {
+            expiresIn: 60 * 60 * 24 * 7,
+          },
+        );
+
+        res.send({ status: true, message: "OK", result: encodedResult });
+      })
+      .catch((err) => {
+        console.log(err);
+        res.status(400).send({
+          status: false,
+          message: "Error generating conversations list",
+        });
       });
-    });
-});
+  },
+);
 
 router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
