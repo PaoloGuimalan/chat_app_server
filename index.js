@@ -21,6 +21,7 @@ const Posts = require("./routes/posts/index");
 const Server = require("./routes/serverrts/index");
 const Promptings = require("./routes/promptings/index");
 const WebRTC = require("./routes/webrtc/index");
+const Realms = require("./routes/realms/index");
 
 const Storage = require("./reusables/hooks/storage");
 
@@ -112,6 +113,7 @@ app.use("/s", Server);
 app.use("/posts", Posts);
 app.use("/prompt", Promptings);
 app.use("/webrtc", WebRTC);
+app.use("/realms", Realms);
 
 app.get("/", (req, res) => {
   res.send("Welcome to Chatterloop V2 API!");
