@@ -441,23 +441,43 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
         if (content_type === "profile") {
-          await pool.query(
-            `UPDATE user_account
-            SET profile = $1
-            WHERE id = $2
-          `,
-            [finaluploadedreferences[0].reference, userID],
-          );
+          if (realm_id) {
+            await pool.query(
+              `UPDATE community_realm
+                SET profile = $1
+                WHERE realm_id = $2
+              `,
+              [finaluploadedreferences[0].reference, realm_id],
+            );
+          } else {
+            await pool.query(
+              `UPDATE user_account
+                SET profile = $1
+                WHERE id = $2
+              `,
+              [finaluploadedreferences[0].reference, userID],
+            );
+          }
         }
 
         if (content_type === "cover_photo") {
-          await pool.query(
-            `UPDATE user_account
-            SET coverphoto = $1
-            WHERE id = $2
-          `,
-            [finaluploadedreferences[0].reference, userID],
-          );
+          if (realm_id) {
+            await pool.query(
+              `UPDATE community_realm
+                SET cover_photo = $1
+                WHERE realm_id = $2
+              `,
+              [finaluploadedreferences[0].reference, realm_id],
+            );
+          } else {
+            await pool.query(
+              `UPDATE user_account
+                SET coverphoto = $1
+                WHERE id = $2
+              `,
+              [finaluploadedreferences[0].reference, userID],
+            );
+          }
         }
 
         const refValues = [];
