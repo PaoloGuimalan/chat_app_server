@@ -186,18 +186,19 @@ router.get(
         } else {
           const { rows } = await pool.query(
             `
-        SELECT 
-            ua.id AS "_id",
-            ua.username AS "userID",
-            json_build_object(
-              'firstName', ua.first_name,
-              'middleName', ua.middle_name,
-              'lastName', ua.last_name
-            ) AS fullname,
-            ua.profile
-        FROM community_member cm
-        JOIN user_account ua ON cm.account_id = ua.id
-        WHERE cm.realm_id = $1 AND cm.parent_id = $2;`,
+            SELECT 
+                ua.id AS "_id",
+                ua.username AS "userID",
+                json_build_object(
+                  'firstName', ua.first_name,
+                  'middleName', ua.middle_name,
+                  'lastName', ua.last_name
+                ) AS fullname,
+                ua.profile
+            FROM community_member cm
+            JOIN user_account ua ON cm.account_id = ua.id
+            JOIN community_realm cr ON cm.realm_id = cr.realm_id
+            WHERE cr.realm_id = $1 AND cr.parent_id = $2;`,
             [conversationID, parent_realm],
           );
 
