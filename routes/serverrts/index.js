@@ -562,4 +562,42 @@ router.get("/getservermembers/:serverID", jwtchecker, async (req, res) => {
   res.send({ status: true, result: encodedResult });
 });
 
+router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
+  const id = req.params.id;
+  const realm_id = req.body.realm_id;
+  const member_id = req.body.member_id;
+  const new_role = req.body.new_role;
+
+  try {
+    const { rows: row } = await pool.query(
+      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
+      [id, realm_id, "admin"],
+    );
+
+    if (row.length === 0) {
+      res.status(401).send({
+        status: false,
+        message: "You are not authorized to do this action",
+      });
+      return;
+    }
+
+    await pool.query(
+      `UPDATE community_member SET role = $1 WHERE realm_id = $2 AND member_id = $3;`,
+      [new_role, realm_id, member_id],
+    );
+
+    res.send({
+      status: true,
+      message: `Member ${member_id} updated role to ${new_role}`,
+    });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error occured",
+    });
+  }
+});
+
 module.exports = router;
