@@ -341,7 +341,13 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       [conversationID],
     );
 
+    const { rows: get_page } = await pool.query(
+      `SELECT realm_id FROM community_realm WHERE realm_id = $1 AND type = 'page';`,
+      [conversationID],
+    );
+
     const conversationType = get_group.length > 0 ? "server" : "group";
+    const isPage = get_page.length > 0;
 
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
@@ -350,13 +356,15 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
         .then(() => {
           AddNewMemberToAllMessages(conversationID, mp.userID)
             .then(() => {
-              NotificationMessageForConversations(
-                conversationID,
-                userID,
-                receivers,
-                `${username} added ${mp.userID}`,
-                conversationType,
-              );
+              if (!isPage) {
+                NotificationMessageForConversations(
+                  conversationID,
+                  userID,
+                  receivers,
+                  `${username} added ${mp.userID}`,
+                  conversationType,
+                );
+              }
             })
             .catch((err) => console.log);
         })
