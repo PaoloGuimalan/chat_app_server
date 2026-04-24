@@ -1304,6 +1304,27 @@ router.get(
     const totalmessages =
       await GetAllMessageCountInAConversation(conversationID);
 
+    const { rows: realm_row } = await pool.query(
+      `SELECT * FROM community_realm WHERE realm_id = $1`,
+      [conversationID],
+    );
+
+    if (realm_row.length > 0) {
+      const { rows: is_member } = await pool.query(
+        `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
+        [userID, conversationID],
+      );
+
+      if (is_member.length <= 0) {
+        res
+          .status(401)
+          .send({
+            status: false,
+            message: "You do not have access to this conversation",
+          });
+      }
+    }
+
     await UserMessage.aggregate([
       //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
       {
