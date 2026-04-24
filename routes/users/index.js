@@ -1316,12 +1316,11 @@ router.get(
       );
 
       if (is_member.length <= 0) {
-        res
-          .status(401)
-          .send({
-            status: false,
-            message: "You do not have access to this conversation",
-          });
+        res.status(401).send({
+          status: false,
+          message: "You do not have access to this conversation",
+        });
+        return;
       }
     }
 
