@@ -33,6 +33,7 @@ const {
   formatConnectionData,
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
+const { isRealmMember } = require("../../reusables/models/realms");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -46,14 +47,15 @@ router.get("/getMessages", [jwtchecker, ssexpresssample], (req, res) => {
   res.send({ status: true, message: "getMessages Testing endpoint" });
 });
 
-router.post("/deletemessage", jwtchecker, (req, res) => {
+router.post("/deletemessage", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
+  const id = req.params.id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    // console.log(decodedToken);
+    await isRealmMember(decodedToken.conversationID, id);
 
     UserMessage.updateOne(
       {
@@ -108,18 +110,21 @@ router.post("/deletemessage", jwtchecker, (req, res) => {
       });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding token" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
-router.post("/addreaction", jwtchecker, (req, res) => {
+router.post("/addreaction", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
+  const id = req.params.id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    // console.log(decodedToken);
+    await isRealmMember(decodedToken.conversationID, id);
 
     UserMessage.updateOne(
       {
@@ -164,7 +169,9 @@ router.post("/addreaction", jwtchecker, (req, res) => {
       });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding token" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
@@ -275,12 +282,15 @@ router.get(
 router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
+  const id = req.params.id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const receiversfetch = await GetAllReceivers(decodedToken.conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
     // const receivers = decodedToken.receivers;
+
+    await isRealmMember(decodedToken.conversationID, id);
 
     receivers.map((mp) => {
       if (mp !== userID) {
@@ -294,7 +304,9 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding token" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
@@ -314,10 +326,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       ...receiversfetch.users.map((mp) => mp.userID),
     ];
 
-    // const { rows } = await pool.query(
-    //   `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-    //   [memberstoadd.map((mp) => mp.userID)],
-    // );
+    await isRealmMember(conversationID, id);
 
     const { rows } = await pool.query(
       `
@@ -380,7 +389,9 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding token" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 

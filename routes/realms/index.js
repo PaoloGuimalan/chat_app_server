@@ -9,6 +9,7 @@ const makeid = require("../../reusables/hooks/makeID");
 const {
   NotificationMessageForConversations,
 } = require("../../reusables/models/messages");
+const { isRealmMember } = require("../../reusables/models/realms");
 const router = express.Router();
 
 router.post("/upload-media", jwtchecker, async (req, res) => {
@@ -105,6 +106,8 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
   try {
     const account_ids = req.body.account_ids;
     const realm_id = req.body.realm_id;
+
+    await isRealmMember(realm_id, id);
 
     const { rows: users } = await pool.query(
       `SELECT username FROM user_account WHERE id = ANY($1::text[])`,

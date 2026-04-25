@@ -19,6 +19,7 @@ const { AddNewMemberToChannels } = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
 const { transformServersData } = require("../../reusables/hooks/transformers");
 const { getAllParticipants } = require("../../reusables/redis/pubsub");
+const { isRealmMember } = require("../../reusables/models/realms");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -481,10 +482,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.memberstoadd;
 
-    // const { rows } = await pool.query(
-    //   `SELECT id, username AS "userID" FROM user_account WHERE username = ANY($1);`,
-    //   [memberstoadd.map((mp) => mp.userID)],
-    // );
+    await isRealmMember(serverID, id);
 
     const { rows } = await pool.query(
       `
@@ -539,7 +537,9 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding token" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 

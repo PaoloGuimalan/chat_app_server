@@ -124,6 +124,7 @@ const {
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
 } = require("../../reusables/models/users");
+const { isRealmMember } = require("../../reusables/models/realms");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -970,6 +971,7 @@ const checkExistingMessageID = async (messageID) => {
 
 router.post("/sendMessage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
@@ -979,6 +981,9 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
 
     const messageID = await checkExistingMessageID(makeID(30));
     const conversationID = decodedToken.conversationID;
+
+    await isRealmMember(conversationID, id);
+
     const sender = userID;
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
@@ -1051,7 +1056,9 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Failed to send message" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
@@ -2137,6 +2144,7 @@ const saveFileMessage = async (
 
 router.post("/sendFiles", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
@@ -2150,6 +2158,8 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     const isReply = decodeToken.isReply;
     const replyingTo = decodeToken.replyingTo;
     const conversationType = decodeToken.conversationType;
+
+    await isRealmMember(conversationID, id);
 
     let settledFiles = 0;
 
@@ -2178,17 +2188,22 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error decoding files!" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
 router.post("/call", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const id = req.params.id;
   const token = req.body.token;
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const recepients = decodeToken.recepients;
+
+    await isRealmMember(decodeToken.conversationID, id);
 
     recepients.map((rcp) => {
       ReachCallRecepients(rcp, decodeToken);
@@ -2197,7 +2212,9 @@ router.post("/call", jwtchecker, async (req, res) => {
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.log(ex);
-    res.send({ status: false, message: "Error declaring call!" });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 

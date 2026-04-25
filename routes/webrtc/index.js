@@ -15,71 +15,85 @@ const {
   participantStatus,
 } = require("../../reusables/hooks/webRTC");
 const { GetAllReceivers } = require("../../reusables/models/messages");
+const { isRealmMember } = require("../../reusables/models/realms");
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 
 router.post("/join-room", jwtchecker, async (req, res) => {
-  const conversationID = req.body.conversationID;
-  const members = req.body.members;
-  const instance = req.body.instance;
-  const muted = req.body.muted;
-  const cameraOff = req.body.cameraOff;
-  const userId = req.params.userID;
-  const username = req.body.username || req.body.displayName || userId;
-  const clientId = req.body.clientId || userId;
+  try {
+    const conversationID = req.body.conversationID;
+    const members = req.body.members;
+    const instance = req.body.instance;
+    const muted = req.body.muted;
+    const cameraOff = req.body.cameraOff;
+    const userId = req.params.userID;
+    const id = req.params.id;
+    const username = req.body.username || req.body.displayName || userId;
+    const clientId = req.body.clientId || userId;
 
-  if (instance) {
-    if (!instance || instance === POD_NAME) {
+    await isRealmMember(conversationID, id);
+
+    if (instance) {
+      if (!instance || instance === POD_NAME) {
+        joinRoom(
+          conversationID,
+          userId,
+          username,
+          members,
+          instance,
+          clientId,
+          muted,
+          cameraOff,
+        );
+      } else {
+        await publish_pub(instance, "join-room-relay", {
+          conversationID,
+          userId,
+          username,
+          members,
+          instance,
+          clientId,
+          muted,
+          cameraOff,
+        });
+      }
+    } else {
       joinRoom(
         conversationID,
         userId,
         username,
         members,
-        instance,
+        POD_NAME,
         clientId,
         muted,
         cameraOff,
       );
-    } else {
-      await publish_pub(instance, "join-room-relay", {
-        conversationID,
-        userId,
-        username,
-        members,
-        instance,
-        clientId,
-        muted,
-        cameraOff,
-      });
     }
-  } else {
-    joinRoom(
-      conversationID,
-      userId,
-      username,
-      members,
-      POD_NAME,
-      clientId,
-      muted,
-      cameraOff,
-    );
-  }
 
-  res.send({
-    status: true,
-    message: "OK",
-  });
+    res.send({
+      status: true,
+      message: "OK",
+    });
+  } catch (ex) {
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
 });
 
 router.post("/create-transport", jwtchecker, async (req, res) => {
   const { conversationID, instance, direction } = req.body; // 'send' or 'recv'
   const userId = req.params.userID;
+  const id = req.params.id;
   const username = req.body.username || req.body.displayName || null;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (!instance || instance === POD_NAME) {
       createTransport(
         conversationID,
@@ -105,16 +119,19 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
     }
   } catch (error) {
     console.error("create-transport error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || error.toString() });
   }
 });
 
 router.post("/transport-connect", jwtchecker, async (req, res) => {
   const { conversationID, transportId, dtlsParameters, instance } = req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (!instance || instance === POD_NAME) {
       transportConnect(
         conversationID,
@@ -152,10 +169,13 @@ router.post("/produce", jwtchecker, async (req, res) => {
     appData,
   } = req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const username = req.body.username || req.body.displayName || null;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (!instance || instance === POD_NAME) {
       produce(
         conversationID,
@@ -195,9 +215,12 @@ router.post("/consume", jwtchecker, async (req, res) => {
   const { conversationID, transportId, producerId, rtpCapabilities, instance } =
     req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (instance === POD_NAME) {
       consume(
         conversationID,
@@ -230,9 +253,12 @@ router.post("/consume", jwtchecker, async (req, res) => {
 router.post("/close-producer", jwtchecker, async (req, res) => {
   const { conversationID, producerId, instance } = req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (!instance || instance === POD_NAME) {
       closeProducer(conversationID, userId, clientId, producerId);
       res.send({ status: true, message: "OK" });
@@ -254,6 +280,7 @@ router.post("/close-producer", jwtchecker, async (req, res) => {
 router.post("/leave-room", jwtchecker, async (req, res) => {
   const { conversationID, instance } = req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const clientId = req.body.clientId || userId;
 
   const savedRecipients = await GetAllReceivers(conversationID);
@@ -265,6 +292,8 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
   const uniqueRecipients = [...new Set(recipients)];
 
   try {
+    await isRealmMember(conversationID, id);
+
     uniqueRecipients.map((mp) => {
       publish(`events_${mp}`, `update_participants`, {
         status: true,
@@ -296,9 +325,12 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
 router.post("/participant-status", jwtchecker, async (req, res) => {
   const { conversationID, instance, muted, cameraOff } = req.body;
   const userId = req.params.userID;
+  const id = req.params.id;
   const clientId = req.body.clientId || userId;
 
   try {
+    await isRealmMember(conversationID, id);
+
     if (!instance || instance === POD_NAME) {
       participantStatus(conversationID, userId, clientId, muted, cameraOff);
       res.send({ status: true, message: "OK" });
