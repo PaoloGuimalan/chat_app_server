@@ -10,6 +10,7 @@ const {
   NotificationMessageForConversations,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { publish } = require("../../reusables/redis/pubsub");
 const router = express.Router();
 
 router.post("/upload-media", jwtchecker, async (req, res) => {
@@ -197,6 +198,19 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         );
       });
     }
+
+    account_ids.map((mp) => {
+      publish(`events_${mp}`, "removed_user_notif", {
+        status: true,
+        auth: true,
+        onseen: false,
+        message: `User removed from realm ${realm_id}`,
+        result: {
+          realm_id,
+          userID: mp,
+        },
+      });
+    });
 
     res.send({
       status: true,
