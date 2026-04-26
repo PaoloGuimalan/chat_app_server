@@ -187,7 +187,11 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       [account_ids, realm_id],
     );
 
-    if (realm.type !== "page" && realm.type !== "server") {
+    if (
+      realm.type !== "page" &&
+      realm.type !== "server" &&
+      realm.type !== "voice"
+    ) {
       users.map((mp) => {
         NotificationMessageForConversations(
           realm_id,
