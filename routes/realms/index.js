@@ -208,6 +208,8 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         result: {
           realm_id,
           userID: mp,
+          type:
+            realm.type === "group" && realm.parent_id ? "channel" : realm.type,
         },
       });
     });
