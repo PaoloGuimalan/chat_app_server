@@ -990,10 +990,10 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     // const seeners = [userID]; //Array
     const seeners = [userID]; //Array
     const content = decodedToken.content;
-    const messageDate = {
-      date: dateGetter(),
-      time: timeGetter(),
-    };
+    // const messageDate = {
+    //   date: dateGetter(),
+    //   time: timeGetter(),
+    // };
     const isReply = decodedToken.isReply;
     const replyingTo = decodedToken.replyingTo;
     const messageType = decodedToken.messageType;
@@ -1009,7 +1009,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       receivers: [], // receivers
       seeners: seeners,
       content: sanitizedContent,
-      messageDate: messageDate,
+      // messageDate: messageDate,
       isReply: isReply,
       replyingTo: replyingTo,
       reactions: [],
@@ -2107,10 +2107,10 @@ const saveFileMessage = async (
 ) => {
   // const seeners = [userID]; //Array
   const seeners = [userID]; //Array
-  const messageDate = {
-    date: dateGetter(),
-    time: timeGetter(),
-  };
+  // const messageDate = {
+  //   date: dateGetter(),
+  //   time: timeGetter(),
+  // };
 
   const payload = {
     messageID: messageID,
@@ -2120,7 +2120,7 @@ const saveFileMessage = async (
     receivers: [], // receivers
     seeners: seeners,
     content: content,
-    messageDate: messageDate,
+    // messageDate: messageDate,
     isReply: isReply,
     replyingTo: replyingTo,
     reactions: [],

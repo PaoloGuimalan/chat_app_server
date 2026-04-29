@@ -105,10 +105,10 @@ const NotificationMessageForConversations = async (
   const receivers = recs; //Array
   const seeners = []; //Array
   const content = details;
-  const messageDate = {
-    date: dateGetter(),
-    time: timeGetter(),
-  };
+  // const messageDate = {
+  //   date: dateGetter(),
+  //   time: timeGetter(),
+  // };
   const isReply = false;
   const messageType = "notif";
   const conversationType = convType;
@@ -120,7 +120,7 @@ const NotificationMessageForConversations = async (
     receivers: receivers,
     seeners: seeners,
     content: content,
-    messageDate: messageDate,
+    // messageDate: messageDate,
     isReply: isReply,
     replyingTo: "",
     reactions: [],
