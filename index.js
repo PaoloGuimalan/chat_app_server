@@ -31,6 +31,7 @@ const { connect_redis, listen_sub } = require("./reusables/redis/pubsub");
 const { getPool } = require("./reusables/database/postgres");
 const rateLimit = require("express-rate-limit");
 const { webRTCEvents } = require("./reusables/hooks/webRTC");
+const { connect } = require("./reusables/database/cassandra");
 
 const connectMongo = async () => {
   return mongoose.connect(MongooseConnection.url, MongooseConnection.params);
@@ -126,6 +127,7 @@ const server = app.listen(PORT, () => {
     listen_sub(POD_NAME, webRTCEvents);
   });
   getPool();
+  connect();
   connectMongo()
     .then(() => {
       console.log(`Connected to MongoDB`);
