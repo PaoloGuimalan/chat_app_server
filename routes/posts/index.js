@@ -33,6 +33,7 @@ const pool = require("../../reusables/database/postgres");
 const { generateUUID } = require("../../reusables/hooks/transformers");
 
 const Storage = require("../../reusables/hooks/storage");
+const { query } = require("../../reusables/database/cassandra");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -307,10 +308,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       referenceMediaType: mp.referenceMediaType,
       referenceID: `${postID}_${makeID(20)}`,
     }));
-
-    // const finaluploadedreferences = decodeToken.content.isShared
-    //   ? filereferences
-    //   : await uploadFirebaseMultiple(filereferences);
 
     const finaluploadedreferences = decodeToken.content.isShared
       ? filereferences
@@ -627,6 +624,32 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       ]);
 
       // END: POST SCORE TABLE SAVE
+
+      // CASSANDRA FEED BUILDER
+
+      const cassandra_feed_query = `
+      INSERT INTO chatterloop.newsfeed_index (
+        bucket, 
+        latest_activity, 
+        post_id, 
+        author_id,
+        ranking_score
+      ) VALUES (?, ?, ?, ?, ?)
+    `;
+
+      const cassandra_feed_params = [
+        String(realm_id ?? id),
+        new Date(),
+        String(postID),
+        String(realm_id ?? id),
+        Number(ranking_score),
+      ];
+
+      await query(cassandra_feed_query, cassandra_feed_params, {
+        prepare: true,
+      });
+
+      // END: CASSANDRA FEED BUILDER
 
       if (decodeToken.content.isShared) {
         const reference_post_id = finaluploadedreferences[0].reference;

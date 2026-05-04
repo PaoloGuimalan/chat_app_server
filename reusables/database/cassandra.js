@@ -27,15 +27,15 @@ async function connect() {
   return client;
 }
 
-async function query(q) {
+async function query(q, params, options) {
   if (client) {
-    const rs = await client.execute(q);
+    const rs = await client.execute(q, params, options);
 
     return rs;
   }
 
   const initial_connection = await connect();
-  const initial_rs = await initial_connection.execute(q);
+  const initial_rs = await initial_connection.execute(q, params, options);
 
   return initial_rs;
 }
