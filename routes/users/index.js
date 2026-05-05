@@ -1486,7 +1486,7 @@ const sendMessageInitForGC = async (
     receivers: receivers,
     seeners: seeners,
     content: content,
-    messageDate: messageDate,
+    // messageDate: messageDate,
     isReply: isReply,
     replyingTo: "",
     reactions: [],
@@ -1611,7 +1611,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         true,
         privacy,
         false,
-        0
+        0,
       ],
     );
 
@@ -1738,7 +1738,7 @@ const createRealmReusable = async (
         realmDesc,
         email,
         slug,
-        0
+        0,
       ],
     );
 
