@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const cassandra = require("cassandra-driver");
 const {
   sseNotificationsWaiters,
   SendTagPostNotification,
@@ -666,6 +667,33 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       }
 
       await client.query("COMMIT");
+
+      if (decodeToken.content.isShared) {
+        // CASSANDRA LOG INSERT
+
+        const pending_log_id = cassandra.types.uuid();
+
+        const cassandra_log_query =
+          "INSERT INTO chatterloop.user_engagement_log " +
+          "(log_id, user_id, activity_time, time_spent, activity_type, target_type, target_id, metadata, created_at, updated_at) " +
+          "VALUES (?, ?, toTimestamp(now()), ?, ?, ?, ?, ?, toTimestamp(now()), toTimestamp(now()))";
+
+        const cassandra_log_params = [
+          pending_log_id,
+          id,
+          0,
+          "share",
+          "post",
+          postID,
+          null,
+        ];
+
+        await query(cassandra_log_query, cassandra_log_params, {
+          prepare: true,
+        });
+
+        // END: CASSANDRA LOG INSERT
+      }
 
       // Notify tagged users if any
       if (decodeToken.tagging.isTagged) {
