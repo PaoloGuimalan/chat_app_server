@@ -1596,9 +1596,9 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
       )`,
       [
         contactID,
@@ -1611,6 +1611,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         true,
         privacy,
         false,
+        0
       ],
     );
 
@@ -1718,9 +1719,9 @@ const createRealmReusable = async (
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
       )`,
       [
         contactID,
@@ -1737,6 +1738,7 @@ const createRealmReusable = async (
         realmDesc,
         email,
         slug,
+        0
       ],
     );
 
