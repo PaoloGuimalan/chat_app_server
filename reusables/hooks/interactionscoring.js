@@ -1,11 +1,13 @@
 const { types } = require("cassandra-driver");
 const pool = require("../../reusables/database/postgres");
 const { connect } = require("../database/cassandra");
+const { bumpLock } = require("../redis/pubsub");
 
 const INTERACTION_WEIGHTS = {
   NEW_CONNECTION: 10.0,
   SHARE: 7.0,
   REPOST: 7.0,
+  CHAT: 3.0,
   COMMENT: 4.0,
   LIKE: 1.0,
   VIEW: 0.1,
@@ -62,6 +64,20 @@ const interactionScoreBump = async (
   } catch (e) {
     await pool.query("ROLLBACK");
     throw e;
+  }
+};
+
+const bumpChatScore = async (conversationID, memberIDs, actorID) => {
+  const lock_key = `chatterloop:bump_lock:${conversationID}:chat`;
+
+  // 1. Try to set the key in Redis ONLY if it doesn't exist (NX)
+  // with an expiry of 1800 seconds (30 mins)
+  const isLocked = await bumpLock(lock_key);
+
+  if (isLocked) {
+    memberIDs.map(async (mp) => {
+      await interactionScoreBump(actorID, mp, "CHAT", false);
+    });
   }
 };
 
@@ -145,4 +161,5 @@ module.exports = {
   interactionScoreBump,
   followerInteractionScoreBump,
   bulkFanoutToCache,
+  bumpChatScore,
 };

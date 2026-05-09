@@ -171,6 +171,19 @@ async function isUniqueNonce(userId, timestamp, random) {
   return false;
 }
 
+async function bumpLock(key) {
+  if (publisher) {
+    const status = publisher.set(key, "1", {
+      NX: true,
+      EX: 1800,
+    });
+
+    return status;
+  }
+
+  return false;
+}
+
 module.exports = {
   connect_redis,
   listen,
@@ -182,4 +195,5 @@ module.exports = {
   removeParticipant,
   getAllParticipants,
   isUniqueNonce,
+  bumpLock,
 };

@@ -125,6 +125,7 @@ const {
   GetUsersWithConnectionIDs,
 } = require("../../reusables/models/users");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -1030,25 +1031,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
         });
         receivers.map((rcvs, i) => {
           MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
-          // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
-          //   parameters: {
-          //     receivers: receivers,
-          //     sender: sender,
-          //     onseen: false,
-          //   },
-          // });
         });
-        // await producer.publishMessage(
-        //   "INFO:CHATTERLOOP",
-        //   MESSAGES_TRIGGER_LOOPER,
-        //   {
-        //     parameters: {
-        //       receivers: receivers,
-        //       sender: sender,
-        //       onseen: false,
-        //     },
-        //   }
-        // );
+        bumpChatScore(conversationID, receivers, id);
       })
       .catch((err) => {
         console.log(err);
@@ -2186,6 +2170,8 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
         );
       }),
     );
+
+    bumpChatScore(conversationID, receivers, id);
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
