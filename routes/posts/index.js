@@ -24,7 +24,10 @@ const {
   uploadFirebaseMultiple,
   saveFileRecordToDatabase,
 } = require("../../reusables/hooks/firebaseupload");
-const { GetListOfContacts } = require("../../reusables/models/users");
+const {
+  GetListOfContacts,
+  GetRankedUsersInConnections,
+} = require("../../reusables/models/users");
 const {
   SEND_TAG_POST_NOTIFICATION,
 } = require("../../reusables/vars/rabbitmqevents");
@@ -35,6 +38,11 @@ const { generateUUID } = require("../../reusables/hooks/transformers");
 
 const Storage = require("../../reusables/hooks/storage");
 const { query } = require("../../reusables/database/cassandra");
+const {
+  interactionScoreBump,
+  followerInteractionScoreBump,
+  bulkFanoutToCache,
+} = require("../../reusables/hooks/interactionscoring");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -339,6 +347,9 @@ router.post("/createpost", jwtchecker, async (req, res) => {
           const post_user = query_post_user[0].id;
 
           if (post_user !== userID) {
+            interactionScoreBump(id, post_user, "SHARE", false);
+            followerInteractionScoreBump(id, realm_id, "SHARE", false);
+
             const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
             const notifParams = {
               notificationID: awaitNotifID,
@@ -628,45 +639,49 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       // CASSANDRA FEED BUILDER
 
-      const cassandra_feed_query = `
-      INSERT INTO chatterloop.newsfeed_index (
-        bucket, 
-        latest_activity, 
-        post_id, 
-        author_id,
-        ranking_score
-      ) VALUES (?, ?, ?, ?, ?)
-    `;
+      //   const cassandra_feed_query = `
+      //   INSERT INTO chatterloop.newsfeed_index (
+      //     bucket,
+      //     latest_activity,
+      //     post_id,
+      //     author_id,
+      //     ranking_score
+      //   ) VALUES (?, ?, ?, ?, ?)
+      // `;
 
-      const cassandra_feed_params = [
-        String(realm_id ?? id),
-        new Date(),
-        String(postID),
-        String(realm_id ?? id),
-        Number(ranking_score),
-      ];
+      //   const cassandra_feed_params = [
+      //     String(realm_id ?? id),
+      //     new Date(),
+      //     String(postID),
+      //     String(realm_id ?? id),
+      //     Number(ranking_score),
+      //   ];
 
-      await query(cassandra_feed_query, cassandra_feed_params, {
-        prepare: true,
-      });
+      //   await query(cassandra_feed_query, cassandra_feed_params, {
+      //     prepare: true,
+      //   });
 
       // END: CASSANDRA FEED BUILDER
 
-      if (decodeToken.content.isShared) {
-        const reference_post_id = finaluploadedreferences[0].reference;
-        await pool.query(
-          `
-            INSERT INTO newsfeed_engagementlog (
-                log_id, post_id, user_id, action, reference_id, created_at, updated_at
-            ) VALUES (
-                gen_random_uuid(), $1, $2, 'shared', $3, NOW(), NOW()
-            )
-          `,
-          [postID, id, reference_post_id],
-        );
-      }
+      // if (decodeToken.content.isShared) {
+      //   const reference_post_id = finaluploadedreferences[0].reference;
+      //   await pool.query(
+      //     `
+      //       INSERT INTO newsfeed_engagementlog (
+      //           log_id, post_id, user_id, action, reference_id, created_at, updated_at
+      //       ) VALUES (
+      //           gen_random_uuid(), $1, $2, 'shared', $3, NOW(), NOW()
+      //       )
+      //     `,
+      //     [postID, id, reference_post_id],
+      //   );
+      // }
 
       await client.query("COMMIT");
+
+      const fanoutCandidates = await GetRankedUsersInConnections(id);
+
+      bulkFanoutToCache(fanoutCandidates, { id: postID, author_id: id });
 
       if (decodeToken.content.isShared) {
         // CASSANDRA LOG INSERT
