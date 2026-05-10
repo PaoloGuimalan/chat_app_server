@@ -126,7 +126,7 @@ const followerInteractionScoreBump = async (
   }
 };
 
-const bulkFanoutToCache = async (connectionsList, postData) => {
+const bulkFanoutToCache = async (connectionsList, postData, type) => {
   const client = await connect();
 
   const queries = connectionsList.map((followerId) => ({
@@ -135,14 +135,16 @@ const bulkFanoutToCache = async (connectionsList, postData) => {
         bucket, 
         post_id, 
         created_at, 
-        author_id
-      ) VALUES (?, ?, ?, ?)
+        author_id,
+        type
+      ) VALUES (?, ?, ?, ?, ?)
     `,
     params: [
       String(followerId),
       String(postData.id),
       new Date(),
       String(postData.author_id),
+      type,
     ],
   }));
 

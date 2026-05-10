@@ -681,7 +681,11 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       const fanoutCandidates = await GetRankedUsersInConnections(id);
 
-      bulkFanoutToCache(fanoutCandidates, { id: postID, author_id: id });
+      bulkFanoutToCache(
+        fanoutCandidates,
+        { id: postID, author_id: id },
+        "fanout",
+      );
 
       if (decodeToken.content.isShared) {
         // CASSANDRA LOG INSERT
