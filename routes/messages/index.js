@@ -10,6 +10,7 @@ const UserVerification = require("../../schema/auth/userverification");
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserContacts = require("../../schema/users/contacts");
 const UserMessage = require("../../schema/messages/message");
+const ChatHistory = require("../../schema/messages/chathistory");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const {
   GetMessageReceivers,
@@ -65,10 +66,6 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
       { isDeleted: true },
     )
       .then(async (result) => {
-        // const messageReceivers = await GetMessageReceivers(
-        //   decodedToken.conversationID,
-        //   decodedToken.messageID,
-        // );
         const messageReceivers = await GetAllReceivers(
           decodedToken.conversationID,
         );
@@ -86,22 +83,7 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
             },
             false,
           );
-          // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
-          //   parameters: {
-          //     receivers: messageReceivers,
-          //     sender: userID,
-          //     onseen: false,
-          //   },
-          // });
         });
-
-        // await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
-        //     parameters: {
-        //         receivers: messageReceivers,
-        //         sender: userID,
-        //         onseen: false
-        //     }
-        // });
 
         res.send({ status: true, message: "OK" });
       })
@@ -145,22 +127,7 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
             { conversationID: decodedToken.conversationID, userID },
             false,
           );
-          // publish(`events_${user}`, MESSAGES_TRIGGER_LOOPER, {
-          //   parameters: {
-          //     receivers: messageReceivers,
-          //     sender: userID,
-          //     onseen: false,
-          //   },
-          // });
         });
-
-        // await producer.publishMessage("INFO:CHATTERLOOP", MESSAGES_TRIGGER_LOOPER, {
-        //     parameters: {
-        //         receivers: messageReceivers,
-        //         sender: userID,
-        //         onseen: false
-        //     }
-        // });
 
         res.send({ status: true, message: "OK" });
       })
@@ -383,12 +350,70 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
         .catch((err) => console.log);
     });
 
-    // console.log(userID, decodedToken.conversationID, decodedToken.memberstoadd);
-
     res.send({
       status: true,
       message: "OK",
       result: `Added ${removeAlreadyJoined.length} people`,
+    });
+  } catch (ex) {
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
+});
+
+router.post("/history", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const id = req.params.id;
+  const username = req.params.username;
+
+  try {
+    const { conversationID, action } = req.body;
+
+    if (!conversationID || !userID || !action) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Missing parameters: conversationID, userID, and action are required.",
+      });
+    }
+
+    let updatePayload = {};
+
+    switch (action) {
+      case "clear":
+        updatePayload.cleared_at = new Date();
+        break;
+      case "archive":
+        updatePayload.isArchived = true;
+        break;
+      case "unarchive":
+        updatePayload.isArchived = false;
+        break;
+      case "restrict":
+        updatePayload.isRestricted = true;
+        break;
+      case "unrestrict":
+        updatePayload.isRestricted = false;
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: `Invalid system action: '${action}'. Valid actions are clear, archive, unarchive, restrict, unrestrict.`,
+        });
+    }
+
+    const updatedState = await ChatHistory.findOneAndUpdate(
+      { conversationID, userID },
+      { $set: updatePayload },
+      { upsert: true, new: true },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Action '${action}' processed successfully.`,
+      data: updatedState,
     });
   } catch (ex) {
     console.log(ex);
