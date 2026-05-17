@@ -1,11 +1,73 @@
-const UserMessage = require('../../schema/messages/message')
+const UserMessage = require("../../schema/messages/message");
 
-const GetAllMessageCountInAConversation = async (conversationID) => {
-    return await UserMessage.count({ conversationID: conversationID }).then((result) => {
-        return result;
-    })
-}
+const GetAllMessageCountInAConversation = async (userID, conversationID) => {
+  const result = await UserMessage.aggregate([
+    {
+      $match: {
+        conversationID: conversationID,
+      },
+    },
+    // --- LOOKUP HISTORY SETTING FOR THIS USER ---
+    {
+      $lookup: {
+        from: "chat_history",
+        let: { msg_conv_id: "$conversationID" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$conversationID", "$$msg_conv_id"] },
+                  { $eq: ["$userID", userID] },
+                ],
+              },
+            },
+          },
+        ],
+        as: "historySetting",
+      },
+    },
+    {
+      $unwind: {
+        path: "$historySetting",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    // --- FILTER MESSAGES NEWER THAN CLEARED_AT ---
+    {
+      $match: {
+        $expr: {
+          $gt: [
+            "$messageDate",
+            {
+              $ifNull: [
+                {
+                  $cond: {
+                    if: {
+                      $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                    },
+                    then: {
+                      $dateFromString: {
+                        dateString: "$historySetting.cleared_at",
+                      },
+                    },
+                    else: "$historySetting.cleared_at",
+                  },
+                },
+                new Date(0), // If never cleared, counts all history (older than 1970)
+              ],
+            },
+          ],
+        },
+      },
+    },
+    // --- COUNT THE REMAINING MATCHES ---
+    {
+      $count: "totalCount",
+    },
+  ]);
+};
 
 module.exports = {
-    GetAllMessageCountInAConversation
-}
+  GetAllMessageCountInAConversation,
+};

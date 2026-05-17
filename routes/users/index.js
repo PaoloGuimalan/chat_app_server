@@ -58,6 +58,7 @@ const UserVerification = require("../../schema/auth/userverification");
 const UserContacts = require("../../schema/users/contacts");
 const UserNotifications = require("../../schema/users/notifications");
 const UserMessage = require("../../schema/messages/message");
+const ChatHistory = require("../../schema/messages/chathistory");
 const UserGroups = require("../../schema/users/groups");
 const UserServers = require("../../schema/users/servers");
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
@@ -1067,23 +1068,72 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
   const conversationIDs = [...contacts, ...realmsJoined];
 
   await UserMessage.aggregate([
-    // {
-    //   $match: {
-    //     receivers: { $in: [userID] },
-    //   },
-    // },
     {
       $match: {
         conversationID: { $in: conversationIDs },
       },
     },
+    // --- START OF NEW CODE: Filter out history cleared by this user ---
+    {
+      $lookup: {
+        from: "chat_history", // Matches your explicit collection name
+        let: { msg_conv_id: "$conversationID" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$conversationID", "$$msg_conv_id"] },
+                  { $eq: ["$userID", userID] }, // Matches the current requesting user
+                ],
+              },
+            },
+          },
+        ],
+        as: "historySetting",
+      },
+    },
+    {
+      $unwind: {
+        path: "$historySetting",
+        preserveNullAndEmptyArrays: true, // Keeps the message intact if they have never cleared this chat
+      },
+    },
+    {
+      $match: {
+        $expr: {
+          $gt: [
+            "$messageDate", // Matches your schema's date property name
+            {
+              $ifNull: [
+                // Safe conversion check for string vs date objects
+                {
+                  $cond: {
+                    if: {
+                      $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                    },
+                    then: {
+                      $dateFromString: {
+                        dateString: "$historySetting.cleared_at",
+                      },
+                    },
+                    else: "$historySetting.cleared_at",
+                  },
+                },
+                new Date(0), // Defaults to 1970 if cleared_at is null or missing
+              ],
+            },
+          ],
+        },
+      },
+    },
+    // --- END OF NEW CODE ---
     {
       $group: {
         _id: "$conversationID",
         sortID: { $last: "$_id" },
         conversationID: { $last: "$conversationID" },
         messageID: { $last: "$messageID" },
-        conversationID: { $last: "$conversationID" },
         sender: { $last: "$sender" },
         receivers: { $last: "$receivers" },
         seeners: { $last: "$seeners" },
@@ -1132,7 +1182,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
     {
       $project: {
         data: 1,
-        total: { $arrayElemAt: ["$metadata.total", 0] },
+        total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] }, // Fallback to 0 if metadata is empty
       },
     },
   ])
@@ -1292,8 +1342,10 @@ router.get(
     const conversationID = req.params.conversationID;
     const page = req.headers["page"];
     const range = req.headers["range"];
-    const totalmessages =
-      await GetAllMessageCountInAConversation(conversationID);
+    const totalmessages = await GetAllMessageCountInAConversation(
+      userID,
+      conversationID,
+    );
 
     const { rows: realm_row } = await pool.query(
       `SELECT * FROM community_realm WHERE realm_id = $1`,
@@ -1316,12 +1368,69 @@ router.get(
     }
 
     await UserMessage.aggregate([
-      //find({ userID: profileUserID }).sort({ _id: -1 }).limit(range)
       {
         $match: {
           conversationID: conversationID,
         },
       },
+      // --- START OF NEW CODE: Filter out messages older than cleared_at ---
+      {
+        $lookup: {
+          from: "chat_history", // Matches your chat history collection name
+          let: { msg_conv_id: "$conversationID" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$conversationID", "$$msg_conv_id"] },
+                    { $eq: ["$userID", userID] }, // 'userID' of the requesting user
+                  ],
+                },
+              },
+            },
+          ],
+          as: "historySetting",
+        },
+      },
+      {
+        $unwind: {
+          path: "$historySetting",
+          preserveNullAndEmptyArrays: true, // Keep messages if they never cleared history
+        },
+      },
+      {
+        $match: {
+          $expr: {
+            $gt: [
+              "$messageDate",
+              {
+                $ifNull: [
+                  // Safely handles the date if it is stored as a string or a real Date object
+                  {
+                    $cond: {
+                      if: {
+                        $eq: [
+                          { $type: "$historySetting.cleared_at" },
+                          "string",
+                        ],
+                      },
+                      then: {
+                        $dateFromString: {
+                          dateString: "$historySetting.cleared_at",
+                        },
+                      },
+                      else: "$historySetting.cleared_at",
+                    },
+                  },
+                  new Date(0),
+                ],
+              },
+            ],
+          },
+        },
+      },
+      // --- END OF NEW CODE ---
       {
         $lookup: {
           from: "messages",
@@ -1330,14 +1439,6 @@ router.get(
           as: "replyedmessage",
         },
       },
-      // {
-      //   $lookup: {
-      //     from: "useraccount",
-      //     localField: "reactions.userID",
-      //     foreignField: "userID",
-      //     as: "reactionsWithInfo",
-      //   },
-      // },
       {
         $project: {
           "reactionsWithInfo._id": 0,
