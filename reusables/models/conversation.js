@@ -66,6 +66,8 @@ const GetAllMessageCountInAConversation = async (userID, conversationID) => {
       $count: "totalCount",
     },
   ]);
+
+  return result.length > 0 ? result[0].totalCount : 0;
 };
 
 module.exports = {
