@@ -1062,16 +1062,34 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const page = req.headers["page"];
   const range = req.headers["range"];
+  const type = req.headers["type"] || "all";
 
   const contacts = await GetListOfContactsV2(userID);
   const realmsJoined = await GetRealmsJoined(userID);
   const conversationIDs = [...contacts, ...realmsJoined];
 
+  const typeSetup = {
+    common: ["group", "single"],
+    servers: ["server"],
+    groups: ["group"],
+    direct: ["single"],
+  };
+
+  const match = {
+    conversationID: { $in: conversationIDs },
+  };
+
+  if (type !== "all") {
+    const typeArray = typeSetup[type];
+
+    if (typeArray) {
+      match.conversationType = { $in: typeArray };
+    }
+  }
+
   await UserMessage.aggregate([
     {
-      $match: {
-        conversationID: { $in: conversationIDs },
-      },
+      $match: match,
     },
     // --- START OF NEW CODE: Filter out history cleared by this user ---
     {
