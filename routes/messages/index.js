@@ -195,6 +195,11 @@ router.get(
       const conversationID = req.params.conversationID;
       const type = req.params.type;
 
+      const chatHistory = await ChatHistory.findOne({
+        conversationID: conversationID,
+        userID: userID,
+      });
+
       if (type === "single") {
         const { rows } = await pool.query(
           "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
@@ -205,6 +210,7 @@ router.get(
 
         UploadedFiles.find({ foreignID: conversationID })
           .then((result) => {
+            formattedResult.chatHistory = chatHistory;
             formattedResult.conversationfiles = result;
             var flattenedResults = formattedResult;
             const encodedResult = createJWT({
@@ -225,6 +231,7 @@ router.get(
 
         UploadedFiles.find({ foreignID: conversationID })
           .then((result) => {
+            formattedResult.chatHistory = chatHistory;
             formattedResult.conversationfiles = result;
             var flattenedResults = formattedResult;
             const encodedResult = createJWT({

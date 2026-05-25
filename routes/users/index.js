@@ -1025,6 +1025,17 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     newMessage
       .save()
       .then(async () => {
+        await ChatHistory.updateMany(
+          {
+            conversationID: conversationID,
+          },
+          {
+            $set: {
+              isArchived: false,
+            },
+          },
+        );
+
         res.send({
           status: true,
           message: "Message Sent",
@@ -1146,6 +1157,13 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       },
     },
     // --- END OF NEW CODE ---
+    {
+      $match: {
+        $expr: {
+          $ne: [{ $ifNull: ["$historySetting.isArchived", false] }, true],
+        },
+      },
+    },
     {
       $group: {
         _id: "$conversationID",
@@ -2288,6 +2306,17 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
           },
         );
       }),
+    );
+
+    await ChatHistory.updateMany(
+      {
+        conversationID: conversationID,
+      },
+      {
+        $set: {
+          isArchived: false,
+        },
+      },
     );
 
     bumpChatScore(conversationID, receivers, id);
