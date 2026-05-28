@@ -28,13 +28,14 @@ const {
   BROADCAST_IS_TYPING_STATUS_LOOPER,
 } = require("../../reusables/vars/rabbitmqevents");
 const producer = require("../../reusables/rabbitmq/producer");
-const { publish } = require("../../reusables/redis/pubsub");
+const { publish, getAllParticipants } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const {
   formatConnectionData,
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -422,6 +423,294 @@ router.post("/history", jwtchecker, async (req, res) => {
       message: `Action '${action}' processed successfully.`,
       data: updatedState,
     });
+  } catch (ex) {
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
+});
+
+function removeNullServerDetails(obj) {
+  // Check if serverdetails key exists and its value is null or undefined
+  if (
+    Object.hasOwn(obj, "serverdetails") &&
+    (obj.serverdetails === null || obj.serverdetails === undefined)
+  ) {
+    delete obj.serverdetails;
+  }
+  return obj;
+}
+
+router.get("/archives", jwtchecker, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const page = req.headers["page"];
+    const range = req.headers["range"];
+
+    await UserMessage.aggregate([
+      {
+        $lookup: {
+          from: "chat_history",
+          let: { msg_conv_id: "$conversationID" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$conversationID", "$$msg_conv_id"] },
+                    { $eq: ["$userID", id] },
+                    { $eq: ["$isArchived", true] }, // Only archived for this user
+                  ],
+                },
+              },
+            },
+          ],
+          as: "historySetting",
+        },
+      },
+      {
+        $match: {
+          "historySetting.0": { $exists: true }, // Ensures historySetting is not empty (user has archived this conversation)
+        },
+      },
+      {
+        $unwind: {
+          path: "$historySetting",
+          preserveNullAndEmptyArrays: false, // Changed to false since we already filtered above
+        },
+      },
+      {
+        $match: {
+          $expr: {
+            $gt: [
+              "$messageDate",
+              {
+                $ifNull: [
+                  {
+                    $cond: {
+                      if: {
+                        $eq: [
+                          { $type: "$historySetting.cleared_at" },
+                          "string",
+                        ],
+                      },
+                      then: {
+                        $dateFromString: {
+                          dateString: "$historySetting.cleared_at",
+                        },
+                      },
+                      else: "$historySetting.cleared_at",
+                    },
+                  },
+                  new Date(0),
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$conversationID",
+          sortID: { $last: "$_id" },
+          conversationID: { $last: "$conversationID" },
+          messageID: { $last: "$messageID" },
+          sender: { $last: "$sender" },
+          receivers: { $last: "$receivers" },
+          seeners: { $last: "$seeners" },
+          content: { $last: "$content" },
+          messageDate: { $last: "$messageDate" },
+          isReply: { $last: "$isReply" },
+          replyingTo: { $last: "$replyingTo" },
+          reactions: { $last: "$reactions" },
+          isDeleted: { $last: "$isDeleted" },
+          messageType: { $last: "$messageType" },
+          conversationType: { $last: "$conversationType" },
+          unread: {
+            $sum: {
+              $cond: {
+                if: {
+                  $in: [id, "$seeners"],
+                },
+                then: 0,
+                else: 1,
+              },
+            },
+          },
+        },
+      },
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [
+            { $sort: { sortID: -1 } },
+            { $skip: (parseInt(page) - 1) * parseInt(range) },
+            { $limit: parseInt(range) },
+            {
+              $project: {
+                "users.birthdate": 0,
+                "users.dateCreated": 0,
+                "users.email": 0,
+                "users.gender": 0,
+                "users.isActivated": 0,
+                "users.isVerified": 0,
+                "users.password": 0,
+              },
+            },
+          ],
+        },
+      },
+      {
+        $project: {
+          data: 1,
+          total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
+        },
+      },
+    ])
+      .then(async (result_raw) => {
+        const result = result_raw[0].data;
+        const total = result_raw[0].total;
+        const next = total - range * page > 0;
+        const resultGroups = result.map((mp) => mp.conversationID);
+
+        const flattenedGroupsArray = resultGroups.flat();
+
+        const directConversations = result
+          .filter((flt) => flt.conversationType === "single")
+          .map((mp) => mp.conversationID);
+
+        const usersWCns = await GetUsersWithConnectionIDs(directConversations);
+        const flattenedReceiversArray = usersWCns
+          .map((mp) => mp.user_id)
+          .flat();
+        const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
+
+        const usersByConversationID = {};
+
+        for (const item of usersWCns) {
+          const { user_id, connection_ids } = item;
+
+          for (const connID of connection_ids) {
+            if (!usersByConversationID[connID]) {
+              usersByConversationID[connID] = [];
+            }
+            usersByConversationID[connID].push(user_id);
+          }
+        }
+
+        const { rows } = await pool.query(
+          `SELECT 
+                id AS _id,
+                username AS "userID",
+                json_build_object(
+                  'firstName', first_name,
+                  'middleName', middle_name,
+                  'lastName', last_name
+                ) AS fullname,
+                COALESCE(profile, 'none') AS profile
+              FROM user_account
+              WHERE id = ANY($1);`,
+          [removeDuplicateReceivers],
+        );
+
+        const { rows: group_rows } = await pool.query(
+          `SELECT 
+                json_build_object(
+                  '_id', cr.id,
+                  'serverID', cr.parent_id,
+                  'groupID', cr.realm_id,
+                  'profile', COALESCE(cr.profile, 'N/A'),
+                  'dateCreated', json_build_object(
+                    'date', '',
+                    'time', ''
+                  ),
+                  'createdBy', created_by.username,
+                  'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                  'privacy', cr.is_private,
+                  'groupName', cr.name
+                ) AS groupdetails,
+                
+                CASE
+                  WHEN cr.parent_id IS NOT NULL THEN
+                    json_build_object(
+                      '_id', pr.id,
+                      'serverID', pr.realm_id,
+                      'serverName', pr.name,
+                      'profile', COALESCE(pr.profile, 'N/A'),
+                      'dateCreated', json_build_object(
+                        'date', '',
+                        'time', ''
+                      ),
+                      'members', (
+                        SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
+                        FROM community_member m
+                        JOIN user_account a ON m.account_id = a.id
+                        WHERE m.realm_id = pr.realm_id
+                      ),
+                      'createdBy', parent_created_by.username,
+                      'privacy', pr.is_private
+                    )
+                  ELSE NULL
+                END AS serverdetails
+              FROM community_realm cr
+              LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
+              LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
+              LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+              WHERE cr.realm_id = ANY($1);
+              `,
+          [flattenedGroupsArray],
+        );
+
+        const finalResult = result.map((mp) => {
+          const involvedUserIDs =
+            usersByConversationID[mp.conversationID] || [];
+
+          const details = group_rows.filter(
+            (flt) => flt.groupdetails.groupID === mp.conversationID,
+          );
+          const final_details = details.length > 0 ? details[0] : null;
+
+          let final_mp = mp;
+
+          if (final_details) {
+            final_mp = removeNullServerDetails({
+              ...final_mp,
+              ...final_details,
+            });
+          }
+
+          return {
+            ...final_mp,
+            content: final_mp.isDeleted ? "" : final_mp.content,
+            users: rows.filter((flt) => involvedUserIDs.includes(flt._id)), // mp.receivers.includes(flt._id)
+          };
+        });
+
+        const finalResultWParticipants = await Promise.all(
+          finalResult.map(async (mp) => ({
+            ...mp,
+            voice_participants: await getAllParticipants(mp.conversationID),
+          })),
+        );
+
+        res.send({
+          status: true,
+          message: "OK",
+          result: {
+            archives: finalResultWParticipants,
+            total,
+            next,
+          },
+        });
+      })
+      .catch((err) => {
+        console.log(err);
+        res.status(400).send({
+          status: false,
+          message: "Error generating conversations list",
+        });
+      });
   } catch (ex) {
     console.log(ex);
     res
