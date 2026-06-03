@@ -5,6 +5,7 @@ const {
   REDIS_PASSWORD,
   REDIS_USERNAME,
 } = require("../vars/redis");
+const roomState = require("./roomState");
 
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 
@@ -40,6 +41,10 @@ async function connect_redis() {
   console.log("Redis publisher connected");
 
   publisher = scope_publisher;
+
+  // Share the publisher connection with roomState so all Redis operations
+  // use the same authenticated client — no extra connections needed
+  roomState.init(scope_publisher);
 }
 
 async function listen(channel, response_holder) {

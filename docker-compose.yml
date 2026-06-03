@@ -1,7 +1,65 @@
-version: '1'
+version: '3.8'
+
 services:
   api:
-    container_name: 'chatterloop_api'
+    image: chatterloop_api
     build: .
+    # Do NOT use container_name in swarm mode — swarm manages replica naming
+    environment:
+      - NODE_ENV=production
+      # POD_NAME is set to the swarm task hostname so each replica is uniquely
+      # identifiable for Redis pub/sub routing and PipeTransport discovery.
+      # Docker Swarm sets HOSTNAME to the container short ID by default;
+      # we override it with the task slot name for human-readable pod names.
+      - POD_NAME={{.Task.Name}}
+      # POD_IP is resolved at runtime in pipeManager.js via os.networkInterfaces()
+      # because Swarm does not inject it like Kubernetes does.
     ports:
+      # Publish the API port externally
       - "5000:3001"
+      # PipeTransport UDP/TCP port range for inter-container media on multi-host swarms.
+      # On a single-host swarm the overlay network handles this without publishing.
+      # On multi-host swarms (nodes on separate physical machines), these ports must
+      # be reachable between swarm nodes for PipeTransport RTP to flow.
+      #
+      # Range = 10000 + (workerIndex * 100) to 10099 + (workerIndex * 100)
+      # With up to 8 CPU cores per container: 10000–10799
+      # Extend this range if deploying on machines with more cores.
+      - target: 10000
+        published: 10000
+        protocol: udp
+        mode: host
+      - target: 10799
+        published: 10799
+        protocol: udp
+        mode: host
+      # host mode publishes the actual port range on the host NIC so other swarm
+      # nodes can reach the container directly by host IP — required for PipeTransport.
+    networks:
+      - chatterloop_overlay
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first  # start new replica before stopping old one — zero-downtime deploys
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  chatterloop_overlay:
+    driver: overlay
+    # attachable: true allows standalone containers to also join this network if needed
+    attachable: true
+    driver_opts:
+      # Encrypted overlay — all inter-container traffic is encrypted at the network layer
+      encrypted: "true"

@@ -30,8 +30,9 @@ const { consumeMessages } = require("./reusables/rabbitmq/consumer");
 const { connect_redis, listen_sub } = require("./reusables/redis/pubsub");
 const { getPool } = require("./reusables/database/postgres");
 const rateLimit = require("express-rate-limit");
-const { webRTCEvents } = require("./reusables/hooks/webRTC");
+const { webRTCEvents, workersReadyPromise } = require("./reusables/hooks/webRTC");
 const { connect } = require("./reusables/database/cassandra");
+const { registerSelf } = require("./reusables/hooks/pipeManager");
 
 const connectMongo = async () => {
   return mongoose.connect(MongooseConnection.url, MongooseConnection.params);
@@ -120,21 +121,28 @@ app.get("/", (req, res) => {
   res.send("Welcome to Chatterloop V2 API!");
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server Running: ${PORT} | ${POD_NAME}`);
-  // consumeMessages();
-  connect_redis().then(() => {
-    listen_sub(POD_NAME, webRTCEvents);
-  });
+// Start server only after all critical dependencies are ready
+(async () => {
+  // 1. Wait for mediasoup workers
+  await workersReadyPromise;
+  console.log(`[Server] MediaSoup workers ready`);
+
+  // 2. Connect Redis (required for pub/sub SSE delivery)
+  await connect_redis();
+  listen_sub(POD_NAME, webRTCEvents);
+  registerSelf();
+
+  // 3. Connect databases
   getPool();
   connect();
   connectMongo()
-    .then(() => {
-      console.log(`Connected to MongoDB`);
-    })
-    .catch((err) => {
-      console.log(err);
-    });
-});
+    .then(() => console.log(`Connected to MongoDB`))
+    .catch((err) => console.log(err));
 
-initSocketIO(server);
+  // 4. Start accepting HTTP requests only now
+  const server = app.listen(PORT, () => {
+    console.log(`Server Running: ${PORT} | ${POD_NAME}`);
+  });
+
+  initSocketIO(server);
+})();
