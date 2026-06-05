@@ -502,7 +502,10 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     );
 
     const ServerChannelsList = await GetServerChannels(serverID, false);
-    const mappedGroupID = ServerChannelsList.map((mp) => mp.groupID);
+    const mappedGroupID = ServerChannelsList.map((mp) => ({
+      groupID: mp.groupID,
+      type: mp.type,
+    }));
 
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
@@ -522,11 +525,11 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
         id,
         username,
         {
-          conversationID: mp,
+          conversationID: mp.groupID,
           memberstoadd: removeAlreadyJoined,
           receivers: decodedToken.receivers,
         },
-        "group",
+        mp.type,
       );
     });
 

@@ -18,7 +18,7 @@ const GetServerChannels = async (serverID, privacy) => {
     'time', ''
     ) AS dateCreated,
     pua.username AS "createdBy",
-    'server' AS type,
+    cr.type AS type,
     cr.is_private AS privacy
     FROM community_realm cr
     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
@@ -27,18 +27,6 @@ const GetServerChannels = async (serverID, privacy) => {
   );
 
   return rows;
-
-  //   return await UserGroups.find({
-  //     serverID: serverID,
-  //     privacy: privacy,
-  //     type: "server",
-  //   })
-  //     .then((result) => {
-  //       return result;
-  //     })
-  //     .catch((err) => {
-  //       throw new Error(err);
-  //     });
 };
 
 const GetServerDetails = async (serverID) => {

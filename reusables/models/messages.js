@@ -222,7 +222,7 @@ const AddNewMemberToChannels = async (
     memberstoadd.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.id, userID)
         .then(() => {
-          if (type !== "server") {
+          if (type !== "server" && type !== "voice" && type !== "page") {
             AddNewMemberToAllMessages(conversationID, mp.userID)
               .then(() => {
                 NotificationMessageForConversations(
