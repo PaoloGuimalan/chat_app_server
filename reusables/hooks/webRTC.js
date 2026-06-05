@@ -1,7 +1,7 @@
 require("dotenv").config();
 const os = require("os");
 const mediasoup = require("mediasoup");
-const { publish } = require("../redis/pubsub");
+const { publish, removeParticipant } = require("../redis/pubsub");
 const rs = require("../redis/roomState");
 const pipeManager = require("./pipeManager");
 
@@ -15,7 +15,9 @@ let workers = [];
 let workerIndex = 0;
 let workersReady = false;
 let workersReadyResolve;
-const workersReadyPromise = new Promise((resolve) => { workersReadyResolve = resolve; });
+const workersReadyPromise = new Promise((resolve) => {
+  workersReadyResolve = resolve;
+});
 
 async function spawnWorker(index) {
   const w = await mediasoup.createWorker({
@@ -60,7 +62,9 @@ async function spawnWorker(index) {
 
 function getNextWorker() {
   if (workers.length === 0) {
-    throw new Error("[WebRTC] No workers available — still initializing or all died");
+    throw new Error(
+      "[WebRTC] No workers available — still initializing or all died",
+    );
   }
   const w = workers[workerIndex % workers.length];
   workerIndex++;
@@ -101,8 +105,8 @@ const mediaCodecs = [
     channels: 2,
     parameters: {
       "sprop-stereo": 0,
-      usedtx: 1,        // discontinuous transmission — saves bandwidth during silence
-      useinbandfec: 1,  // forward error correction — recovers from packet loss
+      usedtx: 1, // discontinuous transmission — saves bandwidth during silence
+      useinbandfec: 1, // forward error correction — recovers from packet loss
       maxplaybackrate: 48000,
       ptime: 20,
     },
@@ -151,9 +155,9 @@ async function getOrCreateNativeRoom(conversationID) {
       producers: new Map(),
     });
     // Record which pod owns this room's router so other pods can relay correctly
-    await rs.setRoomPod(conversationID, POD_NAME).catch((err) =>
-      console.error("[roomState] setRoomPod error:", err),
-    );
+    await rs
+      .setRoomPod(conversationID, POD_NAME)
+      .catch((err) => console.error("[roomState] setRoomPod error:", err));
   }
   return nativeRooms.get(conversationID);
 }
@@ -173,20 +177,30 @@ function scheduleRoomCleanup(conversationID) {
     const room = nativeRooms.get(conversationID);
     if (room) {
       for (const [, producer] of room.producers.entries()) {
-        try { producer.close(); } catch (_) { /* no-op */ }
+        try {
+          producer.close();
+        } catch (_) {
+          /* no-op */
+        }
       }
       for (const [, entry] of room.transports.entries()) {
-        try { entry.transport.close(); } catch (_) { /* no-op */ }
+        try {
+          entry.transport.close();
+        } catch (_) {
+          /* no-op */
+        }
       }
       nativeRooms.delete(conversationID);
     }
 
-    await rs.deleteRoom(conversationID).catch((err) =>
-      console.error("[roomState] deleteRoom error:", err),
-    );
-    await pipeManager.cleanupPipesForRoom(conversationID).catch((err) =>
-      console.error("[PipeManager] cleanupPipesForRoom error:", err),
-    );
+    await rs
+      .deleteRoom(conversationID)
+      .catch((err) => console.error("[roomState] deleteRoom error:", err));
+    await pipeManager
+      .cleanupPipesForRoom(conversationID)
+      .catch((err) =>
+        console.error("[PipeManager] cleanupPipesForRoom error:", err),
+      );
 
     emptyRoomTimers.delete(conversationID);
     console.log(`[WebRTC] Stale room evicted: ${conversationID}`);
@@ -211,7 +225,11 @@ async function evictClientSession(conversationID, clientId) {
   for (const producerId of ownedProducerIds) {
     const producer = room.producers.get(producerId);
     if (producer) {
-      try { producer.close(); } catch (_) { /* no-op */ }
+      try {
+        producer.close();
+      } catch (_) {
+        /* no-op */
+      }
     }
     room.producers.delete(producerId);
   }
@@ -219,7 +237,11 @@ async function evictClientSession(conversationID, clientId) {
   // Close + remove all transports owned by this client
   for (const [transportId, entry] of room.transports.entries()) {
     if (!entry || entry.clientId !== clientId) continue;
-    try { entry.transport.close(); } catch (_) { /* no-op */ }
+    try {
+      entry.transport.close();
+    } catch (_) {
+      /* no-op */
+    }
     room.transports.delete(transportId);
   }
 }
@@ -236,7 +258,9 @@ async function joinRoom(
   muted,
   cameraOff,
 ) {
-  console.log(`[WebRTC] joinRoom called: conversationID=${conversationID}, userId=${userId}, clientId=${clientId}`);
+  console.log(
+    `[WebRTC] joinRoom called: conversationID=${conversationID}, userId=${userId}, clientId=${clientId}`,
+  );
 
   const room = await getOrCreateNativeRoom(conversationID);
   console.log(`[WebRTC] joinRoom: room ready, router=${!!room.router}`);
@@ -248,14 +272,20 @@ async function joinRoom(
   }
 
   // Detect reconnect — clientId already exists from a dropped session
-  const isReconnect = await rs.hasMember(conversationID, clientId).catch(() => false);
+  const isReconnect = await rs
+    .hasMember(conversationID, clientId)
+    .catch(() => false);
   if (isReconnect) {
     await evictClientSession(conversationID, clientId);
-    console.log(`[WebRTC] Reconnect for clientId ${clientId} in ${conversationID}`);
+    console.log(
+      `[WebRTC] Reconnect for clientId ${clientId} in ${conversationID}`,
+    );
   }
 
   // Read existing members before adding the new one (for notifications)
-  const existingMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
+  const existingMembers = await rs
+    .getAllMembers(conversationID)
+    .catch(() => ({}));
   const existingUserIds = new Set(
     Object.values(existingMembers)
       .filter((entry) => entry.userId !== userId)
@@ -263,7 +293,11 @@ async function joinRoom(
   );
 
   // Write member + status to Redis — include pod name for cross-pod pipe routing
-  await rs.setMember(conversationID, clientId, { userId, username, pod: POD_NAME });
+  await rs.setMember(conversationID, clientId, {
+    userId,
+    username,
+    pod: POD_NAME,
+  });
   console.log(`[WebRTC] joinRoom: member saved to Redis`);
   const joinedStatus = {
     muted: typeof muted === "boolean" ? muted : false,
@@ -272,13 +306,18 @@ async function joinRoom(
   await rs.setMemberStatus(conversationID, clientId, joinedStatus);
 
   // Build participant list for the joining user (everyone else currently in room)
-  const allStatuses = await rs.getAllMemberStatuses(conversationID).catch(() => ({}));
+  const allStatuses = await rs
+    .getAllMemberStatuses(conversationID)
+    .catch(() => ({}));
   const participants = Object.entries(existingMembers)
     .filter(([participantClientId]) => participantClientId !== clientId)
     .map(([participantClientId, participantData]) => ({
       clientId: participantClientId,
       username: participantData?.username || participantData?.userId || "",
-      ...(allStatuses[participantClientId] || { muted: false, cameraOff: false }),
+      ...(allStatuses[participantClientId] || {
+        muted: false,
+        cameraOff: false,
+      }),
     }));
 
   // Notify existing users — skip on reconnect to avoid duplicate join events
@@ -305,20 +344,26 @@ async function joinRoom(
     clientId,
     participants,
   });
-  console.log(`[WebRTC] joinRoom: join-room-response published to events_${userId}`);
+  console.log(
+    `[WebRTC] joinRoom: join-room-response published to events_${userId}`,
+  );
 
   // Late-join sync: replay active producers to the newly joined user.
   // If this pod owns the room, producers are local.
   // If another pod owns the room, pipe all producers here first so the
   // client can consume them locally without any cross-pod consumer path.
   const roomPod = await rs.getRoomPod(conversationID).catch(() => POD_NAME);
-  const allProducerMeta = await rs.getAllProducerMeta(conversationID).catch(() => ({}));
+  const allProducerMeta = await rs
+    .getAllProducerMeta(conversationID)
+    .catch(() => ({}));
 
   if (roomPod && roomPod !== POD_NAME) {
     // This pod doesn't own the room — pipe all existing producers from the owner pod
-    await pipeManager.pipeAllProducersToLocal(conversationID, roomPod).catch((err) =>
-      console.error("[WebRTC] pipeAllProducersToLocal error:", err),
-    );
+    await pipeManager
+      .pipeAllProducersToLocal(conversationID, roomPod)
+      .catch((err) =>
+        console.error("[WebRTC] pipeAllProducersToLocal error:", err),
+      );
   }
 
   for (const [producerId, meta] of Object.entries(allProducerMeta)) {
@@ -425,7 +470,10 @@ async function produce(
   const entry = room?.transports.get(transportId);
 
   if (!entry || entry.clientId !== clientId) {
-    await publish(`events_${userId}`, "produce-error", { conversationID, clientId });
+    await publish(`events_${userId}`, "produce-error", {
+      conversationID,
+      clientId,
+    });
     return;
   }
 
@@ -459,12 +507,14 @@ async function produce(
   room.producers.set(producer.id, producer);
 
   // Serializable metadata goes to Redis
-  await rs.setProducerMeta(conversationID, producer.id, {
-    clientId,
-    kind,
-    source,
-    rtpParameters,
-  }).catch((err) => console.error("[roomState] setProducerMeta error:", err));
+  await rs
+    .setProducerMeta(conversationID, producer.id, {
+      clientId,
+      kind,
+      source,
+      rtpParameters,
+    })
+    .catch((err) => console.error("[roomState] setProducerMeta error:", err));
 
   console.log(`[WebRTC] Producer created [${kind}] ID: ${producer.id}`);
 
@@ -489,9 +539,14 @@ async function produce(
       }
     }
     for (const targetPod of memberPods) {
-      pipeManager.pipeLocalProducerToPod(conversationID, producer.id, targetPod).catch((err) =>
-        console.error(`[WebRTC] pipeLocalProducerToPod to ${targetPod} error:`, err),
-      );
+      pipeManager
+        .pipeLocalProducerToPod(conversationID, producer.id, targetPod)
+        .catch((err) =>
+          console.error(
+            `[WebRTC] pipeLocalProducerToPod to ${targetPod} error:`,
+            err,
+          ),
+        );
     }
   }
 
@@ -528,13 +583,17 @@ async function consume(
   rtpCapabilities,
   clientId,
 ) {
-  console.log(`[WebRTC] consume called: producerId=${producerId}, transportId=${transportId}, clientId=${clientId}`);
+  console.log(
+    `[WebRTC] consume called: producerId=${producerId}, transportId=${transportId}, clientId=${clientId}`,
+  );
 
   const room = nativeRooms.get(conversationID);
   const entry = room?.transports.get(transportId);
 
   if (!entry || entry.clientId !== clientId) {
-    console.log(`[WebRTC] consume: transport not found or clientId mismatch. room=${!!room}, entry=${!!entry}, entry.clientId=${entry?.clientId}`);
+    console.log(
+      `[WebRTC] consume: transport not found or clientId mismatch. room=${!!room}, entry=${!!entry}, entry.clientId=${entry?.clientId}`,
+    );
     await publish(`events_${userId}`, "consume-transport-error", {
       conversationID,
       clientId,
@@ -548,28 +607,49 @@ async function consume(
     const roomPod = await rs.getRoomPod(conversationID).catch(() => null);
 
     if (roomPod && roomPod !== POD_NAME) {
-      console.log(`[WebRTC] Producer ${producerId} not local — piping from ${roomPod} before consuming`);
+      console.log(
+        `[WebRTC] Producer ${producerId} not local — piping from ${roomPod} before consuming`,
+      );
       try {
-        await pipeManager.pipeProducerToLocal(conversationID, producerId, roomPod);
+        await pipeManager.pipeProducerToLocal(
+          conversationID,
+          producerId,
+          roomPod,
+        );
       } catch (pipeErr) {
-        console.error(`[WebRTC] On-demand pipe failed for producer ${producerId}:`, pipeErr);
-        await publish(`events_${userId}`, "consume-error", { conversationID, clientId });
+        console.error(
+          `[WebRTC] On-demand pipe failed for producer ${producerId}:`,
+          pipeErr,
+        );
+        await publish(`events_${userId}`, "consume-error", {
+          conversationID,
+          clientId,
+        });
         return;
       }
 
       // Re-check after pipe is established
       if (!room.router.canConsume({ producerId, rtpCapabilities })) {
-        await publish(`events_${userId}`, "consume-error", { conversationID, clientId });
+        await publish(`events_${userId}`, "consume-error", {
+          conversationID,
+          clientId,
+        });
         return;
       }
     } else {
       // Producer genuinely doesn't exist or caps mismatch — not a cross-pod issue
-      await publish(`events_${userId}`, "consume-error", { conversationID, clientId });
+      await publish(`events_${userId}`, "consume-error", {
+        conversationID,
+        clientId,
+      });
       return;
     }
   }
 
-  const consumer = await entry.transport.consume({ producerId, rtpCapabilities });
+  const consumer = await entry.transport.consume({
+    producerId,
+    rtpCapabilities,
+  });
 
   if (consumer.type === "simulcast") {
     await consumer.setPreferredLayers({ spatialLayer: 2, temporalLayer: 2 });
@@ -577,7 +657,9 @@ async function consume(
 
   await consumer.resume();
 
-  const producerMeta = await rs.getProducerMeta(conversationID, producerId).catch(() => null);
+  const producerMeta = await rs
+    .getProducerMeta(conversationID, producerId)
+    .catch(() => null);
 
   await publish(`events_${userId}`, "consume-response", {
     conversationID,
@@ -596,18 +678,26 @@ async function closeProducer(conversationID, userId, clientId, producerId) {
   const room = nativeRooms.get(conversationID);
   if (!room) return;
 
-  const meta = await rs.getProducerMeta(conversationID, producerId).catch(() => null);
+  const meta = await rs
+    .getProducerMeta(conversationID, producerId)
+    .catch(() => null);
   if (!meta || meta.clientId !== clientId) return;
 
   const producer = room.producers.get(producerId);
   if (producer) {
-    try { producer.close(); } catch (_) { /* no-op */ }
+    try {
+      producer.close();
+    } catch (_) {
+      /* no-op */
+    }
     room.producers.delete(producerId);
   }
 
-  await rs.deleteProducerMeta(conversationID, producerId).catch((err) =>
-    console.error("[roomState] deleteProducerMeta error:", err),
-  );
+  await rs
+    .deleteProducerMeta(conversationID, producerId)
+    .catch((err) =>
+      console.error("[roomState] deleteProducerMeta error:", err),
+    );
 
   const allMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
   const notifiedUsers = new Set();
@@ -629,12 +719,15 @@ async function closeProducer(conversationID, userId, clientId, producerId) {
 
 async function leaveRoom(conversationID, userId, clientId) {
   // Read the leaving member's data BEFORE deleting — needed for participant-left broadcast
-  const leavingMember = await rs.getMember(conversationID, clientId).catch(() => null);
+  const leavingMember = await rs
+    .getMember(conversationID, clientId)
+    .catch(() => null);
 
   // Remove participant from Redis regardless of local native room state
-  await rs.deleteMember(conversationID, clientId).catch((err) =>
-    console.error("[roomState] deleteMember error:", err),
-  );
+  await rs
+    .deleteMember(conversationID, clientId)
+    .catch((err) => console.error("[roomState] deleteMember error:", err));
+  await removeParticipant(conversationID, clientId);
 
   const room = nativeRooms.get(conversationID);
   if (!room) return;
@@ -647,7 +740,11 @@ async function leaveRoom(conversationID, userId, clientId) {
   for (const producerId of ownedProducerIds) {
     const producer = room.producers.get(producerId);
     if (producer) {
-      try { producer.close(); } catch (_) { /* no-op */ }
+      try {
+        producer.close();
+      } catch (_) {
+        /* no-op */
+      }
       room.producers.delete(producerId);
     }
   }
@@ -655,15 +752,22 @@ async function leaveRoom(conversationID, userId, clientId) {
   // Close + remove this client's transports (native only — no Redis for transports)
   for (const [transportId, entry] of room.transports.entries()) {
     if (!entry || entry.clientId !== clientId) continue;
-    try { entry.transport.close(); } catch (_) { /* no-op */ }
+    try {
+      entry.transport.close();
+    } catch (_) {
+      /* no-op */
+    }
     room.transports.delete(transportId);
   }
 
   // Notify remaining members
-  const remainingMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
+  const remainingMembers = await rs
+    .getAllMembers(conversationID)
+    .catch(() => ({}));
   const notifiedUsers = new Set();
   for (const [memberClientId, member] of Object.entries(remainingMembers)) {
-    if (memberClientId === clientId || notifiedUsers.has(member.userId)) continue;
+    if (memberClientId === clientId || notifiedUsers.has(member.userId))
+      continue;
     notifiedUsers.add(member.userId);
     await publish(`events_${member.userId}`, "participant-left", {
       conversationID,
@@ -690,7 +794,9 @@ async function participantStatus(
   muted,
   cameraOff,
 ) {
-  const isMember = await rs.hasMember(conversationID, clientId).catch(() => false);
+  const isMember = await rs
+    .hasMember(conversationID, clientId)
+    .catch(() => false);
   if (!isMember) return;
 
   const prev = await rs.getMemberStatus(conversationID, clientId).catch(() => ({
@@ -703,9 +809,9 @@ async function participantStatus(
     cameraOff: typeof cameraOff === "boolean" ? cameraOff : prev.cameraOff,
   };
 
-  await rs.setMemberStatus(conversationID, clientId, nextStatus).catch((err) =>
-    console.error("[roomState] setMemberStatus error:", err),
-  );
+  await rs
+    .setMemberStatus(conversationID, clientId, nextStatus)
+    .catch((err) => console.error("[roomState] setMemberStatus error:", err));
 
   const allMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
   const recipientUserIds = Array.from(
@@ -732,57 +838,126 @@ async function participantStatus(
 function webRTCEvents(event, message) {
   switch (event) {
     case "join-room-relay": {
-      const { conversationID, userId, username, members, instance, clientId, muted, cameraOff } = message;
-      joinRoom(conversationID, userId, username, members, instance, clientId, muted, cameraOff)
-        .catch((err) => console.error("join-room-relay error:", err));
+      const {
+        conversationID,
+        userId,
+        username,
+        members,
+        instance,
+        clientId,
+        muted,
+        cameraOff,
+      } = message;
+      joinRoom(
+        conversationID,
+        userId,
+        username,
+        members,
+        instance,
+        clientId,
+        muted,
+        cameraOff,
+      ).catch((err) => console.error("join-room-relay error:", err));
       break;
     }
     case "create-transport-relay":
       createTransport(
-        message.conversationID, message.userId, message.username,
-        message.instance, message.direction, message.clientId,
+        message.conversationID,
+        message.userId,
+        message.username,
+        message.instance,
+        message.direction,
+        message.clientId,
       ).catch((err) => console.error("create-transport-relay error:", err));
       break;
     case "transport-connect-relay": {
-      const { conversationID, userId, transportId, dtlsParameters, clientId } = message;
-      transportConnect(conversationID, userId, transportId, dtlsParameters, clientId)
-        .catch((err) => console.error("transport-connect-relay error:", err));
+      const { conversationID, userId, transportId, dtlsParameters, clientId } =
+        message;
+      transportConnect(
+        conversationID,
+        userId,
+        transportId,
+        dtlsParameters,
+        clientId,
+      ).catch((err) => console.error("transport-connect-relay error:", err));
       break;
     }
     case "produce-relay": {
-      const { conversationID, transportId, kind, rtpParameters, userId, username, members, clientId, appData } = message;
-      produce(conversationID, transportId, kind, rtpParameters, userId, username, members, clientId, appData)
-        .catch((err) => console.error("produce-relay error:", err));
+      const {
+        conversationID,
+        transportId,
+        kind,
+        rtpParameters,
+        userId,
+        username,
+        members,
+        clientId,
+        appData,
+      } = message;
+      produce(
+        conversationID,
+        transportId,
+        kind,
+        rtpParameters,
+        userId,
+        username,
+        members,
+        clientId,
+        appData,
+      ).catch((err) => console.error("produce-relay error:", err));
       break;
     }
     case "consume-relay": {
-      const { conversationID, userId, transportId, producerId, rtpCapabilities, clientId } = message;
-      consume(conversationID, userId, transportId, producerId, rtpCapabilities, clientId)
-        .catch((err) => console.error("consume-relay error:", err));
+      const {
+        conversationID,
+        userId,
+        transportId,
+        producerId,
+        rtpCapabilities,
+        clientId,
+      } = message;
+      consume(
+        conversationID,
+        userId,
+        transportId,
+        producerId,
+        rtpCapabilities,
+        clientId,
+      ).catch((err) => console.error("consume-relay error:", err));
       break;
     }
     case "close-producer-relay":
-      closeProducer(message.conversationID, message.userId, message.clientId, message.producerId)
-        .catch((err) => console.error("close-producer-relay error:", err));
+      closeProducer(
+        message.conversationID,
+        message.userId,
+        message.clientId,
+        message.producerId,
+      ).catch((err) => console.error("close-producer-relay error:", err));
       break;
     case "leave-room-relay":
-      leaveRoom(message.conversationID, message.userId, message.clientId)
-        .catch((err) => console.error("leave-room-relay error:", err));
+      leaveRoom(message.conversationID, message.userId, message.clientId).catch(
+        (err) => console.error("leave-room-relay error:", err),
+      );
       break;
     case "participant-status-relay":
       participantStatus(
-        message.conversationID, message.userId, message.clientId,
-        message.muted, message.cameraOff,
+        message.conversationID,
+        message.userId,
+        message.clientId,
+        message.muted,
+        message.cameraOff,
       ).catch((err) => console.error("participant-status-relay error:", err));
       break;
     case "reconnect-relay":
-      evictClientSession(message.conversationID, message.clientId)
-        .catch((err) => console.error("reconnect-relay error:", err));
+      evictClientSession(message.conversationID, message.clientId).catch(
+        (err) => console.error("reconnect-relay error:", err),
+      );
       break;
     case "pipe-to-router-request":
     case "pipe-to-router-response":
     case "pipe-new-producer-available":
-      pipeManager.handlePipeEvent(event, message)
+      pipeManager
+        .handlePipeEvent(event, message)
         .catch((err) => console.error(`${event} error:`, err));
       break;
     default:
