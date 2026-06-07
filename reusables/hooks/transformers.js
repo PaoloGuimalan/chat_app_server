@@ -1,4 +1,5 @@
 function capitalizeFirstLetter(string) {
+  if (string === null) return null;
   if (!string || typeof string !== "string") return "";
   return string.charAt(0).toUpperCase() + string.slice(1).toLowerCase();
 }
@@ -53,11 +54,13 @@ function transformUser(input) {
       middleName: input.middle_name,
       lastName: input.last_name,
     },
-    birthdate: {
-      month: monthNames[birthDate.getMonth()],
-      day: birthDate.getDate().toString(),
-      year: birthDate.getFullYear().toString(),
-    },
+    birthdate: input.birthdate
+      ? {
+          month: monthNames[birthDate.getMonth()],
+          day: birthDate.getDate().toString(),
+          year: birthDate.getFullYear().toString(),
+        }
+      : null,
     dateCreated: {
       date: formatDate(dateCreated),
       time: formatTime(dateCreated).toLowerCase(),
@@ -66,7 +69,7 @@ function transformUser(input) {
     userID: input.username,
     profile: input.profile === "N/A" ? "none" : input.profile,
     coverphoto: input.coverphoto,
-    gender: capitalizeFirstLetter(input.gender),
+    gender: input.gender ? capitalizeFirstLetter(input.gender) : null,
     email: input.email,
     password: null,
     isActivated: !!input.is_active,
