@@ -44,6 +44,9 @@ function transformUser(input) {
     return `${mm}/${dd}/${yyyy}`;
   }
 
+  const profileRequirements = ["birthdate", "gender"];
+  const isComplete = profileRequirements.every((field) => input[field]);
+
   const output = {
     fullname: {
       firstName: input.first_name,
@@ -68,6 +71,7 @@ function transformUser(input) {
     password: null,
     isActivated: !!input.is_active,
     isVerified: !!input.is_verified,
+    isComplete: isComplete,
   };
 
   return output;
