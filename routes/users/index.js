@@ -2429,12 +2429,15 @@ const getContactsForSession = async (userID) => {
   return flattenedRows;
 };
 
-const checkSessionID = async (currentID) => {
-  return await UserSessions.find({ sessionID: currentID })
+const checkSessionID = async (currentID, deviceToken) => {
+  return await UserSessions.find({
+    sessionID: currentID,
+    deviceToken: deviceToken,
+  })
     .then((result) => {
       if (result.length > 0) {
         checkSessionID(
-          `SESSION_${makeID(20)}_${timeGetter()}_${dateGetter()}`
+          `SESSION_${makeID(20)}_${dateGetter()}`
             .split(" ")
             .join("")
             .split(":")
@@ -2443,6 +2446,7 @@ const checkSessionID = async (currentID) => {
             .join("_")
             .split("/")
             .join("_"),
+          deviceToken,
         );
       } else {
         return currentID;
@@ -2454,9 +2458,9 @@ const checkSessionID = async (currentID) => {
     });
 };
 
-const setUserSession = async (userID, status, resolve) => {
+const setUserSession = async (userID, deviceToken, status, resolve) => {
   const newSessionID = await checkSessionID(
-    `SESSION_${makeID(20)}_${timeGetter()}_${dateGetter()}`
+    `SESSION_${makeID(20)}_${dateGetter()}`
       .split(" ")
       .join("")
       .split(":")
@@ -2465,39 +2469,19 @@ const setUserSession = async (userID, status, resolve) => {
       .join("_")
       .split("/")
       .join("_"),
+    deviceToken,
   );
   const newSessionPayload = {
-    sessionID: newSessionID,
-    userID: userID,
-    sessionStatus: status,
-    sessiondate: {
-      date: dateGetter(),
-      time: timeGetter(),
-    },
+    status: status,
+    lastSeen: dateGetter(),
   };
 
-  await UserSessions.find({ userID: userID })
-    .then((result) => {
-      if (result.length > 0) {
-        UserSessions.updateMany({ userID: userID }, newSessionPayload)
-          .then((_) => {
-            resolve();
-          })
-          .catch((err) => {
-            console.log(err);
-          });
-      } else {
-        const newSession = new UserSessions(newSessionPayload);
-
-        newSession
-          .save()
-          .then(() => {
-            resolve();
-          })
-          .catch((err) => {
-            console.log(err);
-          });
-      }
+  await UserSessions.updateOne(
+    { userID: userID, deviceToken: deviceToken },
+    newSessionPayload,
+  )
+    .then((_) => {
+      resolve();
     })
     .catch((err) => {
       console.log(err);
@@ -2528,6 +2512,7 @@ router.get(
   [sse, jwtssechecker],
   async (req, res) => {
     const userID = req.params.userID;
+    const deviceToken = req.params.deviceToken;
     const sseWithUserID = sseNotificationsWaiters[userID];
     const contacts = await getContactsForSession(userID);
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
@@ -2565,7 +2550,7 @@ router.get(
       },
     };
 
-    setUserSession(userID, true, async () => {
+    setUserSession(userID, deviceToken, true, async () => {
       // console.log("CONNECTED", userID);
       contacts.map((mp) => {
         UpdateContactswSessionStatus(mp, activeMetaData);
@@ -2583,12 +2568,20 @@ router.get(
         },
       };
 
-      setUserSession(userID, false, async () => {
+      setUserSession(userID, deviceToken, false, async () => {
         // console.log("DISCONNECTED", userID);
         clearASingleSession(userID, sessionstamp);
-        contacts.map((mp) => {
-          UpdateContactswSessionStatus(mp, disconnectMetaData);
+
+        const session_result = await UserSessions.find({
+          userID: userID,
+          status: true,
         });
+
+        if (session_result.length === 0) {
+          contacts.map((mp) => {
+            UpdateContactswSessionStatus(mp, disconnectMetaData);
+          });
+        }
       });
     });
   },
@@ -2607,25 +2600,58 @@ router.get("/activecontacts", jwtchecker, async (req, res) => {
       },
     },
     {
+      $sort: {
+        userID: 1,
+        lastSeen: -1,
+      },
+    },
+    {
       $group: {
         _id: "$userID",
-        sessionID: {
-          $last: "$sessionID",
-        },
-        sessionStatus: {
-          $last: "$sessionStatus",
-        },
-        sessiondate: {
-          $last: "$sessiondate",
+        hasTrue: { $max: "$sessionStatus" },
+        allSessions: { $push: "$$ROOT" },
+      },
+    },
+    {
+      $addFields: {
+        filteredSessions: {
+          $cond: [
+            { $eq: ["$hasTrue", true] },
+            {
+              $filter: {
+                input: "$allSessions",
+                as: "s",
+                cond: { $eq: ["$$s.sessionStatus", true] },
+              },
+            },
+            "$allSessions",
+          ],
         },
       },
     },
+    {
+      $project: {
+        // Returns the entire first session document (all schema fields)
+        _id: 0,
+        session: { $first: "$filteredSessions" },
+      },
+    },
+    {
+      $replaceWith: "$session", // Replaces the whole document with the session object
+    },
   ])
     .then((result) => {
-      const resultChecker = result.map((mp) => mp._id);
+      const resultChecker = result.map((mp) => mp.userID);
       const sessionFiller = contacts.map((mp) => {
         if (resultChecker.includes(mp)) {
-          return result.filter((flt) => flt._id == mp)[0];
+          return {
+            ...result.filter((flt) => flt.userID == mp)[0],
+            sessiondate: {
+              date: result.filter((flt) => flt.userID == mp)[0].lastSeen,
+            },
+            _id: result.filter((flt) => flt.userID == mp)[0].userID,
+            sessionStatus: result.filter((flt) => flt.userID == mp)[0].status,
+          };
         } else {
           return {
             _id: mp,

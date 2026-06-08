@@ -1,16 +1,18 @@
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const UserAccount = require("../../schema/auth/useraccount");
+const UserSessions = require("../../schema/auth/sessions");
 const pool = require("../database/postgres");
 const { decryptNonce } = require("./crypto");
 const { isUniqueNonce } = require("../redis/pubsub");
 const message = require("../../schema/messages/message");
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const jwtchecker = (req, res, next) => {
+const jwtchecker = async (req, res, next) => {
   const token = req.headers["x-access-token"];
   const origin = req.headers["origin"];
   const nonce = req.headers["x-nonce"];
+  const deviceToken = req.headers["device-token"];
 
   if (!origin) {
     res.status(403).send({ status: false, message: "Request not allowed!" });
@@ -19,6 +21,26 @@ const jwtchecker = (req, res, next) => {
 
   if (!nonce) {
     res.status(403).send({ status: false, message: "Request not allowed!" });
+    return;
+  }
+
+  if (!deviceToken) {
+    res.status(401).send({
+      status: false,
+      message: "Device not logged in.",
+    });
+    return;
+  }
+
+  const session_result = await UserSessions.findOne({
+    deviceToken: deviceToken,
+  });
+
+  if (!session_result) {
+    res.status(401).send({
+      status: false,
+      message: "Device not recognized. Try logging in again.",
+    });
     return;
   }
 
@@ -67,6 +89,7 @@ const jwtchecker = (req, res, next) => {
           req.params.userID = currentRow.id;
           req.params.id = currentRow.id;
           req.params.username = currentRow.username;
+          req.params.deviceToken = deviceToken;
           next();
         } else {
           res.send({ status: false, message: "Cannot verify user!" });
@@ -84,6 +107,7 @@ const jwtssechecker = (req, res, next) => {
 
     const token = decodedToken.token;
     const type = decodedToken.type;
+    const deviceToken = decodedToken.deviceToken;
 
     const origin = req.headers["origin"];
 
@@ -107,6 +131,7 @@ const jwtssechecker = (req, res, next) => {
             const currentRow = rows[0];
             req.params.userID = currentRow.id;
             req.params.username = currentRow.username;
+            req.params.deviceToken = deviceToken;
             next();
           } else {
             res.sse(type, {
