@@ -32,18 +32,6 @@ const jwtchecker = async (req, res, next) => {
     return;
   }
 
-  const session_result = await UserSessions.findOne({
-    deviceToken: deviceToken,
-  });
-
-  if (!session_result) {
-    res.status(401).send({
-      status: false,
-      message: "Device not recognized. Try logging in again.",
-    });
-    return;
-  }
-
   const decrypted = decryptNonce(nonce);
 
   if (!decrypted) {
@@ -86,6 +74,20 @@ const jwtchecker = async (req, res, next) => {
 
         if (rows.length > 0) {
           const currentRow = rows[0];
+
+          const session_result = await UserSessions.findOne({
+            deviceToken: deviceToken,
+            userID: currentRow.id,
+          });
+
+          if (!session_result) {
+            res.status(401).send({
+              status: false,
+              message: "Device not recognized. Try logging in again.",
+            });
+            return;
+          }
+
           req.params.userID = currentRow.id;
           req.params.id = currentRow.id;
           req.params.username = currentRow.username;
