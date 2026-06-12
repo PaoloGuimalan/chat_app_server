@@ -229,6 +229,13 @@ function sanitizeForStorage(content) {
     .replace(/'/g, "&#039;");
 }
 
+function extractMentionUsernames(text = "") {
+  const matches = [
+    ...text.matchAll(/(?:^|\s)@([A-Za-z0-9._-]{1,30})(?=$|\s|[.,!?;:])/g),
+  ];
+  return [...new Set(matches.map((m) => m[1]))];
+}
+
 module.exports = {
   transformUser,
   generateUUID,
@@ -236,4 +243,5 @@ module.exports = {
   formatToDesiredStructure,
   transformServersData,
   sanitizeForStorage,
+  extractMentionUsernames,
 };

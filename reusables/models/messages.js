@@ -180,21 +180,31 @@ const NotificationMessageForConversations = async (
 
 const GetAllReceivers = async (contactID) => {
   const { rows: rows_connections } = await pool.query(
-    "SELECT ua.id FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
+    "SELECT ua.id, ua.username FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
     [contactID],
   );
 
   if (rows_connections.length > 0) {
-    return { users: rows_connections.map((mp) => ({ userID: mp.id })) };
+    return {
+      users: rows_connections.map((mp) => ({
+        userID: mp.id,
+        username: mp.username,
+      })),
+    };
   }
 
   const { rows: rows_members } = await pool.query(
-    "SELECT ua.id FROM community_member uc JOIN user_account ua ON ua.id = uc.account_id WHERE uc.realm_id = $1;",
+    "SELECT ua.id, ua.username FROM community_member uc JOIN user_account ua ON ua.id = uc.account_id WHERE uc.realm_id = $1;",
     [contactID],
   );
 
   if (rows_members.length > 0) {
-    return { users: rows_members.map((mp) => ({ userID: mp.id })) };
+    return {
+      users: rows_members.map((mp) => ({
+        userID: mp.id,
+        username: mp.username,
+      })),
+    };
   }
 
   return { users: [] };

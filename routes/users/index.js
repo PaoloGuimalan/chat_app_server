@@ -119,13 +119,19 @@ const {
   CALL_REJECT_NOTIF_LOOPER,
 } = require("../../reusables/vars/rabbitmqevents");
 const { publish, stop_listen } = require("../../reusables/redis/pubsub");
-const { sanitizeForStorage } = require("../../reusables/hooks/transformers");
+const {
+  sanitizeForStorage,
+  extractMentionUsernames,
+} = require("../../reusables/hooks/transformers");
 const {
   GetListOfContactsV2,
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
 } = require("../../reusables/models/users");
-const { isRealmMember } = require("../../reusables/models/realms");
+const {
+  isRealmMember,
+  GetRealmName,
+} = require("../../reusables/models/realms");
 const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
@@ -973,6 +979,7 @@ const checkExistingMessageID = async (messageID) => {
 
 router.post("/sendMessage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const username = req.params.username;
   const id = req.params.id;
   const token = req.body.token;
 
@@ -989,6 +996,34 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const sender = userID;
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+
+    const mentionedUsernames = extractMentionUsernames(decodedToken.content);
+
+    const receiverMap = new Map(
+      receiversfetch.users.map((rcv) => [
+        String(rcv.username).toLowerCase(),
+        rcv.userID,
+      ]),
+    );
+
+    const mentionedReceiverIds = mentionedUsernames
+      .map((usern) => receiverMap.get(usern.toLowerCase()))
+      .filter(Boolean);
+
+    const mentionedReceiverSet = new Set(mentionedReceiverIds);
+
+    const realmName =
+      decodedToken.conversationType === "single"
+        ? null
+        : await GetRealmName(conversationID);
+
+    const mentioner = {
+      userID: sender,
+      username: `@${username}`,
+      realmName: realmName,
+      isSingle: decodedToken.conversationType === "single",
+    };
+
     // const seeners = [userID]; //Array
     const seeners = [userID]; //Array
     const content = decodedToken.content;
@@ -1041,8 +1076,19 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
           message: "Message Sent",
           pendingID: pendingID,
         });
+
         receivers.map((rcvs, i) => {
-          MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
+          const isMentioned = mentionedReceiverSet.has(rcvs);
+
+          MessagesTrigger(
+            rcvs,
+            {
+              conversationID,
+              userID: sender,
+              mentioner: isMentioned ? mentioner : null,
+            },
+            false,
+          );
         });
         bumpChatScore(conversationID, receivers, id);
       })
