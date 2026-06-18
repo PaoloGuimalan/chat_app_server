@@ -1668,46 +1668,10 @@ const sendMessageInitForGC = async (
     .save()
     .then(async () => {
       receivers.map((rcvs, i) => {
-        var sseWithUserID = sseNotificationsWaiters[rcvs];
-        // if (sseWithUserID) {
+        // var sseWithUserID = sseNotificationsWaiters[rcvs];
         MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
         ContactListTrigger(rcvs, `${userID} created a group chat`);
-        // }
-        // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers,
-        //     sender: sender,
-        //     onseen: false,
-        //   },
-        // });
-        // publish(`events_${rcvs}`, CONTACT_LIST_TRIGGER_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers,
-        //     details: `${userID} created a group chat`,
-        //   },
-        // });
       });
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     MESSAGES_TRIGGER_LOOPER,
-      //     {
-      //       parameters: {
-      //         receivers: receivers,
-      //         sender: sender,
-      //         onseen: false,
-      //       },
-      //     }
-      //   );
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     CONTACT_LIST_TRIGGER_LOOPER,
-      //     {
-      //       parameters: {
-      //         receivers: receivers,
-      //         details: `${userID} created a group chat`,
-      //       },
-      //     }
-      //   );
     })
     .catch((err) => {
       console.log(err);
@@ -2559,31 +2523,31 @@ router.get(
   async (req, res) => {
     const userID = req.params.userID;
     const deviceToken = req.params.deviceToken;
-    const sseWithUserID = sseNotificationsWaiters[userID];
+    // const sseWithUserID = sseNotificationsWaiters[userID];
     const contacts = await getContactsForSession(userID);
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
     const redis_event = `events_${userID}`;
 
-    if (sseWithUserID) {
-      sseNotificationsWaiters[userID] = {
-        response: [
-          ...sseWithUserID.response,
-          {
-            sessionstamp: sessionstamp,
-            res: res,
-          },
-        ],
-      };
-    } else {
-      sseNotificationsWaiters[userID] = {
-        response: [
-          {
-            sessionstamp: sessionstamp,
-            res: res,
-          },
-        ],
-      };
-    }
+    // if (sseWithUserID) {
+    //   sseNotificationsWaiters[userID] = {
+    //     response: [
+    //       ...sseWithUserID.response,
+    //       {
+    //         sessionstamp: sessionstamp,
+    //         res: res,
+    //       },
+    //     ],
+    //   };
+    // } else {
+    //   sseNotificationsWaiters[userID] = {
+    //     response: [
+    //       {
+    //         sessionstamp: sessionstamp,
+    //         res: res,
+    //       },
+    //     ],
+    //   };
+    // }
 
     listen(redis_event, res);
 
@@ -2604,7 +2568,7 @@ router.get(
     });
 
     req.on("close", () => {
-      stop_listen(redis_event);
+      stop_listen(redis_event, res);
       const disconnectMetaData = {
         _id: userID,
         sessionStatus: false,
@@ -2616,7 +2580,7 @@ router.get(
 
       setUserSession(userID, deviceToken, false, async () => {
         // console.log("DISCONNECTED", userID);
-        clearASingleSession(userID, sessionstamp);
+        // clearASingleSession(userID, sessionstamp);
 
         const session_result = await UserSessions.find({
           userID: userID,

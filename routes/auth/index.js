@@ -16,6 +16,7 @@ const UserAccount = require("../../schema/auth/useraccount");
 const UserVerification = require("../../schema/auth/userverification");
 const { sseNotificationsWaiters } = require("../../reusables/hooks/sse");
 const { transformUser } = require("../../reusables/hooks/transformers");
+const { activeStreams } = require("../../reusables/redis/pubsub");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -33,7 +34,7 @@ router.get("/sessions", (req, res) => {
     ),
   }));
 
-  res.send({ status: true, result: sessions });
+  res.send({ status: true, result: sessions, streams: activeStreams });
 });
 
 router.get("/users", jwtchecker, async (req, res) => {

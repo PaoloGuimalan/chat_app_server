@@ -21,6 +21,8 @@ const redis_creds = {
 let subscriber;
 let publisher;
 
+const activeStreams = new Map(); // channel -> Set<response_holder>
+
 async function connect_redis() {
   const scope_subscriber = redis.createClient(redis_creds);
 
@@ -49,14 +51,18 @@ async function connect_redis() {
 
 async function listen(channel, response_holder) {
   if (subscriber) {
-    // subscriber.on("error", (err) =>
-    //   console.error("Redis Subscriber Error", err)
-    // );
+    if (!activeStreams.has(channel)) {
+      activeStreams.set(channel, new Set());
 
-    await subscriber.subscribe(channel, (message) => {
-      const data = JSON.parse(message);
-      response_holder.sse(data.event, data.message);
-    });
+      await subscriber.subscribe(channel, (message) => {
+        const data = JSON.parse(message);
+        for (const res of activeStreams.get(channel) || []) {
+          res.sse(data.event, data.message);
+        }
+      });
+    }
+
+    activeStreams.get(channel).add(response_holder);
   }
 }
 
@@ -76,9 +82,17 @@ async function publish(channel, event, message) {
   }
 }
 
-async function stop_listen(channel) {
+async function stop_listen(channel, response_holder) {
   if (subscriber) {
-    await subscriber.unsubscribe(channel);
+    const set = activeStreams.get(channel);
+    if (!set) return;
+
+    set.delete(response_holder);
+
+    if (set.size === 0) {
+      await subscriber.unsubscribe(channel);
+      activeStreams.delete(channel);
+    }
     console.log(`Unsubscribed from channel: ${channel}`);
   } else {
     console.error("Subscriber client is not connected");
@@ -201,4 +215,5 @@ module.exports = {
   getAllParticipants,
   isUniqueNonce,
   bumpLock,
+  activeStreams
 };
