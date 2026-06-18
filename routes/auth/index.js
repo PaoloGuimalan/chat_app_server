@@ -37,7 +37,7 @@ router.get("/sessions", (req, res) => {
   const formattedStreams = Object.fromEntries(
     Array.from(activeStreams.entries()).map(([channel, set]) => [
       channel, 
-      Array.from(set)
+      set instanceof Set ? set.size : 0 // Simply counts items, avoiding complex objects
     ])
   );
 
