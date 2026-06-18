@@ -34,7 +34,14 @@ router.get("/sessions", (req, res) => {
     ),
   }));
 
-  res.send({ status: true, result: sessions, streams: activeStreams });
+  const formattedStreams = Object.fromEntries(
+    Array.from(activeStreams.entries()).map(([channel, set]) => [
+      channel, 
+      Array.from(set)
+    ])
+  );
+
+  res.send({ status: true, result: sessions, streams: formattedStreams });
 });
 
 router.get("/users", jwtchecker, async (req, res) => {
