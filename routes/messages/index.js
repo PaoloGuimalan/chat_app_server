@@ -321,20 +321,30 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     );
 
     const { rows: get_group } = await pool.query(
-      `SELECT parent_id FROM community_realm WHERE realm_id = $1 AND parent_id IS NOT NULL;`,
+      `SELECT parent_id, type FROM community_realm WHERE realm_id = $1`, //  AND parent_id IS NOT NULL;
       [conversationID],
     );
 
-    const { rows: get_page_voice } = await pool.query(
-      `SELECT realm_id 
-        FROM community_realm 
-        WHERE realm_id = $1 
-      AND type IN ('page', 'voice');`,
-      [conversationID],
-    );
+    // const { rows: get_page_voice } = await pool.query(
+    //   `SELECT realm_id
+    //     FROM community_realm
+    //     WHERE realm_id = $1
+    //   AND type IN ('page', 'voice');`,
+    //   [conversationID],
+    // );
 
-    const conversationType = get_group.length > 0 ? "server" : "group";
-    const isPageOrVoice = get_page_voice.length > 0;
+    const conversationType =
+      get_group.length > 0
+        ? get_group[0].parent_id
+          ? "server"
+          : get_group[0].type
+        : "group";
+    const isPageOrVoice =
+      get_group.length > 0
+        ? get_group[0].type === "voice" || get_group[0].type === "page"
+          ? true
+          : false
+        : false; // get_page_voice.length > 0
 
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 

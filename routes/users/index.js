@@ -1130,6 +1130,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
     servers: ["server"],
     groups: ["group"],
     direct: ["single"],
+    conference: ["conference"],
   };
 
   const match = {
@@ -1727,9 +1728,9 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score, created_at, is_temporary
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), false
       )`,
       [
         contactID,
@@ -1809,6 +1810,7 @@ const createRealmReusable = async (
   type,
   email,
   slug,
+  is_temporary,
 ) => {
   const userID = userIDpass;
   const profile = realmProfile || "N/A";
@@ -1850,9 +1852,9 @@ const createRealmReusable = async (
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score, created_at, is_temporary
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), $16
       )`,
       [
         contactID,
@@ -1870,6 +1872,7 @@ const createRealmReusable = async (
         email,
         slug,
         0,
+        is_temporary,
       ],
     );
 
@@ -1889,8 +1892,8 @@ const createRealmReusable = async (
         userID,
         rows.filter((mp) => mp.id === userID)[0].username,
         allReceivers,
-        "created the group chat",
-        parentRealmID ? "server" : "group",
+        `created the ${type === "group" ? (parentRealmID ? "channel" : "group chat") : type}`,
+        parentRealmID ? "server" : type,
       );
     }
   } catch (ex) {
@@ -1934,6 +1937,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         type, // "group"
         null,
         null,
+        false,
       );
     } else {
       createRealmReusable(
@@ -1950,6 +1954,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         type, // "group"
         null,
         null,
+        false,
       );
     }
 
@@ -1992,6 +1997,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
       "server",
       null,
       null,
+      false,
     );
 
     defaultchannellist.map((mp) => {
@@ -2009,6 +2015,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
         "group",
         null,
         null,
+        false,
       );
     });
     res.send({ status: true, message: `You created a Group Chat` });
@@ -2094,6 +2101,7 @@ router.post("/createpage", jwtchecker, async (req, res) => {
           "page",
           email,
           slug,
+          false,
         );
 
         res.send({ status: true, message: `Page has been created` });
