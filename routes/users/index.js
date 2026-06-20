@@ -2060,12 +2060,79 @@ router.post("/createconference", jwtchecker, async (req, res) => {
     const otherUsers = Array.isArray(decodeToken.otherUsers)
       ? decodeToken.otherUsers
       : [];
+    const inviteTargets = Array.isArray(decodeToken.invitees)
+      ? decodeToken.invitees
+      : [];
+    const conferenceID = await checkGroupID(`${makeID(20)}`);
     const startsAt =
       decodeToken.starts_at != null ? new Date(decodeToken.starts_at) : null;
     const expiresAt =
       decodeToken.expires_at != null ? new Date(decodeToken.expires_at) : null;
+    const normalizedInviteTargets = inviteTargets
+      .map((invite) => {
+        const inviteObject =
+          typeof invite === "string" ? { target_email: invite } : invite || {};
+        const targetEmail = String(
+          inviteObject.target_email ?? inviteObject.email ?? "",
+        )
+          .trim()
+          .toLowerCase();
 
-    const conferenceID = await checkGroupID(`${makeID(20)}`);
+        if (!targetEmail) {
+          return null;
+        }
+
+        return {
+          id: inviteObject.id ?? null,
+          realm_type: inviteObject.realm_type ?? "conference",
+          kind: inviteObject.kind === "request" ? "request" : "invite",
+          status: inviteObject.status ?? "pending",
+          target_email: targetEmail,
+          target_user_id: inviteObject.target_user_id ?? null,
+          accepted_by_user_id: inviteObject.accepted_by_user_id ?? null,
+          invite_token: inviteObject.invite_token ?? null,
+          created_by: inviteObject.created_by ?? userID,
+          created_at: inviteObject.created_at ?? null,
+          resolved_at: inviteObject.resolved_at ?? null,
+        };
+      })
+      .filter(Boolean);
+
+    const inviteEmailList = normalizedInviteTargets.map(
+      (invite) => invite.target_email,
+    );
+    const inviteAccounts = inviteEmailList.length
+      ? await pool.query(
+          `
+            SELECT id, email
+            FROM user_account
+            WHERE LOWER(email) = ANY($1::text[])
+          `,
+          [inviteEmailList],
+        )
+      : { rows: [] };
+    const inviteAccountMap = new Map(
+      inviteAccounts.rows.map((mp) => [
+        String(mp.email).trim().toLowerCase(),
+        mp.id,
+      ]),
+    );
+    const resolvedInvites = normalizedInviteTargets.map((invite, index) => ({
+      id: invite.id ?? `INV_${makeID(12)}_${index}`,
+      realm_id: conferenceID,
+      realm_type: invite.realm_type ?? "conference",
+      kind: invite.kind,
+      status: invite.status,
+      target_email: invite.target_email,
+      target_user_id:
+        invite.target_user_id ?? inviteAccountMap.get(invite.target_email),
+      accepted_by_user_id: invite.accepted_by_user_id ?? null,
+      invite_token: invite.invite_token ?? `${makeID(12)}`,
+      created_by: invite.created_by ?? userID,
+      created_at: invite.created_at ?? new Date().toISOString(),
+      resolved_at: invite.resolved_at ?? null,
+    }));
+
     const conferenceSlug = await checkConferenceSlug(`${makeID(6)}`);
     const allReceivers = [userID, ...otherUsers];
     const userReceivers = allReceivers.map((alr) => ({
@@ -2097,6 +2164,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
       result: {
         slug: conferenceSlug,
         realm_id: conferenceID,
+        invites: resolvedInvites,
       },
     });
   } catch (ex) {
