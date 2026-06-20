@@ -153,6 +153,10 @@ async function getRealmWithUsers(realmId, userID) {
       'privacy', cr.is_private,
       'type', cr.type,
       'parent_id', cr.parent_id,
+      'starts_at', cr.starts_at,
+      'expires_at', cr.expires_at,
+      'is_temporary', cr.is_temporary,
+      'created_at', cr.created_at,
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm_admin
@@ -196,12 +200,12 @@ router.get(
       const conversationID = req.params.conversationID;
       const type = req.params.type;
 
-      const chatHistory = await ChatHistory.findOne({
-        conversationID: conversationID,
-        userID: userID,
-      });
-
       if (type === "single") {
+        const chatHistory = await ChatHistory.findOne({
+          conversationID: conversationID,
+          userID: userID,
+        });
+
         const { rows } = await pool.query(
           "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
           [conversationID],
@@ -227,10 +231,32 @@ router.get(
             });
           });
       } else {
-        const result = await getRealmWithUsers(conversationID, userID);
+        const { rows: realmRows } = await pool.query(
+          `
+            SELECT realm_id
+            FROM community_realm
+            WHERE realm_id = $1 OR slug = $1
+            LIMIT 1
+          `,
+          [conversationID],
+        );
+
+        if (realmRows.length === 0) {
+          return res
+            .status(404)
+            .send({ status: false, message: "Invalid Group/Channel" });
+        }
+
+        const resolvedConversationID = realmRows[0].realm_id;
+        const chatHistory = await ChatHistory.findOne({
+          conversationID: resolvedConversationID,
+          userID: userID,
+        });
+
+        const result = await getRealmWithUsers(resolvedConversationID, userID);
         const formattedResult = formatToDesiredStructure(result);
 
-        UploadedFiles.find({ foreignID: conversationID })
+        UploadedFiles.find({ foreignID: resolvedConversationID })
           .then((result) => {
             formattedResult.chatHistory = chatHistory;
             formattedResult.conversationfiles = result;

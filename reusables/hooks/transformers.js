@@ -174,6 +174,10 @@ function formatToDesiredStructure(input) {
       groupID: input.realm_id,
       groupName: input.name,
       profile: input.profile,
+      starts_at: input.starts_at ?? null,
+      expires_at: input.expires_at ?? null,
+      is_temporary: input.is_temporary ?? null,
+      created_at: input.created_at ?? null,
       dateCreated: {
         date: "", // supply real date
         time: "", // supply real time

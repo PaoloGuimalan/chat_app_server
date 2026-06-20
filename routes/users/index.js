@@ -437,6 +437,25 @@ const checkGroupID = async (cnctID) => {
   //   });
 };
 
+const checkConferenceSlug = async (slug) => {
+  const { rows } = await pool.query(
+    `
+      SELECT EXISTS (
+        SELECT 1 FROM user_account WHERE username = $1
+        UNION ALL
+        SELECT 1 FROM community_realm WHERE slug = $1
+      ) as slug_exists
+    `,
+    [slug],
+  );
+
+  if (rows[0]?.slug_exists) {
+    return checkConferenceSlug(`${makeID(6)}`);
+  }
+
+  return slug;
+};
+
 const checkServerID = async (cnctID) => {
   return await UserServers.find({ serverID: cnctID })
     .then((result) => {
@@ -1811,6 +1830,8 @@ const createRealmReusable = async (
   email,
   slug,
   is_temporary,
+  starts_at = null,
+  expires_at = null,
 ) => {
   const userID = userIDpass;
   const profile = realmProfile || "N/A";
@@ -1852,9 +1873,9 @@ const createRealmReusable = async (
 
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score, created_at, is_temporary
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score, starts_at, expires_at, created_at, is_temporary
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), $16
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18
       )`,
       [
         contactID,
@@ -1872,6 +1893,8 @@ const createRealmReusable = async (
         email,
         slug,
         0,
+        starts_at,
+        expires_at,
         is_temporary,
       ],
     );
@@ -2021,6 +2044,66 @@ router.post("/createserver", jwtchecker, async (req, res) => {
     res.send({ status: true, message: `You created a Group Chat` });
   } catch (ex) {
     res.send({ status: false, message: "Group token encountered an error!" });
+    console.log(ex);
+  }
+});
+
+router.post("/createconference", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const id = req.params.id;
+  const token = req.body.token;
+
+  try {
+    const decodeToken = jwt.verify(token, JWT_SECRET);
+    const conferenceTitle = decodeToken.groupName || "Conference";
+    const privacy = decodeToken.privacy ?? false;
+    const otherUsers = Array.isArray(decodeToken.otherUsers)
+      ? decodeToken.otherUsers
+      : [];
+    const startsAt =
+      decodeToken.starts_at != null ? new Date(decodeToken.starts_at) : null;
+    const expiresAt =
+      decodeToken.expires_at != null ? new Date(decodeToken.expires_at) : null;
+
+    const conferenceID = await checkGroupID(`${makeID(20)}`);
+    const conferenceSlug = await checkConferenceSlug(`${makeID(6)}`);
+    const allReceivers = [userID, ...otherUsers];
+    const userReceivers = allReceivers.map((alr) => ({
+      userID: alr,
+    }));
+
+    await createRealmReusable(
+      id,
+      null,
+      conferenceID,
+      conferenceTitle,
+      null,
+      null,
+      null,
+      userID,
+      userReceivers,
+      privacy,
+      "conference",
+      null,
+      conferenceSlug,
+      true,
+      startsAt && !isNaN(startsAt.getTime()) ? startsAt : null,
+      expiresAt && !isNaN(expiresAt.getTime()) ? expiresAt : null,
+    );
+
+    res.send({
+      status: true,
+      message: "Conference has been created",
+      result: {
+        slug: conferenceSlug,
+        realm_id: conferenceID,
+      },
+    });
+  } catch (ex) {
+    res.send({
+      status: false,
+      message: "Conference token encountered an error!",
+    });
     console.log(ex);
   }
 });
