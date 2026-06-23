@@ -218,6 +218,25 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       });
     });
 
+    // Signal the remaining members so conference clients refetch the
+    // participants list (the removed users are notified separately above).
+    try {
+      const { rows: remainingMembers } = await pool.query(
+        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        [realm_id],
+      );
+
+      remainingMembers.forEach((mp) => {
+        publish(`events_${mp.account_id}`, "conference_members_changed", {
+          status: true,
+          auth: true,
+          realm_id,
+        });
+      });
+    } catch (publishErr) {
+      console.log("Failed to broadcast member removal:", publishErr);
+    }
+
     res.send({
       status: true,
       message: "OK",
