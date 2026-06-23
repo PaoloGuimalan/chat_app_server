@@ -164,6 +164,12 @@ async function getRealmWithUsers(realmId, userID) {
           AND cm_admin.realm_id = cr.realm_id
           AND cm_admin.role = 'admin'
       ),
+      'is_member', EXISTS (
+        SELECT 1
+        FROM community_member cm_member
+        WHERE cm_member.account_id = $2
+          AND cm_member.realm_id = cr.realm_id
+      ),
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
           '_id', ua.id,

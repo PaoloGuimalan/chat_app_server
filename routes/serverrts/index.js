@@ -18,7 +18,7 @@ const {
 const { AddNewMemberToChannels } = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
 const { transformServersData } = require("../../reusables/hooks/transformers");
-const { getAllParticipants } = require("../../reusables/redis/pubsub");
+const { getAllParticipants, publish } = require("../../reusables/redis/pubsub");
 const { isRealmMember } = require("../../reusables/models/realms");
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -589,6 +589,44 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
       `UPDATE community_member SET role = $1 WHERE realm_id = $2 AND member_id = $3;`,
       [new_role, realm_id, member_id],
     );
+
+    // Realtime: tell every member of the realm about the role change so
+    // conference clients can update participant roles, and the affected
+    // member can refresh their own permissions (e.g. pending requests).
+    try {
+      const { rows: affected } = await pool.query(
+        `SELECT cm.account_id, ua.username
+         FROM community_member cm
+         JOIN user_account ua ON ua.id = cm.account_id
+         WHERE cm.member_id = $1 AND cm.realm_id = $2;`,
+        [member_id, realm_id],
+      );
+
+      if (affected.length > 0) {
+        const { account_id, username } = affected[0];
+
+        const { rows: realmMembers } = await pool.query(
+          `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+          [realm_id],
+        );
+
+        const rolePayload = {
+          status: true,
+          auth: true,
+          realm_id,
+          member_id,
+          account_id,
+          username,
+          role: new_role,
+        };
+
+        realmMembers.forEach((mp) => {
+          publish(`events_${mp.account_id}`, "conference_member_role", rolePayload);
+        });
+      }
+    } catch (publishErr) {
+      console.log("Failed to broadcast role change:", publishErr);
+    }
 
     res.send({
       status: true,
