@@ -60,17 +60,18 @@ class S3StorageProvider {
       throw new Error("Invalid Base64 format: Missing Data URL header");
     }
 
-    const contentType = matches[1]; // e.g., "image/png"
-    const extension = matches[2]; // e.g., "png"
-    const rawData = matches[3]; // The actual encoded string
+    const topType = matches[1];
+    const subtype = matches[2];
+    const rawData = matches[3];
 
+    const mimeType = `${topType}/${subtype}`;
     const buffer = Buffer.from(rawData, "base64");
 
     const fileName = customName.includes(".")
       ? `${makeid(10)}_${customName}`
-      : `${makeid(10)}_${customName}.${extension}`;
+      : `${makeid(10)}_${customName}.${subtype}`;
 
-    const isViewable = ["image", "video"].includes(contentType);
+    const isViewable = ["image", "video"].includes(topType);
     const disposition = isViewable
       ? "inline"
       : `attachment; filename="${fileName}"`;
@@ -80,7 +81,7 @@ class S3StorageProvider {
       Key: `${folder}/${fileName}`,
       Body: buffer,
       ContentDisposition: disposition,
-      ContentType: contentType,
+      ContentType: mimeType,
       ACL: "public-read",
     });
 
