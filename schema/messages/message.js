@@ -15,6 +15,8 @@ const usermessage = mongoose.Schema({
   isDeleted: { type: Boolean, require: true },
   messageType: { type: mongoose.Schema.Types.Mixed, require: true },
   conversationType: { type: mongoose.Schema.Types.Mixed, require: true },
+  senderType: { type: mongoose.Schema.Types.Mixed, default: null },
+  authorRealm: { type: mongoose.Schema.Types.Mixed, default: null },
 });
 
 module.exports = mongoose.model("UserMessage", usermessage, "messages");
