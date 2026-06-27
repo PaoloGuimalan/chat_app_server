@@ -182,7 +182,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
               userID,
               [],
               `${username} removed ${mp.username}`,
-              "server",
+              "channel",
             );
           });
         });
@@ -207,7 +207,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           userID,
           [],
           `${username} removed ${mp.username}`,
-          realm.parent_id ? "server" : realm.type,
+          realm.type,
         );
       });
     }
@@ -221,8 +221,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         result: {
           realm_id,
           userID: mp,
-          type:
-            realm.type === "group" && realm.parent_id ? "channel" : realm.type,
+          type: realm.type,
         },
       });
     });

@@ -22,7 +22,7 @@ const GetServerChannels = async (serverID, privacy) => {
     cr.is_private AS privacy
     FROM community_realm cr
     LEFT JOIN user_account pua ON cr.created_by_id = pua.id
-    WHERE cr.parent_id = $1 AND cr.type IN ('group', 'voice') AND cr.is_private = $2;`,
+    WHERE cr.parent_id = $1 AND cr.type IN ('channel', 'voice') AND cr.is_private = $2;`,
     [serverID, privacy],
   );
 

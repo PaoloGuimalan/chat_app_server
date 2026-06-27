@@ -103,6 +103,7 @@ const {
   GetRealmsJoined,
   SaveConversation,
   SyncConversationLastMessage,
+  normalizeConversationType,
 } = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
@@ -1055,7 +1056,9 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const isReply = decodedToken.isReply;
     const replyingTo = decodedToken.replyingTo;
     const messageType = decodedToken.messageType;
-    const conversationType = decodedToken.conversationType;
+    const conversationType = normalizeConversationType(
+      decodedToken.conversationType,
+    );
 
     const sanitizedContent = sanitizeForStorage(content);
 
@@ -1162,7 +1165,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
 
   const typeSetup = {
     common: ["group", "single"],
-    servers: ["server"],
+    servers: ["channel"],
     groups: ["group"],
     direct: ["single"],
     conference: ["conference"],
@@ -1360,7 +1363,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
                   'time', ''
                 ),
                 'createdBy', created_by.username,
-                'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                'type', cr.type,
                 'privacy', cr.is_private,
                 'groupName', cr.name
               ) AS groupdetails,
@@ -1680,7 +1683,7 @@ const sendMessageInitForGC = async (
   };
   const isReply = false;
   const messageType = "notif";
-  const conversationType = type;
+  const conversationType = normalizeConversationType(type);
 
   const payload = {
     messageID: messageID,
@@ -1956,8 +1959,8 @@ const createRealmReusable = async (
         userID,
         rows.filter((mp) => mp.id === userID)[0].username,
         allReceivers,
-        `created the ${type === "group" ? (parentRealmID ? "channel" : "group chat") : type}`,
-        parentRealmID ? "server" : type,
+        `created the ${type === "group" ? "group chat" : type}`,
+        type,
       );
     }
   } catch (ex) {
@@ -1976,7 +1979,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.otherUsers;
     const privacy = decodedToken.privacy;
-    const type = decodedToken.type; // group (channel) or voice
+    const type = decodedToken.type; // channel or voice
     const groupName = decodedToken.groupName;
 
     const allReceivers = [userID, ...memberstoadd];
@@ -1998,7 +2001,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         userReceivers,
         privacy,
-        type, // "group"
+        type, // "channel"
         null,
         null,
         false,
@@ -2015,7 +2018,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         userID,
         serverMembers,
         privacy,
-        type, // "group"
+        type, // "channel"
         null,
         null,
         false,
@@ -2076,7 +2079,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
         userID,
         userReceivers,
         false,
-        "group",
+        "channel",
         null,
         null,
         false,
@@ -2451,6 +2454,9 @@ const saveFileMessage = async (
   //   time: timeGetter(),
   // };
 
+  const normalizedConversationType =
+    normalizeConversationType(conversationType);
+
   const payload = {
     messageID: messageID,
     conversationID: conversationID,
@@ -2465,7 +2471,7 @@ const saveFileMessage = async (
     reactions: [],
     isDeleted: false,
     messageType: messageType,
-    conversationType: conversationType,
+    conversationType: normalizedConversationType,
   };
 
   const newMessage = new UserMessage(payload);
@@ -2485,7 +2491,7 @@ const saveFileMessage = async (
       );
       await SaveConversation(
         conversationID,
-        conversationType,
+        normalizedConversationType,
         "user",
         null,
         receivers,
@@ -2519,7 +2525,9 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     const files = decodeToken.files;
     const isReply = decodeToken.isReply;
     const replyingTo = decodeToken.replyingTo;
-    const conversationType = decodeToken.conversationType;
+    const conversationType = normalizeConversationType(
+      decodeToken.conversationType,
+    );
 
     await isRealmMember(conversationID, id);
 

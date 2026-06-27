@@ -371,12 +371,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     //   [conversationID],
     // );
 
-    const conversationType =
-      get_group.length > 0
-        ? get_group[0].parent_id
-          ? "server"
-          : get_group[0].type
-        : "group";
+    const conversationType = get_group.length > 0 ? get_group[0].type : "group";
     const isPageOrVoice =
       get_group.length > 0
         ? get_group[0].type === "voice" || get_group[0].type === "page"
@@ -674,7 +669,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
                     'time', ''
                   ),
                   'createdBy', created_by.username,
-                  'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                  'type', cr.type,
                   'privacy', cr.is_private,
                   'groupName', cr.name
                 ) AS groupdetails,
@@ -776,7 +771,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
   try {
     const typeSetup = {
       common: ["group", "single"],
-      servers: ["server"],
+      servers: ["channel"],
       groups: ["group"],
       direct: ["single"],
       conference: ["conference"],
@@ -1055,7 +1050,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                       'time', ''
                     ),
                     'createdBy', created_by.username,
-                    'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                    'type', cr.type,
                     'privacy', cr.is_private,
                     'groupName', cr.name
                   ) AS groupdetails,

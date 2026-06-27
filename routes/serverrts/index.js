@@ -232,8 +232,7 @@ router.get(
             ),
             'createdBy', ua.username,
             'privacy', cr.is_private,
-            'type', 'server',
-            'channelType', cr.type
+            'type', cr.type
           ) AS groupdetails,
           json_build_object(
             '_id', pcr.id,
@@ -261,7 +260,7 @@ router.get(
           ) AS serverdetails
         FROM community_realm cr
         LEFT JOIN user_account ua ON cr.created_by_id = ua.id
-        LEFT JOIN community_realm pcr ON cr.parent_id = pcr.id
+        LEFT JOIN community_realm pcr ON cr.parent_id = pcr.realm_id
         LEFT JOIN user_account pua ON pcr.created_by_id = pua.id
         WHERE cr.realm_id = $1 AND cr.parent_id = $2;;`,
           [conversationID, parent_realm],
@@ -375,8 +374,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
               'time', ''
             ),
             'createdBy', ppua.username,
-            'type', 'server',
-            'channelType', pcr.type,
+            'type', pcr.type,
             'privacy', pcr.is_private,
             'messages', jsonb_build_array(),
             'is_joined', EXISTS (

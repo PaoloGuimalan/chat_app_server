@@ -164,7 +164,7 @@ function formatToDesiredStructure(input) {
     is_admin: input.is_admin,
     is_member: input.is_member,
     status: true, // supply real value if available
-    type: input.parent_id ? "server" : input.type, // supply real value if available
+    type: input.type, // supply real value if available
     users: input.usersWithInfo.map((u) => ({
       userID: u.userID,
       _id: u._id, // replace with correct mongo _id if different
@@ -184,7 +184,7 @@ function formatToDesiredStructure(input) {
         time: "", // supply real time
       },
       createdBy: input.usersWithInfo[0]?.userID || null,
-      type: input.parent_id ? "server" : input.type, // supply real type
+      type: input.type, // supply real type
       privacy: input.privacy, // supply real privacy
     },
     usersWithInfo: input.usersWithInfo.map((u) => ({

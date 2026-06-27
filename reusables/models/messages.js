@@ -30,6 +30,15 @@ const checkExistingMessageID = async (messageID) => {
     });
 };
 
+const normalizeConversationType = (conversationType = "single") => {
+  if (!conversationType) {
+    return "single";
+  }
+
+  const parsedType = String(conversationType).toLowerCase();
+  return parsedType === "server" ? "channel" : parsedType;
+};
+
 const GetMessageReceivers = async (conversationID, messageID) => {
   return await UserMessage.findOne({
     conversationID: conversationID,
@@ -113,7 +122,7 @@ const SaveConversation = (
 
   const normalizedPayload = {
     conversationID,
-    conversationType,
+    conversationType: normalizeConversationType(conversationType),
     senderType,
     authorRealm,
     participant_ids: [...new Set((participant_ids || []).filter(Boolean))],
@@ -176,7 +185,7 @@ const NotificationMessageForConversations = async (
   // };
   const isReply = false;
   const messageType = "notif";
-  const conversationType = convType;
+  const conversationType = normalizeConversationType(convType);
 
   const payload = {
     messageID: messageID,
@@ -361,7 +370,7 @@ const AddNewMemberToChannels = async (
                   userID === mp.userID
                     ? `${mp.userID} joined`
                     : `${username} added ${mp.userID}`,
-                  "server",
+                  type,
                 );
               })
               .catch((err) => console.log);
@@ -386,7 +395,7 @@ const GetRealmsJoined = async (userID) => {
     FROM community_member cm
     JOIN community_realm r ON cm.realm_id = r.realm_id
     WHERE cm.account_id = $1
-      AND r.type IN ('group', 'server');
+      AND r.type IN ('group', 'server', 'channel');
   `,
     [userID],
   );
@@ -405,4 +414,5 @@ module.exports = {
   SaveConversation,
   SyncConversationLastMessage,
   SyncConversationParticipants,
+  normalizeConversationType,
 };
