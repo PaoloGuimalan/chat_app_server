@@ -1,5 +1,7 @@
 const UserMessage = require("../../schema/messages/message");
 const UserContacts = require("../../schema/users/contacts");
+const ChatHistory = require("../../schema/messages/chathistory");
+const Conversation = require("../../schema/messages/conversation");
 const dateGetter = require("../hooks/getDate");
 const timeGetter = require("../hooks/getTime");
 const makeid = require("../hooks/makeID");
@@ -92,6 +94,61 @@ const AddNewMemberToAllMessages = async (conversationID, userID) => {
   return true;
 };
 
+const SaveConversation = (
+  conversationID,
+  conversationType = "single",
+  senderType = "user",
+  authorRealm = null,
+  participant_ids = [],
+  messageID = null,
+  sender = null,
+  text = "",
+  messageDate = new Date(),
+  messageType = "text",
+  isDeleted = false,
+) => {
+  if (!conversationID) {
+    return Promise.reject(new Error("conversationID is required"));
+  }
+
+  const normalizedPayload = {
+    conversationID,
+    conversationType,
+    senderType,
+    authorRealm,
+    participant_ids: [...new Set((participant_ids || []).filter(Boolean))],
+    last_message: {
+      messageID,
+      sender,
+      text,
+      messageDate: messageDate ? new Date(messageDate) : new Date(),
+      messageType,
+      isDeleted: isDeleted === true,
+    },
+  };
+
+  return Conversation.findOne({ conversationID }).then(
+    (existingConversation) => {
+      if (existingConversation) {
+        existingConversation.conversationType = normalizedPayload.conversationType;
+        existingConversation.senderType = normalizedPayload.senderType;
+        existingConversation.authorRealm = normalizedPayload.authorRealm;
+        existingConversation.last_message = normalizedPayload.last_message;
+
+        if (normalizedPayload.participant_ids.length > 0) {
+          existingConversation.participant_ids = normalizedPayload.participant_ids;
+          existingConversation.markModified("participant_ids");
+        }
+
+        return existingConversation.save();
+      }
+
+      const newConversation = new Conversation(normalizedPayload);
+      return newConversation.save();
+    },
+  );
+};
+
 const NotificationMessageForConversations = async (
   convID,
   userID,
@@ -102,7 +159,13 @@ const NotificationMessageForConversations = async (
   const messageID = await checkExistingMessageID(makeid(30));
   const conversationID = convID;
   const sender = userID;
-  const receivers = recs; //Array
+  const receiversfetch = await GetAllReceivers(conversationID);
+  const receivers = [
+    ...new Set([
+      ...(Array.isArray(recs) ? recs : []),
+      ...receiversfetch.users.map((mp) => mp.userID),
+    ]),
+  ]; //Array
   const seeners = []; //Array
   const content = details;
   // const messageDate = {
@@ -134,48 +197,101 @@ const NotificationMessageForConversations = async (
   newMessage
     .save()
     .then(async () => {
+      await ChatHistory.updateMany(
+        {
+          conversationID: conversationID,
+        },
+        {
+          $set: {
+            isArchived: false,
+          },
+        },
+      );
+
+      await SaveConversation(
+        conversationID,
+        conversationType,
+        "user",
+        null,
+        receivers,
+        messageID,
+        sender,
+        content,
+        new Date(),
+        messageType,
+        false,
+      );
+
       receivers.map((rcvs) => {
         MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
         ContactListTrigger(rcvs, `${userID} added you on a group chat`);
-        // publish(`events_${rcvs}`, MESSAGES_TRIGGER_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers,
-        //     sender: sender,
-        //     onseen: false,
-        //   },
-        // });
-        // publish(`events_${rcvs}`, CONTACT_LIST_TRIGGER_LOOPER, {
-        //   parameters: {
-        //     receivers: receivers,
-        //     details: `${userID} added you on a group chat`,
-        //   },
-        // });
       });
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     MESSAGES_TRIGGER_LOOPER,
-      //     {
-      //       parameters: {
-      //         receivers: receivers,
-      //         sender: sender,
-      //         onseen: false,
-      //       },
-      //     }
-      //   );
-      //   await producer.publishMessage(
-      //     "INFO:CHATTERLOOP",
-      //     CONTACT_LIST_TRIGGER_LOOPER,
-      //     {
-      //       parameters: {
-      //         receivers: receivers,
-      //         details: `${userID} added you on a group chat`,
-      //       },
-      //     }
-      //   );
     })
     .catch((err) => {
       console.log(err);
     });
+};
+
+const SyncConversationLastMessage = async (conversationID) => {
+  if (!conversationID) throw new Error("conversationID is required");
+
+  const convo = await Conversation.findOne({ conversationID }).lean();
+  const currentLastMessageID = convo?.last_message?.messageID;
+  if (!currentLastMessageID) return null;
+
+  const msg = await UserMessage.findOne({
+    conversationID,
+    messageID: currentLastMessageID,
+  }).lean();
+  if (!msg) return null;
+
+  return Conversation.findOneAndUpdate(
+    { conversationID },
+    {
+      $set: {
+        last_message: {
+          messageID: msg.messageID ?? null,
+          sender: msg.sender ?? null,
+          text: msg.content ?? "",
+          messageDate: msg.messageDate ?? new Date(),
+          messageType: msg.messageType ?? "text",
+          isDeleted: msg.isDeleted === true,
+        },
+        conversationType:
+          msg.conversationType ?? convo?.conversationType ?? "single",
+        senderType: msg.senderType ?? convo?.senderType ?? "user",
+        authorRealm: msg.authorRealm ?? convo?.authorRealm ?? null,
+      },
+    },
+    { new: true },
+  );
+};
+
+const SyncConversationParticipants = async (conversationID) => {
+  if (!conversationID) {
+    throw new Error("conversationID is required");
+  }
+
+  const existingConversation = await Conversation.findOne({
+    conversationID,
+  });
+
+  if (!existingConversation) {
+    return null;
+  }
+
+  const receiversfetch = await GetAllReceivers(conversationID);
+  const participantIDs = [
+    ...new Set(
+      receiversfetch.users
+        .map((member) => member.userID)
+        .filter((memberID) => memberID),
+    ),
+  ];
+
+  existingConversation.participant_ids = participantIDs;
+  existingConversation.markModified("participant_ids");
+  return await existingConversation.save();
 };
 
 const GetAllReceivers = async (contactID) => {
@@ -283,4 +399,7 @@ module.exports = {
   GetAllReceivers,
   AddNewMemberToChannels,
   GetRealmsJoined,
+  SaveConversation,
+  SyncConversationLastMessage,
+  SyncConversationParticipants,
 };

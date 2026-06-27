@@ -18,6 +18,7 @@ const {
   AddNewMemberToContacts,
   NotificationMessageForConversations,
   GetAllReceivers,
+  SyncConversationLastMessage,
 } = require("../../reusables/models/messages");
 const {
   MessagesTrigger,
@@ -67,6 +68,8 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
       { isDeleted: true },
     )
       .then(async (result) => {
+        await SyncConversationLastMessage(decodedToken.conversationID);
+
         const messageReceivers = await GetAllReceivers(
           decodedToken.conversationID,
         );

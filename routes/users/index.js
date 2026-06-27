@@ -101,6 +101,7 @@ const makeid = require("../../reusables/hooks/makeID");
 const {
   GetAllReceivers,
   GetRealmsJoined,
+  SaveConversation,
 } = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
@@ -1090,6 +1091,20 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
           },
         );
 
+        await SaveConversation(
+          conversationID,
+          conversationType,
+          "user",
+          null,
+          receivers,
+          messageID,
+          sender,
+          sanitizedContent,
+          new Date(),
+          messageType,
+          false,
+        );
+
         res.send({
           status: true,
           message: "Message Sent",
@@ -1687,6 +1702,31 @@ const sendMessageInitForGC = async (
   newMessage
     .save()
     .then(async () => {
+      await ChatHistory.updateMany(
+        {
+          conversationID: conversationID,
+        },
+        {
+          $set: {
+            isArchived: false,
+          },
+        },
+      );
+
+      await SaveConversation(
+        conversationID,
+        conversationType,
+        "user",
+        null,
+        receivers,
+        messageID,
+        sender,
+        content,
+        new Date(),
+        messageType,
+        false,
+      );
+
       receivers.map((rcvs, i) => {
         // var sseWithUserID = sseNotificationsWaiters[rcvs];
         MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
@@ -2426,6 +2466,29 @@ const saveFileMessage = async (
   await newMessage
     .save()
     .then(async () => {
+      await ChatHistory.updateMany(
+        {
+          conversationID: conversationID,
+        },
+        {
+          $set: {
+            isArchived: false,
+          },
+        },
+      );
+      await SaveConversation(
+        conversationID,
+        conversationType,
+        "user",
+        null,
+        receivers,
+        messageID,
+        userID,
+        content,
+        new Date(),
+        messageType,
+        false,
+      );
       onComplete(true);
     })
     .catch((err) => {

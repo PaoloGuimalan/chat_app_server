@@ -8,6 +8,7 @@ const fs = require("fs/promises");
 const makeid = require("../../reusables/hooks/makeID");
 const {
   NotificationMessageForConversations,
+  SyncConversationParticipants,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
 const { publish } = require("../../reusables/redis/pubsub");
@@ -168,6 +169,12 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           [account_ids, joined_channel_ids],
         );
 
+        await Promise.all(
+          joined_channel_ids.map(async (channelID) => {
+            await SyncConversationParticipants(channelID);
+          }),
+        );
+
         users.map((mp) => {
           joined_channel_ids.map((mpp) => {
             NotificationMessageForConversations(
@@ -186,6 +193,8 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = $2`,
       [account_ids, realm_id],
     );
+
+    await SyncConversationParticipants(realm_id);
 
     if (
       realm.type !== "page" &&
