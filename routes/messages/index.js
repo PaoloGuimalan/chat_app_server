@@ -11,6 +11,7 @@ const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserContacts = require("../../schema/users/contacts");
 const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
+const Conversations = require("../../schema/messages/conversation");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const {
   GetMessageReceivers,
@@ -36,7 +37,9 @@ const {
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
-const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
+const {
+  GetUsersWithConnectionIDs,
+} = require("../../reusables/models/users");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -761,6 +764,383 @@ router.get("/archives", jwtchecker, async (req, res) => {
     res
       .status(400)
       .send({ status: false, message: ex.message || ex.toString() });
+  }
+});
+
+router.get("/conversations", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const page = parseInt(req.headers["page"] || 1);
+  const range = parseInt(req.headers["range"] || 20);
+  const type = req.headers["type"] || "all";
+
+  try {
+    const typeSetup = {
+      common: ["group", "single"],
+      servers: ["server"],
+      groups: ["group"],
+      direct: ["single"],
+      conference: ["conference"],
+    };
+
+    const match = {
+      participant_ids: { $in: [userID] },
+    };
+
+    if (type !== "all") {
+      const typeArray = typeSetup[type];
+
+      if (typeArray) {
+        match.conversationType = { $in: typeArray };
+      }
+    }
+
+    const result_raw = await Conversations.aggregate([
+      {
+        $match: match,
+      },
+      {
+        $lookup: {
+          from: "chat_history",
+          let: { msg_conv_id: "$conversationID" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$conversationID", "$$msg_conv_id"] },
+                    { $eq: ["$userID", userID] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "historySetting",
+        },
+      },
+      {
+        $unwind: {
+          path: "$historySetting",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          $expr: {
+            $gt: [
+              "$last_message.messageDate",
+              {
+                $ifNull: [
+                  {
+                    $cond: {
+                      if: {
+                        $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                      },
+                      then: {
+                        $dateFromString: {
+                          dateString: "$historySetting.cleared_at",
+                        },
+                      },
+                      else: "$historySetting.cleared_at",
+                    },
+                  },
+                  new Date(0),
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          $expr: {
+            $ne: [{ $ifNull: ["$historySetting.isArchived", false] }, true],
+          },
+        },
+      },
+      {
+        $project: {
+          sortID: "$last_message.messageDate",
+          conversationID: 1,
+          messageID: "$last_message.messageID",
+          sender: "$last_message.sender",
+          receivers: "$participant_ids",
+          seeners: { $ifNull: ["$last_message.seeners", []] },
+          content: {
+            $cond: [
+              { $eq: ["$last_message.isDeleted", true] },
+              "",
+              "$last_message.text",
+            ],
+          },
+          messageDate: "$last_message.messageDate",
+          isReply: { $literal: false },
+          replyingTo: { $literal: "" },
+          reactions: { $literal: [] },
+          isDeleted: "$last_message.isDeleted",
+          messageType: "$last_message.messageType",
+          conversationType: 1,
+          senderType: 1,
+          authorRealm: 1,
+        },
+      },
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [
+            { $sort: { sortID: -1 } },
+            { $skip: (page - 1) * range },
+            { $limit: range },
+          ],
+        },
+      },
+      {
+        $project: {
+          data: 1,
+          total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
+        },
+      },
+    ]);
+
+    const result = result_raw[0]?.data || [];
+    const total = result_raw[0]?.total || 0;
+    const next = total - range * page > 0;
+
+    const paginatedConversationIDs = result.map((mp) => mp.conversationID);
+
+    const unreadByConversation =
+      paginatedConversationIDs.length > 0
+        ? await UserMessage.aggregate([
+            {
+              $match: {
+                conversationID: { $in: paginatedConversationIDs },
+              },
+            },
+            {
+              $lookup: {
+                from: "chat_history",
+                let: { msg_conv_id: "$conversationID" },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ["$conversationID", "$$msg_conv_id"] },
+                          { $eq: ["$userID", userID] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+                as: "historySetting",
+              },
+            },
+            {
+              $unwind: {
+                path: "$historySetting",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {
+                      $gt: [
+                        "$messageDate",
+                        {
+                          $ifNull: [
+                            {
+                              $cond: {
+                                if: {
+                                  $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                                },
+                                then: {
+                                  $dateFromString: {
+                                    dateString: "$historySetting.cleared_at",
+                                  },
+                                },
+                                else: "$historySetting.cleared_at",
+                              },
+                            },
+                            new Date(0),
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $ne: [{ $ifNull: ["$historySetting.isArchived", false] }, true],
+                    },
+                    {
+                      $not: [{ $in: [userID, "$seeners"] }],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $group: {
+                _id: "$conversationID",
+                unread: { $sum: 1 },
+              },
+            },
+          ])
+        : [];
+
+    const unreadMap = unreadByConversation.reduce((acc, current) => {
+      acc[current._id] = current.unread || 0;
+      return acc;
+    }, {});
+
+    const resultWithUnread = result.map((mp) => ({
+      ...mp,
+      unread: unreadMap[mp.conversationID] || 0,
+    }));
+
+    const flattenedGroupsArray = resultWithUnread.map((mp) => mp.conversationID);
+
+    const directConversations = resultWithUnread
+      .filter((flt) => flt.conversationType === "single")
+      .map((mp) => mp.conversationID);
+
+    const usersWCns =
+      directConversations.length > 0
+        ? await GetUsersWithConnectionIDs(directConversations)
+        : [];
+
+    const flattenedReceiversArray = usersWCns.map((mp) => mp.user_id).flat();
+    const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
+
+    const usersByConversationID = {};
+
+    for (const item of usersWCns) {
+      const { user_id, connection_ids } = item;
+
+      for (const connID of connection_ids) {
+        if (!usersByConversationID[connID]) {
+          usersByConversationID[connID] = [];
+        }
+        usersByConversationID[connID].push(user_id);
+      }
+    }
+
+    const { rows } =
+      removeDuplicateReceivers.length > 0
+        ? await pool.query(
+            `SELECT 
+                  id AS _id,
+                  username AS "userID",
+                  json_build_object(
+                    'firstName', first_name,
+                    'middleName', middle_name,
+                    'lastName', last_name
+                  ) AS fullname,
+                  COALESCE(profile, 'none') AS profile
+                FROM user_account
+                WHERE id = ANY($1);`,
+            [removeDuplicateReceivers],
+          )
+        : { rows: [] };
+
+    const { rows: group_rows } =
+      flattenedGroupsArray.length > 0
+        ? await pool.query(
+            `SELECT 
+                  json_build_object(
+                    '_id', cr.id,
+                    'serverID', cr.parent_id,
+                    'groupID', cr.realm_id,
+                    'profile', COALESCE(cr.profile, 'N/A'),
+                    'dateCreated', json_build_object(
+                      'date', '',
+                      'time', ''
+                    ),
+                    'createdBy', created_by.username,
+                    'type', CASE WHEN cr.parent_id IS NOT NULL THEN 'server' ELSE cr.type END,
+                    'privacy', cr.is_private,
+                    'groupName', cr.name
+                  ) AS groupdetails,
+                  
+                  CASE
+                    WHEN cr.parent_id IS NOT NULL THEN
+                      json_build_object(
+                        '_id', pr.id,
+                        'serverID', pr.realm_id,
+                        'serverName', pr.name,
+                        'profile', COALESCE(pr.profile, 'N/A'),
+                        'dateCreated', json_build_object(
+                          'date', '',
+                          'time', ''
+                        ),
+                        'members', (
+                          SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
+                          FROM community_member m
+                          JOIN user_account a ON m.account_id = a.id
+                          WHERE m.realm_id = pr.realm_id
+                        ),
+                        'createdBy', parent_created_by.username,
+                        'privacy', pr.is_private
+                      )
+                    ELSE NULL
+                  END AS serverdetails
+                FROM community_realm cr
+                LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
+                LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
+                LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+                WHERE cr.realm_id = ANY($1);
+                `,
+            [flattenedGroupsArray],
+          )
+        : { rows: [] };
+
+    const finalResult = resultWithUnread.map((mp) => {
+      const involvedUserIDs = usersByConversationID[mp.conversationID] || [];
+
+      const details = group_rows.filter(
+        (flt) => flt.groupdetails.groupID === mp.conversationID,
+      );
+      const final_details = details.length > 0 ? details[0] : null;
+
+      let final_mp = mp;
+
+      if (final_details) {
+        final_mp = removeNullServerDetails({
+          ...final_mp,
+          ...final_details,
+        });
+      }
+
+      return {
+        ...final_mp,
+        users: rows.filter((flt) => involvedUserIDs.includes(flt._id)),
+      };
+    });
+
+    const finalResultWParticipants = await Promise.all(
+      finalResult.map(async (mp) => ({
+        ...mp,
+        voice_participants: await getAllParticipants(mp.conversationID),
+      })),
+    );
+
+    const encodedResult = jwt.sign(
+      {
+        conversationslist: finalResultWParticipants,
+        total,
+        next,
+      },
+      JWT_SECRET,
+      {
+        expiresIn: 60 * 60 * 24 * 7,
+      },
+    );
+
+    res.send({ status: true, message: "OK", result: encodedResult });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error generating conversations list",
+    });
   }
 });
 

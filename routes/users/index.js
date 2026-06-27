@@ -102,6 +102,7 @@ const {
   GetAllReceivers,
   GetRealmsJoined,
   SaveConversation,
+  SyncConversationLastMessage,
 } = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
@@ -2343,9 +2344,15 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     )
       .then(async (result) => {
         if (result.modifiedCount > 0) {
-          receivers.map((rcvs, i) => {
-            MessagesTrigger(rcvs, { conversationID, userID }, true);
-          });
+          await SyncConversationLastMessage(conversationID)
+            .then(() => {
+              receivers.map((rcvs, i) => {
+                MessagesTrigger(rcvs, { conversationID, userID }, true);
+              });
+            })
+            .catch((err) => {
+              console.log(err);
+            });
         }
         res.send({ status: true, message: "Seen OK", seen: messageIDs });
       })

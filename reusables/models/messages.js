@@ -130,13 +130,15 @@ const SaveConversation = (
   return Conversation.findOne({ conversationID }).then(
     (existingConversation) => {
       if (existingConversation) {
-        existingConversation.conversationType = normalizedPayload.conversationType;
+        existingConversation.conversationType =
+          normalizedPayload.conversationType;
         existingConversation.senderType = normalizedPayload.senderType;
         existingConversation.authorRealm = normalizedPayload.authorRealm;
         existingConversation.last_message = normalizedPayload.last_message;
 
         if (normalizedPayload.participant_ids.length > 0) {
-          existingConversation.participant_ids = normalizedPayload.participant_ids;
+          existingConversation.participant_ids =
+            normalizedPayload.participant_ids;
           existingConversation.markModified("participant_ids");
         }
 
@@ -256,6 +258,7 @@ const SyncConversationLastMessage = async (conversationID) => {
           messageDate: msg.messageDate ?? new Date(),
           messageType: msg.messageType ?? "text",
           isDeleted: msg.isDeleted === true,
+          seeners: msg.seeners,
         },
         conversationType:
           msg.conversationType ?? convo?.conversationType ?? "single",

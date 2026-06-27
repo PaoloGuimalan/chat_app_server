@@ -31,6 +31,7 @@ const conversation = mongoose.Schema(
       sender: { type: mongoose.Schema.Types.Mixed, default: null },
       text: { type: mongoose.Schema.Types.Mixed, default: "" },
       messageDate: { type: Date, default: Date.now, index: true },
+      seeners: [{ type: mongoose.Schema.Types.Mixed, default: [] }],
       messageType: { type: mongoose.Schema.Types.Mixed, default: "text" }, // text, image, video, file, notif
       isDeleted: { type: Boolean, default: false },
     },
