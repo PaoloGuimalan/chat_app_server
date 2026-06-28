@@ -14,6 +14,13 @@ const {
 const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
+const {
+  expandMemberTargets,
+  userIDsToEntityIDs,
+  getRealmIDsViaActingEntities,
+  buildUserEntityID,
+  resolveUserEntity,
+} = require("./entities");
 
 const checkExistingMessageID = async (messageID) => {
   return await UserMessage.find({ messageID: messageID })
@@ -61,6 +68,15 @@ const AddNewMemberToContacts = async (
   const member_id = uuidv4(); // generate a unique UUID for member_id
   const date_joined = new Date(); // current timestamp
 
+  const userEntity = await resolveUserEntity(userID).catch(() => null);
+  if (!userEntity?.id) {
+    throw new Error("Entity profile not found for user");
+  }
+  const addedByEntity =
+    added_by_id && added_by_id !== userID
+      ? await resolveUserEntity(added_by_id).catch(() => null)
+      : userEntity;
+
   const query = `
     INSERT INTO community_member
     (member_id, account_id, nickname, realm_id, added_by_id, date_joined, role)
@@ -70,10 +86,10 @@ const AddNewMemberToContacts = async (
 
   const params = [
     member_id,
-    userID,
+    userEntity.id,
     null,
     contactID,
-    added_by_id,
+    addedByEntity?.id || userEntity.id,
     date_joined,
     "member",
   ];
@@ -115,6 +131,8 @@ const SaveConversation = (
   messageDate = new Date(),
   messageType = "text",
   isDeleted = false,
+  senderEntityID = null,
+  participant_entity_ids = [],
 ) => {
   if (!conversationID) {
     return Promise.reject(new Error("conversationID is required"));
@@ -125,7 +143,11 @@ const SaveConversation = (
     conversationType: normalizeConversationType(conversationType),
     senderType,
     authorRealm,
+    senderEntityID,
     participant_ids: [...new Set((participant_ids || []).filter(Boolean))],
+    participant_entity_ids: [
+      ...new Set((participant_entity_ids || []).filter(Boolean)),
+    ],
     last_message: {
       messageID,
       sender,
@@ -143,13 +165,15 @@ const SaveConversation = (
           normalizedPayload.conversationType;
         existingConversation.senderType = normalizedPayload.senderType;
         existingConversation.authorRealm = normalizedPayload.authorRealm;
+        existingConversation.senderEntityID = normalizedPayload.senderEntityID;
         existingConversation.last_message = normalizedPayload.last_message;
 
-        if (normalizedPayload.participant_ids.length > 0) {
-          existingConversation.participant_ids =
-            normalizedPayload.participant_ids;
-          existingConversation.markModified("participant_ids");
-        }
+        existingConversation.participant_ids = normalizedPayload.participant_ids;
+        existingConversation.markModified("participant_ids");
+
+        existingConversation.participant_entity_ids =
+          normalizedPayload.participant_entity_ids;
+        existingConversation.markModified("participant_entity_ids");
 
         return existingConversation.save();
       }
@@ -192,7 +216,12 @@ const NotificationMessageForConversations = async (
     conversationID: conversationID,
     sender: sender,
     receivers: receivers,
+    receiverEntityIDs:
+      receiversfetch.entities?.length > 0
+        ? receiversfetch.entities
+        : userIDsToEntityIDs(receivers),
     seeners: seeners,
+    seenerEntityIDs: [buildUserEntityID(userID)],
     content: content,
     // messageDate: messageDate,
     isReply: isReply,
@@ -201,6 +230,10 @@ const NotificationMessageForConversations = async (
     isDeleted: false,
     messageType: messageType,
     conversationType: conversationType,
+    actorUserID: userID,
+    senderEntityID: buildUserEntityID(userID),
+    senderType: "user",
+    authorRealm: null,
   };
 
   const newMessage = new UserMessage(payload);
@@ -231,6 +264,10 @@ const NotificationMessageForConversations = async (
         new Date(),
         messageType,
         false,
+        buildUserEntityID(userID),
+        receiversfetch.entities?.length
+          ? receiversfetch.entities
+          : userIDsToEntityIDs(receivers),
       );
 
       receivers.map((rcvs) => {
@@ -273,6 +310,7 @@ const SyncConversationLastMessage = async (conversationID) => {
           msg.conversationType ?? convo?.conversationType ?? "single",
         senderType: msg.senderType ?? convo?.senderType ?? "user",
         authorRealm: msg.authorRealm ?? convo?.authorRealm ?? null,
+        senderEntityID: msg.senderEntityID ?? convo?.senderEntityID ?? null,
       },
     },
     { new: true },
@@ -302,7 +340,12 @@ const SyncConversationParticipants = async (conversationID) => {
   ];
 
   existingConversation.participant_ids = participantIDs;
+  existingConversation.participant_entity_ids =
+    receiversfetch.entities?.length > 0
+      ? [...new Set(receiversfetch.entities.filter(Boolean))]
+      : userIDsToEntityIDs(participantIDs);
   existingConversation.markModified("participant_ids");
+  existingConversation.markModified("participant_entity_ids");
   return await existingConversation.save();
 };
 
@@ -313,29 +356,164 @@ const GetAllReceivers = async (contactID) => {
   );
 
   if (rows_connections.length > 0) {
+    const users = rows_connections.map((mp) => ({
+      userID: mp.id,
+      username: mp.username,
+      entityID: buildUserEntityID(mp.id),
+      joinedAsEntityID: null,
+    }));
     return {
-      users: rows_connections.map((mp) => ({
-        userID: mp.id,
-        username: mp.username,
-      })),
+      users,
+      entities: [...new Set(users.map((member) => member.entityID))],
     };
   }
 
   const { rows: rows_members } = await pool.query(
-    "SELECT ua.id, ua.username FROM community_member uc JOIN user_account ua ON ua.id = uc.account_id WHERE uc.realm_id = $1;",
+    `
+      SELECT ua.id, ua.username
+      FROM community_member uc
+      LEFT JOIN entity account_entity
+        ON account_entity.id = uc.account_id
+       AND account_entity.entity_type = 'user'
+      JOIN user_account ua
+        ON ua.id = COALESCE(account_entity.source_id, uc.account_id)
+      WHERE uc.realm_id = $1;
+    `,
     [contactID],
   );
 
-  if (rows_members.length > 0) {
+  const { rows: realm_entity_members } = await pool.query(
+    `
+      SELECT DISTINCT nickname AS entity_id
+      FROM community_member
+      WHERE realm_id = $1
+        AND nickname IS NOT NULL
+        AND nickname LIKE 'entity:%';
+    `,
+    [contactID],
+  );
+
+  if (rows_members.length > 0 || realm_entity_members.length > 0) {
+    const membersMap = new Map();
+    const participantEntities = new Set();
+
+    rows_members.forEach((member) => {
+      const entityID = buildUserEntityID(member.id);
+      participantEntities.add(entityID);
+      membersMap.set(String(member.id), {
+        userID: member.id,
+        username: member.username,
+        entityID,
+        joinedAsEntityID: null,
+      });
+    });
+
+    const expandedEntityMembers = await expandMemberTargets({
+      memberEntityIDs: realm_entity_members.map((member) => member.entity_id),
+    });
+
+    const missingUserIDs = expandedEntityMembers
+      .map((member) => member.userID)
+      .filter(Boolean)
+      .filter((userID) => !membersMap.has(String(userID)));
+
+    if (missingUserIDs.length > 0) {
+      const { rows: missingUsers } = await pool.query(
+        `SELECT id, username FROM user_account WHERE id = ANY($1);`,
+        [[...new Set(missingUserIDs)]],
+      );
+
+      missingUsers.forEach((user) => {
+        const entityID = buildUserEntityID(user.id);
+        participantEntities.add(entityID);
+        membersMap.set(String(user.id), {
+          userID: user.id,
+          username: user.username,
+          entityID,
+          joinedAsEntityID: null,
+        });
+      });
+    }
+
+    expandedEntityMembers.forEach((member) => {
+      if (member.joinedAsEntityID) {
+        participantEntities.add(member.joinedAsEntityID);
+      }
+    });
+
     return {
-      users: rows_members.map((mp) => ({
-        userID: mp.id,
-        username: mp.username,
-      })),
+      users: Array.from(membersMap.values()),
+      entities: [...participantEntities],
     };
   }
 
-  return { users: [] };
+  const conversation = await Conversation.findOne({
+    conversationID: contactID,
+  }).lean();
+
+  const participantIDs = [
+    ...new Set((conversation?.participant_ids || []).filter(Boolean)),
+  ];
+
+  if (participantIDs.length > 0) {
+    const { rows } = await pool.query(
+      `SELECT id, username FROM user_account WHERE id = ANY($1);`,
+      [participantIDs],
+    );
+
+    if (rows.length > 0) {
+      const users = rows.map((member) => ({
+        userID: member.id,
+        username: member.username,
+        entityID: buildUserEntityID(member.id),
+        joinedAsEntityID: null,
+      }));
+      return {
+        users,
+        entities: [...new Set(users.map((member) => member.entityID))],
+      };
+    }
+  }
+
+  const participantEntityIDs = [
+    ...new Set((conversation?.participant_entity_ids || []).filter(Boolean)),
+  ];
+
+  if (participantEntityIDs.length > 0) {
+    const expandedMembers = await expandMemberTargets({
+      memberEntityIDs: participantEntityIDs,
+    });
+    const expandedUserIDs = [
+      ...new Set(expandedMembers.map((member) => member.userID).filter(Boolean)),
+    ];
+
+    if (expandedUserIDs.length > 0) {
+      const { rows } = await pool.query(
+        `SELECT id, username FROM user_account WHERE id = ANY($1);`,
+        [expandedUserIDs],
+      );
+
+      if (rows.length > 0) {
+        const users = rows.map((member) => ({
+          userID: member.id,
+          username: member.username,
+          entityID: buildUserEntityID(member.id),
+          joinedAsEntityID: null,
+        }));
+        const entitySet = new Set(
+          participantEntityIDs.filter((entityID) => entityID),
+        );
+        users.forEach((member) => entitySet.add(member.entityID));
+
+        return {
+          users,
+          entities: [...entitySet],
+        };
+      }
+    }
+  }
+
+  return { users: [], entities: [] };
 };
 
 const AddNewMemberToChannels = async (
@@ -389,18 +567,29 @@ const AddNewMemberToChannels = async (
 };
 
 const GetRealmsJoined = async (userID) => {
+  const userEntity = await resolveUserEntity(userID);
+  if (!userEntity?.id) {
+    return [];
+  }
   const { rows } = await pool.query(
     `
     SELECT DISTINCT r.realm_id
     FROM community_member cm
     JOIN community_realm r ON cm.realm_id = r.realm_id
-    WHERE cm.account_id = $1
+    WHERE cm.account_id = ANY($1::text[])
       AND r.type IN ('group', 'server', 'channel');
   `,
-    [userID],
+    [[String(userEntity.id)]],
   );
 
-  return rows.map((r) => r.realm_id);
+  const joinedViaEntities = await getRealmIDsViaActingEntities(userID);
+
+  return [
+    ...new Set([
+      ...rows.map((realm) => realm.realm_id),
+      ...joinedViaEntities.filter(Boolean),
+    ]),
+  ];
 };
 
 module.exports = {

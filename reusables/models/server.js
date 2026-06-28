@@ -21,7 +21,10 @@ const GetServerChannels = async (serverID, privacy) => {
     cr.type AS type,
     cr.is_private AS privacy
     FROM community_realm cr
-    LEFT JOIN user_account pua ON cr.created_by_id = pua.id
+    LEFT JOIN entity created_by_entity
+      ON cr.created_by_id = created_by_entity.id
+     AND created_by_entity.entity_type = 'user'
+    LEFT JOIN user_account pua ON created_by_entity.source_id = pua.id
     WHERE cr.parent_id = $1 AND cr.type IN ('channel', 'voice') AND cr.is_private = $2;`,
     [serverID, privacy],
   );
@@ -45,13 +48,20 @@ const GetServerDetails = async (serverID) => {
                 'userID', cm_username.username
               ))
               FROM community_member cm
-              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              LEFT JOIN entity cm_entity
+                ON cm.account_id = cm_entity.id
+               AND cm_entity.entity_type = 'user'
+              JOIN user_account cm_username
+                ON COALESCE(cm_entity.source_id, cm.account_id) = cm_username.id
               WHERE cm.realm_id = cr.realm_id
             ), '[]'::jsonb) AS members,
     pua.username AS createdBy,
     cr.is_private AS privacy
     FROM community_realm cr
-    LEFT JOIN user_account pua ON cr.created_by_id = pua.id
+    LEFT JOIN entity created_by_entity
+      ON cr.created_by_id = created_by_entity.id
+     AND created_by_entity.entity_type = 'user'
+    LEFT JOIN user_account pua ON created_by_entity.source_id = pua.id
     WHERE realm_id = $1 AND type = 'server';`,
     [serverID],
   );
@@ -83,7 +93,11 @@ const GetServerMembers = async (serverID, withDetails) => {
        pua.is_active AS "isActivated",
        pua.is_verified AS "isVerified"
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN entity member_entity
+         ON cr.account_id = member_entity.id
+        AND member_entity.entity_type = 'user'
+       LEFT JOIN user_account pua
+         ON COALESCE(member_entity.source_id, cr.account_id) = pua.id
        WHERE realm_id = $1;`,
       [serverID],
     );
@@ -96,7 +110,11 @@ const GetServerMembers = async (serverID, withDetails) => {
        pua.id AS "userID",
        pua.username AS username
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN entity member_entity
+         ON cr.account_id = member_entity.id
+        AND member_entity.entity_type = 'user'
+       LEFT JOIN user_account pua
+         ON COALESCE(member_entity.source_id, cr.account_id) = pua.id
        WHERE realm_id = $1;`,
       [serverID],
     );

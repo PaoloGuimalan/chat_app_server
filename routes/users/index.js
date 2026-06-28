@@ -105,6 +105,12 @@ const {
   SyncConversationLastMessage,
   normalizeConversationType,
 } = require("../../reusables/models/messages");
+const {
+  resolveActingEntity,
+  resolveUserEntity,
+  buildUserEntityID,
+  userIDsToEntityIDs,
+} = require("../../reusables/models/entities");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
   createJWT,
@@ -139,6 +145,21 @@ const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
+
+const resolveMemberAccountIDs = async (userID) => {
+  const userEntity = await resolveUserEntity(userID).catch(() => null);
+  if (!userEntity?.id) {
+    throw new Error("Entity profile not found for user");
+  }
+  return [String(userEntity.id)];
+};
+
+const resolveMemberAccountIDsBulk = async (userIDs = []) => {
+  const resolved = await Promise.all(
+    (userIDs || []).map(async (userID) => resolveMemberAccountIDs(userID)),
+  );
+  return [...new Set(resolved.flat().filter(Boolean))];
+};
 
 router.get("/search/:searchdata", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -999,6 +1020,16 @@ const checkExistingMessageID = async (messageID) => {
     });
 };
 
+const resolveSenderEntityContext = async (decodedToken, userID) => {
+  const requestedEntityID =
+    decodedToken?.sender_entity_id || decodedToken?.acting_entity_id || null;
+
+  return resolveActingEntity({
+    userID,
+    entityID: requestedEntityID,
+  });
+};
+
 router.post("/sendMessage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
@@ -1013,11 +1044,22 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const messageID = await checkExistingMessageID(makeID(30));
     const conversationID = decodedToken.conversationID;
 
-    await isRealmMember(conversationID, id);
+    const senderEntityContext = await resolveSenderEntityContext(
+      decodedToken,
+      userID,
+    );
+
+    await isRealmMember(conversationID, id, senderEntityContext.entityID);
 
     const sender = userID;
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receiverEntityIDs =
+      receiversfetch.entities?.length > 0
+        ? receiversfetch.entities
+        : userIDsToEntityIDs(receivers);
+    const senderEntityID =
+      senderEntityContext.entityID || buildUserEntityID(userID);
 
     const mentionedUsernames = extractMentionUsernames(decodedToken.content);
 
@@ -1034,10 +1076,14 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
 
     const mentionedReceiverSet = new Set(mentionedReceiverIds);
 
+    const realmReferenceID =
+      senderEntityContext.senderType === "realm"
+        ? senderEntityContext.authorRealm
+        : conversationID;
     const realmName =
       decodedToken.conversationType === "single"
         ? null
-        : await GetRealmName(conversationID);
+        : await GetRealmName(realmReferenceID);
 
     const mentioner = {
       userID: sender,
@@ -1068,7 +1114,9 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       pendingID: pendingID,
       sender: sender,
       receivers: [], // receivers
+      receiverEntityIDs: receiverEntityIDs,
       seeners: seeners,
+      seenerEntityIDs: [senderEntityID],
       content: sanitizedContent,
       // messageDate: messageDate,
       isReply: isReply,
@@ -1077,6 +1125,10 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       isDeleted: false,
       messageType: messageType,
       conversationType: conversationType,
+      senderType: senderEntityContext.senderType,
+      authorRealm: senderEntityContext.authorRealm,
+      actorUserID: senderEntityContext.actorUserID,
+      senderEntityID: senderEntityID,
     };
 
     const newMessage = new UserMessage(payload);
@@ -1098,8 +1150,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
         await SaveConversation(
           conversationID,
           conversationType,
-          "user",
-          null,
+          senderEntityContext.senderType,
+          senderEntityContext.authorRealm,
           receivers,
           messageID,
           sender,
@@ -1107,6 +1159,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
           new Date(),
           messageType,
           false,
+          senderEntityID,
+          receiverEntityIDs,
         );
 
         res.send({
@@ -1155,6 +1209,7 @@ function removeNullServerDetails(obj) {
 
 router.get("/initConversationList", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const userEntityID = buildUserEntityID(userID);
   const page = req.headers["page"];
   const range = req.headers["range"];
   const type = req.headers["type"] || "all";
@@ -1270,7 +1325,14 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
           $sum: {
             $cond: {
               if: {
-                $in: [userID, "$seeners"],
+                $or: [
+                  {
+                    $in: [userID, "$seeners"],
+                  },
+                  {
+                    $in: [userEntityID, "$seenerEntityIDs"],
+                  },
+                ],
               },
               then: 0,
               else: 1,
@@ -1382,7 +1444,10 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
                     'members', (
                       SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                       FROM community_member m
-                      JOIN user_account a ON m.account_id = a.id
+                      JOIN entity m_entity
+                        ON m.account_id = m_entity.id
+                       AND m_entity.entity_type = 'user'
+                      JOIN user_account a ON m_entity.source_id = a.id
                       WHERE m.realm_id = pr.realm_id
                     ),
                     'createdBy', parent_created_by.username,
@@ -1392,8 +1457,16 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
               END AS serverdetails
             FROM community_realm cr
             LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-            LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-            LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+            LEFT JOIN entity created_by_entity
+              ON cr.created_by_id = created_by_entity.id
+             AND created_by_entity.entity_type = 'user'
+            LEFT JOIN user_account created_by
+              ON created_by_entity.source_id = created_by.id
+            LEFT JOIN entity parent_created_by_entity
+              ON pr.created_by_id = parent_created_by_entity.id
+             AND parent_created_by_entity.entity_type = 'user'
+            LEFT JOIN user_account parent_created_by
+              ON parent_created_by_entity.source_id = parent_created_by.id
             WHERE cr.realm_id = ANY($1);
             `,
         [flattenedGroupsArray],
@@ -1461,6 +1534,7 @@ router.get(
   async (req, res) => {
     const userID = req.params.userID;
     const conversationID = req.params.conversationID;
+    const memberAccountIDs = await resolveMemberAccountIDs(userID);
     const page = req.headers["page"];
     const range = req.headers["range"];
     const totalmessages = await GetAllMessageCountInAConversation(
@@ -1475,8 +1549,8 @@ router.get(
 
     if (realm_row.length > 0) {
       const { rows: is_member } = await pool.query(
-        `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
-        [userID, conversationID],
+        `SELECT member_id FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = $2;`,
+        [memberAccountIDs, conversationID],
       );
 
       if (is_member.length <= 0) {
@@ -1690,7 +1764,9 @@ const sendMessageInitForGC = async (
     conversationID: conversationID,
     sender: sender,
     receivers: receivers,
+    receiverEntityIDs: userIDsToEntityIDs(receivers),
     seeners: seeners,
+    seenerEntityIDs: [buildUserEntityID(userID)],
     content: content,
     // messageDate: messageDate,
     isReply: isReply,
@@ -1699,6 +1775,10 @@ const sendMessageInitForGC = async (
     isDeleted: false,
     messageType: messageType,
     conversationType: conversationType,
+    senderType: "user",
+    authorRealm: null,
+    actorUserID: userID,
+    senderEntityID: buildUserEntityID(userID),
   };
 
   const newMessage = new UserMessage(payload);
@@ -1729,6 +1809,8 @@ const sendMessageInitForGC = async (
         new Date(),
         messageType,
         false,
+        buildUserEntityID(userID),
+        userIDsToEntityIDs(receivers),
       );
 
       receivers.map((rcvs, i) => {
@@ -1767,19 +1849,37 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       [userReceivers.map((mp) => mp.userID)],
     );
 
+    const creatorEntity = await resolveUserEntity(id).catch(() => null);
+    if (!creatorEntity?.id) {
+      throw new Error("Entity profile not found for realm creator");
+    }
+    const creatorEntityID = creatorEntity.id;
+    const rowEntityPairs = await Promise.all(
+      rows.map(async ({ id: accountId }) => {
+        const memberEntity = await resolveUserEntity(accountId).catch(() => null);
+        if (!memberEntity?.id) {
+          throw new Error(`Entity profile not found for member ${accountId}`);
+        }
+        return {
+          accountId,
+          memberAccountID: memberEntity.id,
+        };
+      }),
+    );
+
     const insertValues = [];
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rowEntityPairs.forEach(({ accountId, memberAccountID }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
-      params.push(accountId); // account FK
+      params.push(memberAccountID); // entity FK
       params.push(contactID); // pass your realm ID here
-      params.push(id); // who added this member (account FK)
+      params.push(creatorEntityID); // who added this member (entity FK)
       params.push(new Date()); // date_joined or null as needed
 
       if (accountId === id) {
@@ -1801,7 +1901,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         groupName,
         "N/A",
         "group",
-        id,
+        creatorEntityID,
         null,
         true,
         privacy,
@@ -1893,19 +1993,38 @@ const createRealmReusable = async (
       [allReceivers],
     );
 
+    const creatorEntity = await resolveUserEntity(id).catch(() => null);
+    if (!creatorEntity?.id) {
+      throw new Error("Entity profile not found for realm creator");
+    }
+    const creatorEntityID = creatorEntity.id;
+    const rowEntityPairs = await Promise.all(
+      rows.map(async ({ id: accountId, username }) => {
+        const memberEntity = await resolveUserEntity(accountId).catch(() => null);
+        if (!memberEntity?.id) {
+          throw new Error(`Entity profile not found for member ${accountId}`);
+        }
+        return {
+          accountId,
+          username,
+          memberAccountID: memberEntity.id,
+        };
+      }),
+    );
+
     const insertValues = [];
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rowEntityPairs.forEach(({ accountId, memberAccountID }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
       // member_id - generate UUID here or use a package during insert if your DB auto-generates
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
-      params.push(accountId); // account FK
+      params.push(memberAccountID); // entity FK
       params.push(contactID); // pass your realm ID here
-      params.push(id); // who added this member (account FK)
+      params.push(creatorEntityID); // who added this member (entity FK)
       params.push(new Date()); // date_joined or null as needed
 
       if (accountId === userID) {
@@ -1927,7 +2046,7 @@ const createRealmReusable = async (
         realmName,
         profile,
         type,
-        id,
+        creatorEntityID,
         parentRealmID,
         true,
         privacy,
@@ -2339,7 +2458,10 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
         // },
       },
       {
-        $addToSet: { seeners: userID },
+        $addToSet: {
+          seeners: userID,
+          seenerEntityIDs: userEntityID,
+        },
         // $push: {
         //   seeners: userID,
         // },
@@ -2391,9 +2513,11 @@ const uploadMessage = async (
   userID,
   conversationID,
   receivers,
+  receiverEntityIDs,
   isReply,
   replyingTo,
   conversationType,
+  senderEntityContext,
   onComplete,
 ) => {
   try {
@@ -2412,11 +2536,13 @@ const uploadMessage = async (
       mp.pendingID,
       mp.conversationID,
       receivers,
+      receiverEntityIDs,
       publicUrl,
       isReply,
       replyingTo,
       mp.type,
       conversationType,
+      senderEntityContext,
       onComplete,
     );
 
@@ -2440,11 +2566,13 @@ const saveFileMessage = async (
   pendingID,
   conversationID,
   receivers,
+  receiverEntityIDs,
   content,
   isReply,
   replyingTo,
   messageType,
   conversationType,
+  senderEntityContext,
   onComplete,
 ) => {
   // const seeners = [userID]; //Array
@@ -2463,7 +2591,9 @@ const saveFileMessage = async (
     pendingID: pendingID,
     sender: userID,
     receivers: [], // receivers
+    receiverEntityIDs: receiverEntityIDs || [],
     seeners: seeners,
+    seenerEntityIDs: [senderEntityContext.entityID || buildUserEntityID(userID)],
     content: content,
     // messageDate: messageDate,
     isReply: isReply,
@@ -2472,6 +2602,11 @@ const saveFileMessage = async (
     isDeleted: false,
     messageType: messageType,
     conversationType: normalizedConversationType,
+    senderType: senderEntityContext.senderType,
+    authorRealm: senderEntityContext.authorRealm,
+    actorUserID: senderEntityContext.actorUserID,
+    senderEntityID:
+      senderEntityContext.entityID || buildUserEntityID(userID),
   };
 
   const newMessage = new UserMessage(payload);
@@ -2492,8 +2627,8 @@ const saveFileMessage = async (
       await SaveConversation(
         conversationID,
         normalizedConversationType,
-        "user",
-        null,
+        senderEntityContext.senderType,
+        senderEntityContext.authorRealm,
         receivers,
         messageID,
         userID,
@@ -2501,6 +2636,10 @@ const saveFileMessage = async (
         new Date(),
         messageType,
         false,
+        senderEntityContext.entityID || buildUserEntityID(userID),
+        receiverEntityIDs?.length > 0
+          ? receiverEntityIDs
+          : userIDsToEntityIDs(receivers),
       );
       onComplete(true);
     })
@@ -2517,10 +2656,18 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
+    const senderEntityContext = await resolveSenderEntityContext(
+      decodeToken,
+      userID,
+    );
 
     const conversationID = decodeToken.conversationID;
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receiverEntityIDs =
+      receiversfetch.entities?.length > 0
+        ? receiversfetch.entities
+        : userIDsToEntityIDs(receivers);
     // const receivers = decodeToken.receivers;
     const files = decodeToken.files;
     const isReply = decodeToken.isReply;
@@ -2529,7 +2676,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
       decodeToken.conversationType,
     );
 
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, id, senderEntityContext.entityID);
 
     let settledFiles = 0;
 
@@ -2540,9 +2687,11 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
           userID,
           conversationID,
           receivers,
+          receiverEntityIDs,
           isReply,
           replyingTo,
           conversationType,
+          senderEntityContext,
           (status) => {
             settledFiles += 1;
             if (files.length === settledFiles) {
@@ -2586,7 +2735,11 @@ router.post("/call", jwtchecker, async (req, res) => {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const recepients = decodeToken.recepients;
 
-    await isRealmMember(decodeToken.conversationID, id);
+    await isRealmMember(
+      decodeToken.conversationID,
+      id,
+      decodeToken?.sender_entity_id || decodeToken?.acting_entity_id || null,
+    );
 
     recepients.map((rcp) => {
       ReachCallRecepients(rcp, decodeToken);

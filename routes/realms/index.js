@@ -11,8 +11,27 @@ const {
   SyncConversationParticipants,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { resolveUserEntity } = require("../../reusables/models/entities");
 const { publish } = require("../../reusables/redis/pubsub");
 const router = express.Router();
+
+const resolveMemberAccountIDs = async (userID) => {
+  const userEntity = await resolveUserEntity(userID).catch(() => null);
+  if (!userEntity?.id) {
+    throw new Error("Entity profile not found for user");
+  }
+  return [String(userEntity.id)];
+};
+
+const resolveMemberAccountIDsBulk = async (userIDs = []) => {
+  const resolved = await Promise.all(
+    (userIDs || []).map(async (userID) => {
+      const ids = await resolveMemberAccountIDs(userID);
+      return ids;
+    }),
+  );
+  return [...new Set(resolved.flat().filter(Boolean))];
+};
 
 router.post("/upload-media", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -22,6 +41,7 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
 
     try {
+      const memberAccountIDs = await resolveMemberAccountIDs(id);
       const realm_id = fields.realm_id[0];
       const realm_type = fields.realm_type[0];
       const media_type = fields.media_type[0];
@@ -36,11 +56,11 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
             FROM community_member cm
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
             WHERE cr.realm_id = $1 
-                AND cm.account_id = $2 
+                AND cm.account_id = ANY($2::text[])
                 AND cm.role = 'admin'
             ) as is_admin
         `,
-        [realm_id, id],
+        [realm_id, memberAccountIDs],
       );
 
       if (media_type !== "profile" && media_type !== "cover_photo") {
@@ -107,18 +127,30 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
   try {
     const account_ids = req.body.account_ids;
+    const memberAccountIDs = await resolveMemberAccountIDs(id);
+    const targetMemberAccountIDs = await resolveMemberAccountIDsBulk(account_ids);
     const realm_id = req.body.realm_id;
 
     await isRealmMember(realm_id, id);
 
     const { rows: users } = await pool.query(
-      `SELECT username FROM user_account WHERE id = ANY($1::text[])`,
+      `
+        SELECT ua.username
+        FROM user_account ua
+        WHERE ua.id = ANY($1::text[]);
+      `,
       [account_ids],
     );
 
     const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
-      [id, realm_id, "admin"],
+      `
+        SELECT member_id
+        FROM community_member
+        WHERE account_id = ANY($1::text[])
+          AND realm_id = $2
+          AND role = $3;
+      `,
+      [memberAccountIDs, realm_id, "admin"],
     );
 
     if (row.length === 0) {
@@ -158,7 +190,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
       const { rows: joined_channels } = await pool.query(
         `SELECT realm_id FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
-        [account_ids, channel_ids],
+        [targetMemberAccountIDs, channel_ids],
       );
 
       const joined_channel_ids = joined_channels.map((mp) => mp.realm_id);
@@ -166,7 +198,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       if (joined_channel_ids.length > 0) {
         await pool.query(
           `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
-          [account_ids, joined_channel_ids],
+          [targetMemberAccountIDs, joined_channel_ids],
         );
 
         await Promise.all(
@@ -191,7 +223,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
     await pool.query(
       `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = $2`,
-      [account_ids, realm_id],
+      [targetMemberAccountIDs, realm_id],
     );
 
     await SyncConversationParticipants(realm_id);
@@ -230,7 +262,14 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     // participants list (the removed users are notified separately above).
     try {
       const { rows: remainingMembers } = await pool.query(
-        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        `
+          SELECT COALESCE(member_entity.source_id, cm.account_id) AS account_id
+          FROM community_member cm
+          LEFT JOIN entity member_entity
+            ON cm.account_id = member_entity.id
+           AND member_entity.entity_type = 'user'
+          WHERE cm.realm_id = $1;
+        `,
         [realm_id],
       );
 

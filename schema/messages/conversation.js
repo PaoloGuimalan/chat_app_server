@@ -21,7 +21,16 @@ const conversation = mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    senderEntityID: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     participant_ids: [
+      {
+        type: mongoose.Schema.Types.Mixed,
+      },
+    ],
+    participant_entity_ids: [
       {
         type: mongoose.Schema.Types.Mixed,
       },

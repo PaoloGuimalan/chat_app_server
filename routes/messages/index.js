@@ -40,9 +40,16 @@ const { isRealmMember } = require("../../reusables/models/realms");
 const {
   GetUsersWithConnectionIDs,
 } = require("../../reusables/models/users");
+const {
+  buildUserEntityID,
+  resolveUserEntity,
+} = require("../../reusables/models/entities");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
+
+const resolveOptionalSenderEntityID = (payload = {}) =>
+  payload?.sender_entity_id || payload?.acting_entity_id || null;
 
 const ssexpresssample = (req, res, next) => {
   console.log("SSE SAMPLE MIDDLEWARE");
@@ -61,7 +68,11 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(
+      decodedToken.conversationID,
+      id,
+      resolveOptionalSenderEntityID(decodedToken),
+    );
 
     UserMessage.updateOne(
       {
@@ -113,7 +124,11 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(
+      decodedToken.conversationID,
+      id,
+      resolveOptionalSenderEntityID(decodedToken),
+    );
 
     UserMessage.updateOne(
       {
@@ -150,6 +165,12 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
 });
 
 async function getRealmWithUsers(realmId, userID) {
+  const userEntity = await resolveUserEntity(userID).catch(() => null);
+  if (!userEntity?.id) {
+    throw new Error("Entity profile not found for user");
+  }
+  const memberAccountIDs = [String(userEntity.id)];
+
   const query = `
     SELECT jsonb_build_object(
       'id', cr.id,
@@ -166,14 +187,14 @@ async function getRealmWithUsers(realmId, userID) {
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm_admin
-        WHERE cm_admin.account_id = $2
+        WHERE cm_admin.account_id = ANY($2::text[])
           AND cm_admin.realm_id = cr.realm_id
           AND cm_admin.role = 'admin'
       ),
       'is_member', EXISTS (
         SELECT 1
         FROM community_member cm_member
-        WHERE cm_member.account_id = $2
+        WHERE cm_member.account_id = ANY($2::text[])
           AND cm_member.realm_id = cr.realm_id
       ),
       'usersWithInfo', COALESCE(jsonb_agg(
@@ -194,12 +215,16 @@ async function getRealmWithUsers(realmId, userID) {
     ) AS realm_with_users
     FROM community_realm cr
     LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
-    LEFT JOIN user_account ua ON cm.account_id = ua.id
+    LEFT JOIN entity cm_entity
+      ON cm.account_id = cm_entity.id
+     AND cm_entity.entity_type = 'user'
+    LEFT JOIN user_account ua
+      ON ua.id = COALESCE(cm_entity.source_id, cm.account_id)
     WHERE cr.realm_id = $1
     GROUP BY cr.id;
   `;
 
-  const { rows } = await pool.query(query, [realmId, userID]);
+  const { rows } = await pool.query(query, [realmId, memberAccountIDs]);
   return rows.length ? rows[0].realm_with_users : null;
 }
 
@@ -303,7 +328,11 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
     // const receivers = decodedToken.receivers;
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(
+      decodedToken.conversationID,
+      id,
+      resolveOptionalSenderEntityID(decodedToken),
+    );
 
     receivers.map((mp) => {
       if (mp !== userID) {
@@ -339,7 +368,11 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
       ...receiversfetch.users.map((mp) => mp.userID),
     ];
 
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(decodedToken),
+    );
 
     const { rows } = await pool.query(
       `
@@ -349,7 +382,10 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
           EXISTS (
             SELECT 1
             FROM community_member cm
-            WHERE cm.account_id = ua.id
+            LEFT JOIN entity cm_entity
+              ON cm.account_id = cm_entity.id
+             AND cm_entity.entity_type = 'user'
+            WHERE COALESCE(cm_entity.source_id, cm.account_id) = ua.id
               AND cm.realm_id = $2
           ) AS "alreadyMember"
         FROM user_account ua
@@ -488,6 +524,7 @@ function removeNullServerDetails(obj) {
 router.get("/archives", jwtchecker, async (req, res) => {
   try {
     const id = req.params.id;
+    const userEntityID = buildUserEntityID(id);
     const page = req.headers["page"];
     const range = req.headers["range"];
 
@@ -574,7 +611,10 @@ router.get("/archives", jwtchecker, async (req, res) => {
             $sum: {
               $cond: {
                 if: {
-                  $in: [id, "$seeners"],
+                  $or: [
+                    { $in: [id, "$seeners"] },
+                    { $in: [userEntityID, "$seenerEntityIDs"] },
+                  ],
                 },
                 then: 0,
                 else: 1,
@@ -688,7 +728,10 @@ router.get("/archives", jwtchecker, async (req, res) => {
                       'members', (
                         SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                         FROM community_member m
-                        JOIN user_account a ON m.account_id = a.id
+                        JOIN entity m_entity
+                          ON m.account_id = m_entity.id
+                         AND m_entity.entity_type = 'user'
+                        JOIN user_account a ON m_entity.source_id = a.id
                         WHERE m.realm_id = pr.realm_id
                       ),
                       'createdBy', parent_created_by.username,
@@ -698,8 +741,16 @@ router.get("/archives", jwtchecker, async (req, res) => {
                 END AS serverdetails
               FROM community_realm cr
               LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-              LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-              LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+              LEFT JOIN entity created_by_entity
+                ON cr.created_by_id = created_by_entity.id
+               AND created_by_entity.entity_type = 'user'
+              LEFT JOIN user_account created_by
+                ON created_by_entity.source_id = created_by.id
+              LEFT JOIN entity parent_created_by_entity
+                ON pr.created_by_id = parent_created_by_entity.id
+               AND parent_created_by_entity.entity_type = 'user'
+              LEFT JOIN user_account parent_created_by
+                ON parent_created_by_entity.source_id = parent_created_by.id
               WHERE cr.realm_id = ANY($1);
               `,
           [flattenedGroupsArray],
@@ -764,6 +815,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
 
 router.get("/conversations", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const userEntityID = buildUserEntityID(userID);
   const page = parseInt(req.headers["page"] || 1);
   const range = parseInt(req.headers["range"] || 20);
   const type = req.headers["type"] || "all";
@@ -778,7 +830,10 @@ router.get("/conversations", jwtchecker, async (req, res) => {
     };
 
     const match = {
-      participant_ids: { $in: [userID] },
+      $or: [
+        { participant_entity_ids: { $in: [userEntityID] } },
+        { participant_ids: { $in: [userID] } },
+      ],
     };
 
     if (type !== "all") {
@@ -966,7 +1021,14 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                       $ne: [{ $ifNull: ["$historySetting.isArchived", false] }, true],
                     },
                     {
-                      $not: [{ $in: [userID, "$seeners"] }],
+                      $not: [
+                        {
+                          $or: [
+                            { $in: [userID, "$seeners"] },
+                            { $in: [userEntityID, "$seenerEntityIDs"] },
+                          ],
+                        },
+                      ],
                     },
                   ],
                 },
@@ -1069,7 +1131,10 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                         'members', (
                           SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                           FROM community_member m
-                          JOIN user_account a ON m.account_id = a.id
+                          JOIN entity m_entity
+                            ON m.account_id = m_entity.id
+                           AND m_entity.entity_type = 'user'
+                          JOIN user_account a ON m_entity.source_id = a.id
                           WHERE m.realm_id = pr.realm_id
                         ),
                         'createdBy', parent_created_by.username,
@@ -1079,8 +1144,16 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                   END AS serverdetails
                 FROM community_realm cr
                 LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-                LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-                LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+                LEFT JOIN entity created_by_entity
+                  ON cr.created_by_id = created_by_entity.id
+                 AND created_by_entity.entity_type = 'user'
+                LEFT JOIN user_account created_by
+                  ON created_by_entity.source_id = created_by.id
+                LEFT JOIN entity parent_created_by_entity
+                  ON pr.created_by_id = parent_created_by_entity.id
+                 AND parent_created_by_entity.entity_type = 'user'
+                LEFT JOIN user_account parent_created_by
+                  ON parent_created_by_entity.source_id = parent_created_by.id
                 WHERE cr.realm_id = ANY($1);
                 `,
             [flattenedGroupsArray],

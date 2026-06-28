@@ -21,6 +21,8 @@ const { getRoomPod } = require("../../reusables/redis/roomState");
 const router = express.Router();
 
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
+const resolveOptionalSenderEntityID = (payload = {}) =>
+  payload?.sender_entity_id || payload?.acting_entity_id || null;
 
 /**
  * resolveTargetPod
@@ -94,7 +96,11 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -120,7 +126,11 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -145,7 +155,11 @@ router.post("/transport-connect", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -171,7 +185,11 @@ router.post("/produce", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -198,7 +216,11 @@ router.post("/consume", jwtchecker, async (req, res) => {
   console.log(`[Route] /consume called: conversationID=${conversationID}, producerId=${producerId}, clientId=${clientId}`);
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -223,7 +245,11 @@ router.post("/close-producer", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -315,7 +341,11 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
 
   try {
     // Auth check — skip silently on keepalive if it fails, cleanup still runs below
-    await isRealmMember(conversationID, id).catch(() => {});
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    ).catch(() => {});
 
     // Notify conversation recipients about the departure
     const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({ users: [] }));
@@ -359,7 +389,11 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     const targetPod = await resolveTargetPod(conversationID);
 
@@ -386,7 +420,11 @@ router.post("/reconnect", jwtchecker, async (req, res) => {
   const clientId = req.body.clientId || userId;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(
+      conversationID,
+      id,
+      resolveOptionalSenderEntityID(req.body),
+    );
 
     // Use explicit instance override for reconnect — client knows its prior pod
     const targetPod = await resolveTargetPod(conversationID, instance || null);

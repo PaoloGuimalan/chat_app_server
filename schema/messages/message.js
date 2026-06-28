@@ -6,7 +6,9 @@ const usermessage = mongoose.Schema({
   pendingID: { type: mongoose.Schema.Types.Mixed, require: true },
   sender: { type: mongoose.Schema.Types.Mixed, require: true },
   receivers: [{ type: mongoose.Schema.Types.Mixed, require: true }],
+  receiverEntityIDs: [{ type: mongoose.Schema.Types.Mixed, default: [] }],
   seeners: [{ type: mongoose.Schema.Types.Mixed, require: true }],
+  seenerEntityIDs: [{ type: mongoose.Schema.Types.Mixed, default: [] }],
   content: { type: mongoose.Schema.Types.Mixed, require: true },
   messageDate: { type: Date, default: Date.now, required: true },
   isReply: { type: Boolean, require: true },
@@ -17,6 +19,8 @@ const usermessage = mongoose.Schema({
   conversationType: { type: mongoose.Schema.Types.Mixed, require: true },
   senderType: { type: mongoose.Schema.Types.Mixed, default: null },
   authorRealm: { type: mongoose.Schema.Types.Mixed, default: null },
+  actorUserID: { type: mongoose.Schema.Types.Mixed, default: null },
+  senderEntityID: { type: mongoose.Schema.Types.Mixed, default: null },
 });
 
 module.exports = mongoose.model("UserMessage", usermessage, "messages");
