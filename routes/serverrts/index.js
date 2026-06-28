@@ -40,17 +40,17 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         cr.type,
         cr.cover_photo,
         cr.description,
-        COUNT(cm.account_id) AS member_count,
-        CASE 
+        COUNT(cm.actor_entity_id) AS member_count,
+        CASE
             WHEN EXISTS (
-                SELECT 1 FROM community_member cm2 
-                WHERE cm2.realm_id = cr.realm_id AND cm2.account_id = $2
-            ) THEN true 
-            ELSE false 
+                SELECT 1 FROM community_member cm2
+                WHERE cm2.realm_id = cr.realm_id AND cm2.actor_entity_id = 'entity:user:' || $2
+            ) THEN true
+            ELSE false
         END AS is_joined
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
-    WHERE cm.account_id != $1
+    WHERE cm.actor_entity_id != 'entity:user:' || $1
         AND cr.type = 'server' AND cr.is_private = false
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
@@ -79,12 +79,13 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         (
         SELECT jsonb_agg(jsonb_build_object('userID', ua.username))
         FROM community_member cm2
-        JOIN user_account ua ON cm2.account_id = ua.id
+        JOIN entity e2 ON e2.entity_id = cm2.actor_entity_id
+        JOIN user_account ua ON ua.id = e2.account_id
         WHERE cm2.realm_id = cr.realm_id
         ) AS members
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
-    WHERE cm.account_id = $1
+    WHERE cm.actor_entity_id = 'entity:user:' || $1
         AND cr.type = 'server'
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
@@ -197,7 +198,8 @@ router.get(
                 ) AS fullname,
                 ua.profile
             FROM community_member cm
-            JOIN user_account ua ON cm.account_id = ua.id
+            JOIN entity e ON e.entity_id = cm.actor_entity_id
+            JOIN user_account ua ON ua.id = e.account_id
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
             WHERE cr.realm_id = $1 AND cr.parent_id = $2;`,
             [conversationID, parent_realm],
@@ -252,7 +254,8 @@ router.get(
                 'userID', cm_username.username
               ))
               FROM community_member cm
-              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              JOIN entity e ON e.entity_id = cm.actor_entity_id
+              JOIN user_account cm_username ON cm_username.id = e.account_id
               WHERE cm.realm_id = pcr.realm_id
             ), '[]'::jsonb),
             'createdBy', pua.username,
@@ -312,7 +315,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const serverID = req.params.serverID;
 
   const { rows: row } = await pool.query(
-    `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
+    `SELECT member_id FROM community_member WHERE actor_entity_id = 'entity:user:' || $1 AND realm_id = $2;`,
     [id, serverID],
   );
 
@@ -345,7 +348,8 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           'userID', cm_username.username
         ))
         FROM community_member cm
-        JOIN user_account cm_username ON cm.account_id = cm_username.id
+        JOIN entity e ON e.entity_id = cm.actor_entity_id
+        JOIN user_account cm_username ON cm_username.id = e.account_id
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb),
       'createdBy', pua.username,
@@ -353,7 +357,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm
-        WHERE cm.account_id = $1
+        WHERE cm.actor_entity_id = 'entity:user:' || $1
           AND cm.realm_id = cr.realm_id
           AND cm.role = 'admin'
       ),
@@ -380,7 +384,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
             'is_joined', EXISTS (
               SELECT 1
               FROM community_member cm
-              WHERE cm.account_id = $1
+              WHERE cm.actor_entity_id = 'entity:user:' || $1
                 AND cm.realm_id = pcr.realm_id
             )
           )
@@ -405,7 +409,8 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
             END
         ))
         FROM community_member cm
-        JOIN user_account cmu ON cm.account_id = cmu.id
+        JOIN entity e ON e.entity_id = cm.actor_entity_id
+        JOIN user_account cmu ON cmu.id = e.account_id
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb)
     )
@@ -490,7 +495,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
             EXISTS (
               SELECT 1
               FROM community_member cm
-              WHERE cm.account_id = ua.id
+              WHERE cm.actor_entity_id = 'entity:user:' || ua.id
                 AND cm.realm_id = $2
             ) AS "alreadyMember"
           FROM user_account ua
@@ -571,7 +576,7 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
 
   try {
     const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
+      `SELECT member_id FROM community_member WHERE actor_entity_id = 'entity:user:' || $1 AND realm_id = $2 AND role = $3;`,
       [id, realm_id, "admin"],
     );
 
@@ -593,7 +598,7 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
     // event carries no member data — the client pulls the full list via API.
     try {
       const { rows: realmMembers } = await pool.query(
-        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        `SELECT split_part(actor_entity_id, ':', 3) AS account_id FROM community_member WHERE realm_id = $1;`,
         [realm_id],
       );
 

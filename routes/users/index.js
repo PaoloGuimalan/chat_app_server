@@ -133,8 +133,10 @@ const {
 } = require("../../reusables/models/users");
 const {
   isRealmMember,
+  canActAsRealm,
   GetRealmName,
 } = require("../../reusables/models/realms");
+const { parseEntityId, userEntity, realmEntity } = require("../../reusables/hooks/entity");
 const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
@@ -1015,7 +1017,38 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
 
     await isRealmMember(conversationID, id);
 
-    const sender = userID;
+    // Resolve the acting-as entity (X-Acting-As header). Default: send as the
+    // user (bare userID, back-compat). When acting as a realm, re-validate the
+    // human's role here (never trust the client) and send as the realm entity.
+    const actingAs = req.headers["x-acting-as"];
+    let sender = userID;
+    let senderType = "user";
+    let authorRealm = null;
+    if (actingAs) {
+      const { type, sourceId } = parseEntityId(actingAs);
+      if (type === "realm") {
+        const allowed = await canActAsRealm(sourceId, id);
+        if (!allowed) {
+          return res.status(403).send({
+            status: false,
+            message: "Not allowed to act as this realm",
+          });
+        }
+        sender = realmEntity(sourceId);
+        senderType = "realm";
+        authorRealm = realmEntity(sourceId);
+      } else if (
+        type === "user" &&
+        String(sourceId) !== String(userID) &&
+        String(sourceId) !== String(id)
+      ) {
+        return res.status(403).send({
+          status: false,
+          message: "Cannot act as another user",
+        });
+      }
+    }
+
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
 
@@ -1077,6 +1110,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
       isDeleted: false,
       messageType: messageType,
       conversationType: conversationType,
+      senderType: senderType,
+      authorRealm: authorRealm,
     };
 
     const newMessage = new UserMessage(payload);
@@ -1098,8 +1133,8 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
         await SaveConversation(
           conversationID,
           conversationType,
-          "user",
-          null,
+          senderType,
+          authorRealm,
           receivers,
           messageID,
           sender,
@@ -1382,7 +1417,8 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
                     'members', (
                       SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                       FROM community_member m
-                      JOIN user_account a ON m.account_id = a.id
+                      JOIN entity me ON me.entity_id = m.actor_entity_id
+                      JOIN user_account a ON a.id = me.account_id
                       WHERE m.realm_id = pr.realm_id
                     ),
                     'createdBy', parent_created_by.username,
@@ -1475,7 +1511,7 @@ router.get(
 
     if (realm_row.length > 0) {
       const { rows: is_member } = await pool.query(
-        `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
+        `SELECT member_id FROM community_member WHERE actor_entity_id = 'entity:user:' || $1 AND realm_id = $2;`,
         [userID, conversationID],
       );
 

@@ -14,6 +14,8 @@ const {
 const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
+const { userEntity } = require("../hooks/entity");
+const { expandEntitiesToDeliveryUsers } = require("./entities");
 
 const checkExistingMessageID = async (messageID) => {
   return await UserMessage.find({ messageID: messageID })
@@ -63,9 +65,9 @@ const AddNewMemberToContacts = async (
 
   const query = `
     INSERT INTO community_member
-    (member_id, account_id, nickname, realm_id, added_by_id, date_joined, role)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    ON CONFLICT (account_id, realm_id) DO NOTHING;
+    (member_id, actor_entity_id, nickname, realm_id, added_by_id, date_joined, role)
+    VALUES ($1, 'entity:user:' || $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (actor_entity_id, realm_id) DO NOTHING;
   `;
 
   const params = [
@@ -306,6 +308,12 @@ const SyncConversationParticipants = async (conversationID) => {
   return await existingConversation.save();
 };
 
+// Resolves a conversation key into its recipients. Returns:
+//   users         - flat human recipients (back-compat: same as before)
+//   deliveryUsers - alias of users (the humans Redis fans out to)
+//   participants  - the conversation's entity participants for display
+// Handles three keys: a user<->user connection_id, a realm group realm_id, and
+// (new) a generated entity-DM conversationID carrying participant_entity_ids.
 const GetAllReceivers = async (contactID) => {
   const { rows: rows_connections } = await pool.query(
     "SELECT ua.id, ua.username FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
@@ -313,29 +321,61 @@ const GetAllReceivers = async (contactID) => {
   );
 
   if (rows_connections.length > 0) {
+    const users = rows_connections.map((mp) => ({
+      userID: mp.id,
+      username: mp.username,
+    }));
     return {
-      users: rows_connections.map((mp) => ({
-        userID: mp.id,
-        username: mp.username,
+      users,
+      deliveryUsers: users,
+      participants: users.map((u) => ({
+        entityId: userEntity(u.userID),
+        type: "user",
       })),
     };
   }
 
   const { rows: rows_members } = await pool.query(
-    "SELECT ua.id, ua.username FROM community_member uc JOIN user_account ua ON ua.id = uc.account_id WHERE uc.realm_id = $1;",
+    "SELECT ua.id, ua.username FROM community_member uc JOIN entity e ON e.entity_id = uc.actor_entity_id JOIN user_account ua ON ua.id = e.account_id WHERE uc.realm_id = $1;",
     [contactID],
   );
 
   if (rows_members.length > 0) {
+    const users = rows_members.map((mp) => ({
+      userID: mp.id,
+      username: mp.username,
+    }));
     return {
-      users: rows_members.map((mp) => ({
-        userID: mp.id,
-        username: mp.username,
+      users,
+      deliveryUsers: users,
+      participants: users.map((u) => ({
+        entityId: userEntity(u.userID),
+        type: "user",
       })),
     };
   }
 
-  return { users: [] };
+  // Entity conversation (e.g. user<->realm DM): expand entity participants into
+  // the flat human recipients for delivery; keep the entities for display.
+  const conversation = await Conversation.findOne({ conversationID: contactID });
+  if (
+    conversation &&
+    Array.isArray(conversation.participant_entity_ids) &&
+    conversation.participant_entity_ids.length > 0
+  ) {
+    const deliveryUsers = await expandEntitiesToDeliveryUsers(
+      conversation.participant_entity_ids,
+    );
+    return {
+      users: deliveryUsers,
+      deliveryUsers,
+      participants: conversation.participant_entity_ids.map((eid) => ({
+        entityId: eid,
+      })),
+    };
+  }
+
+  return { users: [], deliveryUsers: [], participants: [] };
 };
 
 const AddNewMemberToChannels = async (
@@ -394,7 +434,7 @@ const GetRealmsJoined = async (userID) => {
     SELECT DISTINCT r.realm_id
     FROM community_member cm
     JOIN community_realm r ON cm.realm_id = r.realm_id
-    WHERE cm.account_id = $1
+    WHERE cm.actor_entity_id = 'entity:user:' || $1
       AND r.type IN ('group', 'server', 'channel');
   `,
     [userID],

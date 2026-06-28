@@ -45,7 +45,8 @@ const GetServerDetails = async (serverID) => {
                 'userID', cm_username.username
               ))
               FROM community_member cm
-              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              JOIN entity e ON e.entity_id = cm.actor_entity_id
+              JOIN user_account cm_username ON cm_username.id = e.account_id
               WHERE cm.realm_id = cr.realm_id
             ), '[]'::jsonb) AS members,
     pua.username AS createdBy,
@@ -83,7 +84,8 @@ const GetServerMembers = async (serverID, withDetails) => {
        pua.is_active AS "isActivated",
        pua.is_verified AS "isVerified"
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN entity e ON e.entity_id = cr.actor_entity_id
+       LEFT JOIN user_account pua ON pua.id = e.account_id
        WHERE realm_id = $1;`,
       [serverID],
     );
@@ -96,7 +98,8 @@ const GetServerMembers = async (serverID, withDetails) => {
        pua.id AS "userID",
        pua.username AS username
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN entity e ON e.entity_id = cr.actor_entity_id
+       LEFT JOIN user_account pua ON pua.id = e.account_id
        WHERE realm_id = $1;`,
       [serverID],
     );

@@ -166,14 +166,14 @@ async function getRealmWithUsers(realmId, userID) {
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm_admin
-        WHERE cm_admin.account_id = $2
+        WHERE cm_admin.actor_entity_id = 'entity:user:' || $2
           AND cm_admin.realm_id = cr.realm_id
           AND cm_admin.role = 'admin'
       ),
       'is_member', EXISTS (
         SELECT 1
         FROM community_member cm_member
-        WHERE cm_member.account_id = $2
+        WHERE cm_member.actor_entity_id = 'entity:user:' || $2
           AND cm_member.realm_id = cr.realm_id
       ),
       'usersWithInfo', COALESCE(jsonb_agg(
@@ -194,7 +194,8 @@ async function getRealmWithUsers(realmId, userID) {
     ) AS realm_with_users
     FROM community_realm cr
     LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
-    LEFT JOIN user_account ua ON cm.account_id = ua.id
+    LEFT JOIN entity e ON e.entity_id = cm.actor_entity_id
+    LEFT JOIN user_account ua ON ua.id = e.account_id
     WHERE cr.realm_id = $1
     GROUP BY cr.id;
   `;
@@ -349,7 +350,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
           EXISTS (
             SELECT 1
             FROM community_member cm
-            WHERE cm.account_id = ua.id
+            WHERE cm.actor_entity_id = 'entity:user:' || ua.id
               AND cm.realm_id = $2
           ) AS "alreadyMember"
         FROM user_account ua
@@ -688,7 +689,8 @@ router.get("/archives", jwtchecker, async (req, res) => {
                       'members', (
                         SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                         FROM community_member m
-                        JOIN user_account a ON m.account_id = a.id
+                        JOIN entity me ON me.entity_id = m.actor_entity_id
+                        JOIN user_account a ON a.id = me.account_id
                         WHERE m.realm_id = pr.realm_id
                       ),
                       'createdBy', parent_created_by.username,
@@ -1069,7 +1071,8 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                         'members', (
                           SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                           FROM community_member m
-                          JOIN user_account a ON m.account_id = a.id
+                          JOIN entity me ON me.entity_id = m.actor_entity_id
+                          JOIN user_account a ON a.id = me.account_id
                           WHERE m.realm_id = pr.realm_id
                         ),
                         'createdBy', parent_created_by.username,

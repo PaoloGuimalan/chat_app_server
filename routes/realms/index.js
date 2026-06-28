@@ -35,8 +35,8 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
             SELECT 1 
             FROM community_member cm
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
-            WHERE cr.realm_id = $1 
-                AND cm.account_id = $2 
+            WHERE cr.realm_id = $1
+                AND cm.actor_entity_id = 'entity:user:' || $2
                 AND cm.role = 'admin'
             ) as is_admin
         `,
@@ -117,7 +117,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     );
 
     const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
+      `SELECT member_id FROM community_member WHERE actor_entity_id = 'entity:user:' || $1 AND realm_id = $2 AND role = $3;`,
       [id, realm_id, "admin"],
     );
 
@@ -157,7 +157,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       const channel_ids = channels.map((mp) => mp.realm_id);
 
       const { rows: joined_channels } = await pool.query(
-        `SELECT realm_id FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
+        `SELECT realm_id FROM community_member WHERE split_part(actor_entity_id, ':', 3) = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
         [account_ids, channel_ids],
       );
 
@@ -165,7 +165,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
       if (joined_channel_ids.length > 0) {
         await pool.query(
-          `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
+          `DELETE FROM community_member WHERE split_part(actor_entity_id, ':', 3) = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
           [account_ids, joined_channel_ids],
         );
 
@@ -190,7 +190,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     }
 
     await pool.query(
-      `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = $2`,
+      `DELETE FROM community_member WHERE split_part(actor_entity_id, ':', 3) = ANY($1::text[]) AND realm_id = $2`,
       [account_ids, realm_id],
     );
 
@@ -230,7 +230,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     // participants list (the removed users are notified separately above).
     try {
       const { rows: remainingMembers } = await pool.query(
-        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        `SELECT split_part(actor_entity_id, ':', 3) AS account_id FROM community_member WHERE realm_id = $1;`,
         [realm_id],
       );
 

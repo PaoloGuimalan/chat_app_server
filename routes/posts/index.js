@@ -10,6 +10,8 @@ const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
+const { parseEntityId } = require("../../reusables/hooks/entity");
+const { canActAsRealm } = require("../../reusables/models/realms");
 const router = express.Router();
 
 const Posts = require("../../schema/posts/posts");
@@ -407,14 +409,32 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       });
     }
 
+    // Resolve the post's actor entity: an explicit realm post (realm_id), else
+    // the acting-as realm (X-Acting-As, re-validated), else the user. The realm
+    // IS the author — there is no separate author_realm anymore.
+    let actorRealmId = realm_id || null;
+    if (!actorRealmId) {
+      const actingAs = req.headers["x-acting-as"];
+      const parsed = actingAs ? parseEntityId(actingAs) : { type: null };
+      if (
+        parsed.type === "realm" &&
+        (await canActAsRealm(parsed.sourceId, id))
+      ) {
+        actorRealmId = parsed.sourceId;
+      }
+    }
+    const actorEntityId = actorRealmId
+      ? "entity:realm:" + actorRealmId
+      : "entity:user:" + id;
+
     // Prepare main post insert
     const postInsertQuery = `
       INSERT INTO newsfeed_post (
         post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
-        is_shared, file_type, caption, content_type, is_tagged, privacy_status, author_realm_id, is_archived
+        is_shared, file_type, caption, content_type, is_tagged, privacy_status, actor_entity_id, acted_by_user_id, is_archived
       ) VALUES (
         $1, $2, $3, $4, $5, $6, to_timestamp($7),
-        $8, $9, $10, $11, $12, $13, $14, $15
+        $8, $9, $10, $11, $12, $13, $14, $15, $16
       );
     `;
     const postValues = [
@@ -431,7 +451,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.type.contentType,
       decodeToken.tagging.isTagged,
       decodeToken.privacy.status,
-      realm_id,
+      actorEntityId,
+      id, // acted_by_user (the human)
       false,
     ];
 
@@ -560,7 +581,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       const insertPreviewCountsQuery = `
         INSERT INTO newsfeed_previewcount (preview_id, post_id, emoji_id, count)
-        SELECT uuid_generate_v4(), $1, emoji_id, 0
+        SELECT gen_random_uuid(), $1, emoji_id, 0
         FROM newsfeed_emoji;
       `;
 
@@ -569,8 +590,8 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       // const insertActivityCount = `
       //   INSERT INTO newsfeed_activitycount (count_id, count_type, count, post_id)
       //   VALUES
-      //   (uuid_generate_v4(), 'share', 0, $1),
-      //   (uuid_generate_v4(), 'comment', 0, $1);
+      //   (gen_random_uuid(), 'share', 0, $1),
+      //   (gen_random_uuid(), 'comment', 0, $1);
       // `;
 
       // await client.query(insertActivityCount, [postID]);

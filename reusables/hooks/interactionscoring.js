@@ -99,7 +99,7 @@ const followerInteractionScoreBump = async (
     const { rows } = await pool.query(
       `
       SELECT * FROM community_realmfollow
-      WHERE follower_id = $1 AND realm_id = $2;
+      WHERE actor_entity_id = 'entity:user:' || $1 AND realm_id = $2;
     `,
       [actorID, receiverID],
     );
@@ -113,7 +113,7 @@ const followerInteractionScoreBump = async (
             SET 
                 interaction_score = interaction_score + $1,
                 last_interaction_at = $2
-            WHERE follower_id = $3 AND realm_id = $4;
+            WHERE actor_entity_id = 'entity:user:' || $3 AND realm_id = $4;
             `,
         [change, now, actorID, receiverID],
       );

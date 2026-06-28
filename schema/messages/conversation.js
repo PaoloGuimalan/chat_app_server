@@ -26,6 +26,14 @@ const conversation = mongoose.Schema(
         type: mongoose.Schema.Types.Mixed,
       },
     ],
+    // Entity-id participants (entity:user:<id> / entity:realm:<realm_id>).
+    // For user<->realm DMs this is the source of truth for who the thread is
+    // between; participant_ids stays as the flat human list for back-compat.
+    participant_entity_ids: [
+      {
+        type: String,
+      },
+    ],
     last_message: {
       messageID: { type: mongoose.Schema.Types.Mixed, default: null },
       sender: { type: mongoose.Schema.Types.Mixed, default: null },
