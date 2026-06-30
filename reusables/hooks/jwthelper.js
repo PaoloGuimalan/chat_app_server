@@ -50,7 +50,7 @@ const jwtchecker = async (req, res, next) => {
       } else {
         const id = decode.userID;
         const { rows } = await pool.query(
-          "SELECT id, username FROM user_account WHERE id = $1",
+          "SELECT id, username, entity_id FROM user_account WHERE id = $1",
           [id],
         );
 
@@ -77,7 +77,7 @@ const jwtchecker = async (req, res, next) => {
 
           const session_result = await UserSessions.findOne({
             deviceToken: deviceToken,
-            userID: currentRow.id,
+            userID: decode.entity_id,
           });
 
           if (!session_result) {
@@ -92,6 +92,7 @@ const jwtchecker = async (req, res, next) => {
           req.params.id = currentRow.id;
           req.params.username = currentRow.username;
           req.params.deviceToken = deviceToken;
+          req.params.entity_id = decode.entity;
           next();
         } else {
           res.send({ status: false, message: "Cannot verify user!" });
@@ -125,7 +126,7 @@ const jwtssechecker = (req, res, next) => {
         } else {
           const id = decode.userID;
           const { rows } = await pool.query(
-            "SELECT id, username FROM user_account WHERE id = $1",
+            "SELECT id, username, entity_id FROM user_account WHERE id = $1",
             [id],
           );
 
@@ -134,6 +135,7 @@ const jwtssechecker = (req, res, next) => {
             req.params.userID = currentRow.id;
             req.params.username = currentRow.username;
             req.params.deviceToken = deviceToken;
+            req.params.entity_id = decode.entity;
             next();
           } else {
             res.sse(type, {

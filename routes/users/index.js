@@ -585,30 +585,15 @@ router.post("/requestContact", jwtchecker, async (req, res) => {
 
 router.post("/readnotifications", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
 
-  if (userID) {
+  if (entity_id) {
     await UserNotifications.updateMany(
-      { toUserID: userID, isRead: false },
+      { toUserID: entity_id, isRead: false },
       { isRead: true },
     )
       .then(async (result) => {
-        ReloadUserNotification(userID, "Notifications has been read");
-        // publish(`events_${userID}`, "reload_user_notification", {
-        //   parameters: {
-        //     id: userID,
-        //     details: "Notifications has been read",
-        //   },
-        // });
-        // await producer.publishMessage(
-        //   "INFO:CHATTERLOOP",
-        //   "reload_user_notification",
-        //   {
-        //     parameters: {
-        //       id: userID,
-        //       details: "Notifications has been read",
-        //     },
-        //   }
-        // );
+        ReloadUserNotification(entity_id, "Notifications has been read");
         res.send({ status: true, message: "Notifications has been read" });
       })
       .catch((err) => {
@@ -625,14 +610,15 @@ router.post("/readnotifications", jwtchecker, async (req, res) => {
 
 router.get("/getNotifications", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
   const page = req.headers["page"];
   const range = req.headers["range"];
-  const UnreadNotificationsTotal = await CountAllUnreadNotifications(userID);
+  const UnreadNotificationsTotal = await CountAllUnreadNotifications(entity_id);
 
   await UserNotifications.aggregate([
     {
       $match: {
-        toUserID: userID,
+        toUserID: entity_id,
       },
     },
     {
@@ -660,7 +646,7 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       const uniqueIDs = [...new Set(userIDs)];
 
       const { rows } = await pool.query(
-        "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE id = ANY($1);",
+        "SELECT id, username, gender, profile, is_active, is_verified FROM user_account WHERE entity_id = ANY($1);",
         [uniqueIDs],
       );
 
@@ -2646,28 +2632,31 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   }
 });
 
-const getContactsForSession = async (userID) => {
+const getContactsForSession = async (entity_id) => {
   const sql = `
     SELECT DISTINCT ON (c.connection_id) c.*,
-    a1.id AS action_by_id,
-    a2.id AS involved_user_id
+    a1.entity_id AS action_by_id,
+    a2.entity_id AS involved_entity_id
     FROM user_connection c
-    JOIN user_account a1 ON c.action_by_id = a1.id
-    JOIN user_account a2 ON c.involved_user_id = a2.id
+    -- Fix: Join using the account's related entity_id field instead of the account primary key
+    JOIN user_account a1 ON c.action_by_id = a1.entity_id
+    JOIN user_account a2 ON c.involved_entity_id = a2.entity_id
     WHERE 
-      (a1.id = $1 OR a2.id = $1)
-      AND c.action_by_id <> c.involved_user_id
+      (a1.entity_id = $1 OR a2.entity_id = $1)
+      AND c.action_by_id <> c.involved_entity_id
       AND a1.is_active = TRUE
       AND a1.is_verified = TRUE
       AND a2.is_active = TRUE
       AND a2.is_verified = TRUE
-      AND c.status = TRUE;
+      AND c.status = TRUE
+    -- Note: DISTINCT ON requires an ORDER BY clause starting with the same expression
+    ORDER BY c.connection_id, c.action_date DESC;
   `;
 
-  const { rows } = await pool.query(sql, [userID]);
+  const { rows } = await pool.query(sql, [entity_id]);
   const flattenedRows = rows.map((mp) => {
-    if (mp.action_by_id == userID) {
-      return mp.involved_user_id;
+    if (mp.action_by_id == entity_id) {
+      return mp.involved_entity_id;
     } else {
       return mp.action_by_id;
     }
@@ -2705,7 +2694,7 @@ const checkSessionID = async (currentID, deviceToken) => {
     });
 };
 
-const setUserSession = async (userID, deviceToken, status, resolve) => {
+const setUserSession = async (entityID, deviceToken, status, resolve) => {
   const newSessionID = await checkSessionID(
     `SESSION_${makeID(20)}_${dateGetter()}`
       .split(" ")
@@ -2724,7 +2713,7 @@ const setUserSession = async (userID, deviceToken, status, resolve) => {
   };
 
   await UserSessions.updateOne(
-    { userID: userID, deviceToken: deviceToken },
+    { entityID: entityID, deviceToken: deviceToken },
     newSessionPayload,
   )
     .then((_) => {
@@ -2759,37 +2748,16 @@ router.get(
   [sse, jwtssechecker],
   async (req, res) => {
     const userID = req.params.userID;
+    const entity_id = req.params.entity_id;
     const deviceToken = req.params.deviceToken;
-    // const sseWithUserID = sseNotificationsWaiters[userID];
-    const contacts = await getContactsForSession(userID);
+    const contacts = await getContactsForSession(entity_id);
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
-    const redis_event = `events_${userID}`;
-
-    // if (sseWithUserID) {
-    //   sseNotificationsWaiters[userID] = {
-    //     response: [
-    //       ...sseWithUserID.response,
-    //       {
-    //         sessionstamp: sessionstamp,
-    //         res: res,
-    //       },
-    //     ],
-    //   };
-    // } else {
-    //   sseNotificationsWaiters[userID] = {
-    //     response: [
-    //       {
-    //         sessionstamp: sessionstamp,
-    //         res: res,
-    //       },
-    //     ],
-    //   };
-    // }
+    const redis_event = `events_${entity_id}`;
 
     listen(redis_event, res);
 
     const activeMetaData = {
-      _id: userID,
+      _id: entity_id,
       sessionStatus: true,
       sessiondate: {
         date: dateGetter(),
@@ -2797,7 +2765,7 @@ router.get(
       },
     };
 
-    setUserSession(userID, deviceToken, true, async () => {
+    setUserSession(entity_id, deviceToken, true, async () => {
       // console.log("CONNECTED", userID);
       contacts.map((mp) => {
         UpdateContactswSessionStatus(mp, activeMetaData);
@@ -2807,7 +2775,7 @@ router.get(
     req.on("close", () => {
       stop_listen(redis_event, res);
       const disconnectMetaData = {
-        _id: userID,
+        _id: entity_id,
         sessionStatus: false,
         sessiondate: {
           date: dateGetter(),
@@ -2815,12 +2783,12 @@ router.get(
         },
       };
 
-      setUserSession(userID, deviceToken, false, async () => {
+      setUserSession(entity_id, deviceToken, false, async () => {
         // console.log("DISCONNECTED", userID);
         // clearASingleSession(userID, sessionstamp);
 
         const session_result = await UserSessions.find({
-          userID: userID,
+          entityID: entity_id,
           status: true,
         });
 
@@ -2836,25 +2804,26 @@ router.get(
 
 router.get("/activecontacts", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
-  const contacts = await getContactsForSession(userID);
+  const entity_id = req.params.entity_id;
+  const contacts = await getContactsForSession(entity_id);
 
   // console.log(contacts)
 
   await UserSessions.aggregate([
     {
       $match: {
-        userID: { $in: contacts },
+        entityID: { $in: contacts },
       },
     },
     {
       $sort: {
-        userID: 1,
+        entityID: 1,
         lastSeen: -1,
       },
     },
     {
       $group: {
-        _id: "$userID",
+        _id: "$entityID",
         hasTrue: { $max: "$sessionStatus" },
         allSessions: { $push: "$$ROOT" },
       },
@@ -2888,16 +2857,16 @@ router.get("/activecontacts", jwtchecker, async (req, res) => {
     },
   ])
     .then((result) => {
-      const resultChecker = result.map((mp) => mp.userID);
+      const resultChecker = result.map((mp) => mp.entityID);
       const sessionFiller = contacts.map((mp) => {
         if (resultChecker.includes(mp)) {
           return {
-            ...result.filter((flt) => flt.userID == mp)[0],
+            ...result.filter((flt) => flt.entityID == mp)[0],
             sessiondate: {
-              date: result.filter((flt) => flt.userID == mp)[0].lastSeen,
+              date: result.filter((flt) => flt.entityID == mp)[0].lastSeen,
             },
-            _id: result.filter((flt) => flt.userID == mp)[0].userID,
-            sessionStatus: result.filter((flt) => flt.userID == mp)[0].status,
+            _id: result.filter((flt) => flt.entityID == mp)[0].entityID,
+            sessionStatus: result.filter((flt) => flt.entityID == mp)[0].status,
           };
         } else {
           return {

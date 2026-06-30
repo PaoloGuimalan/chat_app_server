@@ -13,31 +13,31 @@ const SSENotificationsTrigger = async (type, ids, details) => {
   // const sseWithUserIDRes = sseNotificationsWaiters[ids.sendToUser];
 
   // if (sseWithUserID) {
-    if (ids.sendFromUser) {
-      // console.log(ids.sendFromUser)
-      if (type == "info_contact_decline") {
-        NotificicationTrigger(ids.sendFromUser, details.actionlog);
-      } else if (type == "info_contact_accept") {
-        NotificicationTrigger(ids.sendFromUser, details.actionlog);
-        ContactListTrigger(ids.sendFromUser, details.actionlog);
-      } else if (type == "contact_request") {
-        NotificicationTrigger(ids.sendFromUser, details.actionlog);
-      }
+  if (ids.sendFromUser) {
+    // console.log(ids.sendFromUser)
+    if (type == "info_contact_decline") {
+      NotificicationTrigger(ids.sendFromUser, details.actionlog);
+    } else if (type == "info_contact_accept") {
+      NotificicationTrigger(ids.sendFromUser, details.actionlog);
+      ContactListTrigger(ids.sendFromUser, details.actionlog);
+    } else if (type == "contact_request") {
+      NotificicationTrigger(ids.sendFromUser, details.actionlog);
     }
+  }
   // }
 
   // if (sseWithUserIDRes) {
-    if (ids.sendToUser) {
-      // console.log(ids.sendToUser)
-      if (type == "info_contact_decline") {
-        NotificicationTrigger(ids.sendToUser, details.sendToDetails);
-      } else if (type == "info_contact_accept") {
-        NotificicationTrigger(ids.sendToUser, details.sendToDetails);
-        ContactListTrigger(ids.sendToUser, details.sendToDetails);
-      } else if (type == "contact_request") {
-        NotificicationTrigger(ids.sendToUser, details.sendToDetails);
-      }
+  if (ids.sendToUser) {
+    // console.log(ids.sendToUser)
+    if (type == "info_contact_decline") {
+      NotificicationTrigger(ids.sendToUser, details.sendToDetails);
+    } else if (type == "info_contact_accept") {
+      NotificicationTrigger(ids.sendToUser, details.sendToDetails);
+      ContactListTrigger(ids.sendToUser, details.sendToDetails);
+    } else if (type == "contact_request") {
+      NotificicationTrigger(ids.sendToUser, details.sendToDetails);
     }
+  }
   // }
 };
 
@@ -156,10 +156,10 @@ const MessagesTrigger = async (id, details, onseen) => {
 };
 
 const ReloadUserNotification = async (id, details) => {
-  const userID = id;
+  const entity_id = id;
   // const sseWithUserID = sseNotificationsWaiters[userID];
 
-  publish(`events_${userID}`, `notifications_reload`, {
+  publish(`events_${entity_id}`, `notifications_reload`, {
     status: true,
     auth: true,
     message: details,
@@ -173,7 +173,6 @@ const BroadcastIsTypingStatus = (receiver, data) => {
   var encodedResult = createJWTwExp({
     istyping: data,
   });
-
 
   publish(`events_${receiver}`, "istyping_broadcast", {
     status: true,

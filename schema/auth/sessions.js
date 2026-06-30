@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const sessions = mongoose.Schema({
   sessionID: { type: mongoose.Schema.Types.Mixed, require: true },
-  userID: { type: mongoose.Schema.Types.Mixed, require: true },
+  entityID: { type: mongoose.Schema.Types.Mixed, require: true },
   status: Boolean,
   userAgent: { type: mongoose.Schema.Types.Mixed, require: true },
   deviceType: { type: mongoose.Schema.Types.Mixed, require: true },
