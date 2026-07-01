@@ -13,14 +13,6 @@ const conversation = mongoose.Schema(
       default: "single", // single, group, server (channel), conference
       index: true,
     },
-    senderType: {
-      type: mongoose.Schema.Types.Mixed,
-      default: "user", // user, bot, realm
-    },
-    authorRealm: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null,
-    },
     participant_ids: [
       {
         type: mongoose.Schema.Types.Mixed,
@@ -45,4 +37,3 @@ conversation.index({
 });
 
 module.exports = mongoose.model("Conversation", conversation, "conversations");
-

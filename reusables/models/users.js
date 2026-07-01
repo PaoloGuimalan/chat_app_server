@@ -248,24 +248,24 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
   const { rows } = await pool.query(
     `
       SELECT
-        user_id,
+        entity_id,
         json_agg(DISTINCT connection_id) AS connection_ids
       FROM (
         SELECT
-          action_by_id AS user_id,
+          action_by_id AS entity_id,
           connection_id
         FROM user_connection
-        WHERE connection_id = ANY($1)
+        WHERE connection_id = ANY($1::TEXT[])
 
         UNION ALL
 
         SELECT
-          involved_user_id AS user_id,
+          involved_entity_id AS entity_id,
           connection_id
         FROM user_connection
-        WHERE connection_id = ANY($1)
+        WHERE connection_id = ANY($1::TEXT[])
       ) AS combined
-      GROUP BY user_id;
+      GROUP BY entity_id;
     `,
     [connectionIDs],
   );

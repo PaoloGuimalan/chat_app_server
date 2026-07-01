@@ -149,6 +149,7 @@ const checkEmailExisting = async (email) => {
 
 router.get("/jwtchecker", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
 
   const { rows } = await pool.query(
     "SELECT * FROM user_account WHERE id = $1",
@@ -160,6 +161,7 @@ router.get("/jwtchecker", jwtchecker, async (req, res) => {
     const usertoken = jwt.sign(
       {
         ...currentRow,
+        entity_id,
         password: null,
       },
       JWT_SECRET,

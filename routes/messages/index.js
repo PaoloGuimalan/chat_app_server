@@ -37,9 +37,7 @@ const {
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
-const {
-  GetUsersWithConnectionIDs,
-} = require("../../reusables/models/users");
+const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -764,6 +762,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
 
 router.get("/conversations", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
   const page = parseInt(req.headers["page"] || 1);
   const range = parseInt(req.headers["range"] || 20);
   const type = req.headers["type"] || "all";
@@ -778,7 +777,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
     };
 
     const match = {
-      participant_ids: { $in: [userID] },
+      participant_ids: { $in: [entity_id] },
     };
 
     if (type !== "all") {
@@ -803,7 +802,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$conversationID", "$$msg_conv_id"] },
-                    { $eq: ["$userID", userID] },
+                    { $eq: ["$entityID", entity_id] },
                   ],
                 },
               },
@@ -828,7 +827,10 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                   {
                     $cond: {
                       if: {
-                        $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                        $eq: [
+                          { $type: "$historySetting.cleared_at" },
+                          "string",
+                        ],
                       },
                       then: {
                         $dateFromString: {
@@ -920,7 +922,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                       $expr: {
                         $and: [
                           { $eq: ["$conversationID", "$$msg_conv_id"] },
-                          { $eq: ["$userID", userID] },
+                          { $eq: ["$entityID", entity_id] },
                         ],
                       },
                     },
@@ -947,7 +949,10 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                             {
                               $cond: {
                                 if: {
-                                  $eq: [{ $type: "$historySetting.cleared_at" }, "string"],
+                                  $eq: [
+                                    { $type: "$historySetting.cleared_at" },
+                                    "string",
+                                  ],
                                 },
                                 then: {
                                   $dateFromString: {
@@ -963,10 +968,13 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                       ],
                     },
                     {
-                      $ne: [{ $ifNull: ["$historySetting.isArchived", false] }, true],
+                      $ne: [
+                        { $ifNull: ["$historySetting.isArchived", false] },
+                        true,
+                      ],
                     },
                     {
-                      $not: [{ $in: [userID, "$seeners"] }],
+                      $not: [{ $in: [entity_id, "$seeners"] }],
                     },
                   ],
                 },
@@ -986,150 +994,122 @@ router.get("/conversations", jwtchecker, async (req, res) => {
       return acc;
     }, {});
 
+    const receiversEntity = [
+      ...new Set(
+        result
+          .filter((flt) => flt.conversationType === "single")
+          .flatMap((mp) => mp.receivers), // 1. Maps and flattens into a single array
+      ), // 2. "Set" instantly enforces distinct unique entries
+    ].filter((flt) => flt !== entity_id);
+
+    const realmsEntity = [
+      ...new Set(result.filter((flt) => flt.conversationType !== "single")),
+    ];
+
+    const { rows: realmRows } = await pool.query(
+      `
+      SELECT 
+        realm_id as id,
+        entity_id,
+        slug AS username,
+        name AS display_name,
+        COALESCE(profile, 'none') AS profile
+      FROM community_realm
+      WHERE entity_id = ANY($1::TEXT[]);
+    `,
+      [realmsEntity],
+    );
+
+    const { rows: accountRows } = await pool.query(
+      `
+        SELECT 
+          id,
+          entity_id,
+          username,
+          -- Concatenate first and last name safely with a separating space
+          TRIM(first_name || ' ' || last_name) AS display_name,
+          COALESCE(profile, 'none') AS profile
+        FROM user_account
+        WHERE entity_id = ANY($1::TEXT[]);
+      `,
+      [receiversEntity],
+    );
+
     const resultWithUnread = result.map((mp) => ({
       ...mp,
       unread: unreadMap[mp.conversationID] || 0,
     }));
 
-    const flattenedGroupsArray = resultWithUnread.map((mp) => mp.conversationID);
+    const accountMap = new Map(
+      accountRows
+        .filter((flt) => flt.entity_id !== entity_id)
+        .map((row) => [row.entity_id, row]),
+    );
 
-    const directConversations = resultWithUnread
-      .filter((flt) => flt.conversationType === "single")
-      .map((mp) => mp.conversationID);
+    // 2. Convert realm database rows into an O(1) lookup Map keyed by realm_id (aliased as 'id')
+    const realmMap = new Map(realmRows.map((row) => [row.id, row]));
 
-    const usersWCns =
-      directConversations.length > 0
-        ? await GetUsersWithConnectionIDs(directConversations)
-        : [];
-
-    const flattenedReceiversArray = usersWCns.map((mp) => mp.user_id).flat();
-    const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
-
-    const usersByConversationID = {};
-
-    for (const item of usersWCns) {
-      const { user_id, connection_ids } = item;
-
-      for (const connID of connection_ids) {
-        if (!usersByConversationID[connID]) {
-          usersByConversationID[connID] = [];
-        }
-        usersByConversationID[connID].push(user_id);
-      }
-    }
-
-    const { rows } =
-      removeDuplicateReceivers.length > 0
-        ? await pool.query(
-            `SELECT 
-                  id AS _id,
-                  username AS "userID",
-                  json_build_object(
-                    'firstName', first_name,
-                    'middleName', middle_name,
-                    'lastName', last_name
-                  ) AS fullname,
-                  COALESCE(profile, 'none') AS profile
-                FROM user_account
-                WHERE id = ANY($1);`,
-            [removeDuplicateReceivers],
-          )
-        : { rows: [] };
-
-    const { rows: group_rows } =
-      flattenedGroupsArray.length > 0
-        ? await pool.query(
-            `SELECT 
-                  json_build_object(
-                    '_id', cr.id,
-                    'serverID', cr.parent_id,
-                    'groupID', cr.realm_id,
-                    'profile', COALESCE(cr.profile, 'N/A'),
-                    'dateCreated', json_build_object(
-                      'date', '',
-                      'time', ''
-                    ),
-                    'createdBy', created_by.username,
-                    'type', cr.type,
-                    'privacy', cr.is_private,
-                    'groupName', cr.name
-                  ) AS groupdetails,
-                  
-                  CASE
-                    WHEN cr.parent_id IS NOT NULL THEN
-                      json_build_object(
-                        '_id', pr.id,
-                        'serverID', pr.realm_id,
-                        'serverName', pr.name,
-                        'profile', COALESCE(pr.profile, 'N/A'),
-                        'dateCreated', json_build_object(
-                          'date', '',
-                          'time', ''
-                        ),
-                        'members', (
-                          SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
-                          FROM community_member m
-                          JOIN user_account a ON m.account_id = a.id
-                          WHERE m.realm_id = pr.realm_id
-                        ),
-                        'createdBy', parent_created_by.username,
-                        'privacy', pr.is_private
-                      )
-                    ELSE NULL
-                  END AS serverdetails
-                FROM community_realm cr
-                LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-                LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-                LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
-                WHERE cr.realm_id = ANY($1);
-                `,
-            [flattenedGroupsArray],
-          )
-        : { rows: [] };
-
-    const finalResult = resultWithUnread.map((mp) => {
-      const involvedUserIDs = usersByConversationID[mp.conversationID] || [];
-
-      const details = group_rows.filter(
-        (flt) => flt.groupdetails.groupID === mp.conversationID,
-      );
-      const final_details = details.length > 0 ? details[0] : null;
-
-      let final_mp = mp;
-
-      if (final_details) {
-        final_mp = removeNullServerDetails({
-          ...final_mp,
-          ...final_details,
+    // 3. Hydrate the list of conversations
+    const hydratedConversations = resultWithUnread.map((conversation) => {
+      // --- CONDITION A: SINGLE CONVERSATION ---
+      if (conversation.conversationType === "single") {
+        // Map over participant_ids and append full user account details
+        const hydratedParticipants = (
+          conversation.receivers.filter((flt) => flt !== entity_id) || []
+        ).map((entityId) => {
+          return (
+            accountMap.get(entityId) || {
+              id: null,
+              entity_id: entityId,
+              username: "unknown",
+              display_name: "Unknown User",
+              profile: "none",
+            }
+          );
         });
+
+        return {
+          ...conversation,
+          details: { ...hydratedParticipants[0] }, // Appends user account arrays here
+        };
       }
 
-      return {
-        ...final_mp,
-        users: rows.filter((flt) => involvedUserIDs.includes(flt._id)),
-      };
+      // --- CONDITION B: NOT SINGLE (REALM / GROUP) CONVERSATION ---
+      if (conversation.conversationType !== "single") {
+        // Look up realm info by matching conversationID against the realm_id string
+        const matchedRealm = realmMap.get(conversation.conversationID) || {
+          id: conversation.conversationID,
+          entity_id: conversation.entity_id,
+          username: "unknown",
+          display_name: "Unknown Realm/Community",
+          profile: "none",
+        };
+
+        return {
+          ...conversation,
+          details: matchedRealm, // Appends the specific single realm details object
+        };
+      }
+
+      return conversation;
     });
 
     const finalResultWParticipants = await Promise.all(
-      finalResult.map(async (mp) => ({
+      hydratedConversations.map(async (mp) => ({
         ...mp,
         voice_participants: await getAllParticipants(mp.conversationID),
       })),
     );
 
-    const encodedResult = jwt.sign(
-      {
-        conversationslist: finalResultWParticipants,
+    res.send({
+      status: true,
+      message: "OK",
+      result: {
+        items: finalResultWParticipants,
         total,
         next,
       },
-      JWT_SECRET,
-      {
-        expiresIn: 60 * 60 * 24 * 7,
-      },
-    );
-
-    res.send({ status: true, message: "OK", result: encodedResult });
+    });
   } catch (err) {
     console.log(err);
     res.send({
