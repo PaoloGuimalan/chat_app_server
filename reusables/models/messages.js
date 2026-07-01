@@ -234,7 +234,7 @@ const NotificationMessageForConversations = async (
       );
 
       receivers.map((rcvs) => {
-        MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
+        MessagesTrigger(rcvs, { conversationID, entityID: sender }, false);
         ContactListTrigger(rcvs, `${userID} added you on a group chat`);
       });
     })

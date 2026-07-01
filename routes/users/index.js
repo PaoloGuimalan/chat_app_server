@@ -1723,7 +1723,7 @@ const sendMessageInitForGC = async (
 
       receivers.map((rcvs, i) => {
         // var sseWithUserID = sseNotificationsWaiters[rcvs];
-        MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
+        MessagesTrigger(rcvs, { conversationID, entityID: sender }, false);
         ContactListTrigger(rcvs, `${username} created a group chat`);
       });
     })
@@ -2333,7 +2333,7 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
           await SyncConversationLastMessage(conversationID)
             .then(() => {
               receivers.map((rcvs, i) => {
-                MessagesTrigger(rcvs, { conversationID, userID }, true);
+                MessagesTrigger(rcvs, { conversationID, entityID }, true);
               });
             })
             .catch((err) => {
@@ -2531,7 +2531,11 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
             settledFiles += 1;
             if (files.length === settledFiles) {
               receivers.map((rcvs, i) => {
-                MessagesTrigger(rcvs, { conversationID, userID }, false);
+                MessagesTrigger(
+                  rcvs,
+                  { conversationID, entityID: entity_id },
+                  false,
+                );
               });
             }
           },

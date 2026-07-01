@@ -85,7 +85,7 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
             entity,
             {
               conversationID: decodedToken.conversationID,
-              userID: userID,
+              entityID: entity_id,
               deletedMessageID: decodedToken.messageID,
             },
             false,
@@ -131,7 +131,10 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
         messageReceivers.users.map((user) => {
           MessagesTrigger(
             user.entityID,
-            { conversationID: decodedToken.conversationID, userID },
+            {
+              conversationID: decodedToken.conversationID,
+              entityID: entity_id,
+            },
             false,
           );
         });
@@ -466,6 +469,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
 router.post("/history", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entityID = req.params.entity_id;
   const id = req.params.id;
   const username = req.params.username;
 
@@ -506,7 +510,7 @@ router.post("/history", jwtchecker, async (req, res) => {
     }
 
     const updatedState = await ChatHistory.findOneAndUpdate(
-      { conversationID, userID },
+      { conversationID, entityID },
       { $set: updatePayload },
       { upsert: true, new: true },
     );
