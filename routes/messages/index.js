@@ -56,11 +56,12 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(decodedToken.conversationID, entity_id);
 
     UserMessage.updateOne(
       {
@@ -76,12 +77,12 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
           decodedToken.conversationID,
         );
         const parsedMessageReceivers = messageReceivers.users.map(
-          (mp) => mp.userID,
+          (mp) => mp.entityID,
         );
 
-        parsedMessageReceivers.map((user) => {
+        parsedMessageReceivers.map((entity) => {
           MessagesTrigger(
-            user,
+            entity,
             {
               conversationID: decodedToken.conversationID,
               userID: userID,
@@ -108,11 +109,12 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(decodedToken.conversationID, entity_id);
 
     UserMessage.updateOne(
       {
@@ -122,14 +124,13 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
       { $push: { reactions: decodedToken.newreaction } },
     )
       .then(async (result) => {
-        const messageReceivers = await GetMessageReceivers(
+        const messageReceivers = await GetAllReceivers(
           decodedToken.conversationID,
-          decodedToken.messageID,
         );
 
-        messageReceivers.map((user) => {
+        messageReceivers.users.map((user) => {
           MessagesTrigger(
-            user,
+            user.entityID,
             { conversationID: decodedToken.conversationID, userID },
             false,
           );
@@ -214,7 +215,8 @@ router.get(
       const type = req.params.type;
 
       if (type === "single") {
-        const chatHistory = await ChatHistory.findOne({
+        let chatHistory = null;
+        chatHistory = await ChatHistory.findOne({
           conversationID: conversationID,
           entityID: entity_id,
         });
@@ -223,6 +225,26 @@ router.get(
           "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
           [conversationID],
         );
+
+        const receivers = await GetAllReceivers(conversationID);
+
+        if (!chatHistory) {
+          receivers.users.map((mp) => {
+            const newChatHistory = new ChatHistory({
+              conversationID: conversationID,
+              entityID: mp.entityID,
+              cleared_at: null,
+              isArchived: false,
+              isRestricted: false,
+            });
+
+            newChatHistory.save();
+
+            if (entity_id === mp.entityID) {
+              chatHistory = newChatHistory;
+            }
+          });
+        }
 
         const formattedResult = formatConnectionData(rows);
 
@@ -261,13 +283,39 @@ router.get(
         }
 
         const resolvedConversationID = realmRows[0].realm_id;
-        const chatHistory = await ChatHistory.findOne({
+
+        let chatHistory = null;
+
+        chatHistory = await ChatHistory.findOne({
           conversationID: resolvedConversationID,
           entityID: entity_id,
         });
 
-        const result = await getRealmWithUsers(resolvedConversationID, userID);
+        const result = await getRealmWithUsers(
+          resolvedConversationID,
+          entity_id,
+        );
         const formattedResult = formatToDesiredStructure(result);
+
+        const receivers = await GetAllReceivers(conversationID);
+
+        if (!chatHistory) {
+          receivers.users.map((mp) => {
+            const newChatHistory = new ChatHistory({
+              conversationID: conversationID,
+              entityID: mp.entityID,
+              cleared_at: null,
+              isArchived: false,
+              isRestricted: false,
+            });
+
+            newChatHistory.save();
+
+            if (entity_id === mp.entityID) {
+              chatHistory = newChatHistory;
+            }
+          });
+        }
 
         UploadedFiles.find({ foreignID: resolvedConversationID })
           .then((result) => {
@@ -297,17 +345,18 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const receiversfetch = await GetAllReceivers(decodedToken.conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
     // const receivers = decodedToken.receivers;
 
-    await isRealmMember(decodedToken.conversationID, id);
+    await isRealmMember(decodedToken.conversationID, entity_id);
 
     receivers.map((mp) => {
-      if (mp !== userID) {
+      if (mp !== entity_id) {
         BroadcastIsTypingStatus(mp, {
           userID: userID,
           conversationID: decodedToken.conversationID,

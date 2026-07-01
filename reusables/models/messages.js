@@ -55,7 +55,7 @@ const GetMessageReceivers = async (conversationID, messageID) => {
 
 const AddNewMemberToContacts = async (
   contactID,
-  userID,
+  entityID,
   added_by_id = null,
 ) => {
   const member_id = uuidv4(); // generate a unique UUID for member_id
@@ -63,14 +63,14 @@ const AddNewMemberToContacts = async (
 
   const query = `
     INSERT INTO community_member
-    (member_id, account_id, nickname, realm_id, added_by_id, date_joined, role)
+    (member_id, entity_id, nickname, realm_id, added_by_id, date_joined, role)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    ON CONFLICT (account_id, realm_id) DO NOTHING;
+    ON CONFLICT (entity_id, realm_id) DO NOTHING;
   `;
 
   const params = [
     member_id,
-    userID,
+    entityID,
     null,
     contactID,
     added_by_id,

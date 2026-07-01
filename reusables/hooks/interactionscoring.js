@@ -36,8 +36,8 @@ const interactionScoreBump = async (
     const { rows } = await pool.query(
       `
       SELECT * FROM user_connection
-      WHERE (action_by_id = $1 AND involved_user_id = $2)
-         OR (action_by_id = $2 AND involved_user_id = $1);
+      WHERE (action_by_id = $1 AND involved_entity_id = $2)
+         OR (action_by_id = $2 AND involved_entity_id = $1);
     `,
       [actorID, receiverID],
     );

@@ -990,6 +990,7 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
   const token = req.body.token;
 
   try {
@@ -1000,18 +1001,18 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
     const messageID = await checkExistingMessageID(makeID(30));
     const conversationID = decodedToken.conversationID;
 
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entity_id);
 
-    const sender = userID;
+    const sender = entity_id;
     const receiversfetch = await GetAllReceivers(conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
 
     const mentionedUsernames = extractMentionUsernames(decodedToken.content);
 
     const receiverMap = new Map(
       receiversfetch.users.map((rcv) => [
         String(rcv.username).toLowerCase(),
-        rcv.userID,
+        rcv.entityID,
       ]),
     );
 
@@ -1027,14 +1028,14 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
         : await GetRealmName(conversationID);
 
     const mentioner = {
-      userID: sender,
+      entityID: sender,
       username: `@${username}`,
       realmName: realmName,
       isSingle: decodedToken.conversationType === "single",
     };
 
     // const seeners = [userID]; //Array
-    const seeners = [userID]; //Array
+    const seeners = [entity_id]; //Array
     const content = decodedToken.content;
     // const messageDate = {
     //   date: dateGetter(),
@@ -1109,13 +1110,13 @@ router.post("/sendMessage", jwtchecker, async (req, res) => {
             rcvs,
             {
               conversationID,
-              userID: sender,
+              entityID: sender,
               mentioner: isMentioned ? mentioner : null,
             },
             false,
           );
         });
-        bumpChatScore(conversationID, receivers, id);
+        bumpChatScore(conversationID, receivers, entity_id);
       })
       .catch((err) => {
         console.log(err);
@@ -1587,7 +1588,7 @@ router.get(
         const { rows } = await pool.query(
           `SELECT 
               id AS _id,
-              entity_id AS entityID,
+              entity_id AS "entityID",
               username,
               id AS "userID",
               json_build_object(
@@ -2370,7 +2371,7 @@ const checkExistingFileID = async (checkID) => {
 
 const uploadMessage = async (
   mp,
-  userID,
+  entityID,
   conversationID,
   receivers,
   isReply,
@@ -2389,7 +2390,7 @@ const uploadMessage = async (
     );
 
     await saveFileMessage(
-      userID,
+      entityID,
       messageID,
       mp.pendingID,
       mp.conversationID,
@@ -2417,7 +2418,7 @@ const uploadMessage = async (
 };
 
 const saveFileMessage = async (
-  userID,
+  entityID,
   messageID,
   pendingID,
   conversationID,
@@ -2429,8 +2430,8 @@ const saveFileMessage = async (
   conversationType,
   onComplete,
 ) => {
-  // const seeners = [userID]; //Array
-  const seeners = [userID]; //Array
+  // const seeners = [entityID]; //Array
+  const seeners = [entityID]; //Array
   // const messageDate = {
   //   date: dateGetter(),
   //   time: timeGetter(),
@@ -2443,7 +2444,7 @@ const saveFileMessage = async (
     messageID: messageID,
     conversationID: conversationID,
     pendingID: pendingID,
-    sender: userID,
+    sender: entityID,
     receivers: [], // receivers
     seeners: seeners,
     content: content,
@@ -2478,7 +2479,7 @@ const saveFileMessage = async (
         null,
         receivers,
         messageID,
-        userID,
+        entityID,
         content,
         new Date(),
         messageType,
@@ -2495,6 +2496,7 @@ const saveFileMessage = async (
 router.post("/sendFiles", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
   const token = req.body.token;
 
   try {
@@ -2502,7 +2504,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
 
     const conversationID = decodeToken.conversationID;
     const receiversfetch = await GetAllReceivers(conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
     // const receivers = decodeToken.receivers;
     const files = decodeToken.files;
     const isReply = decodeToken.isReply;
@@ -2511,7 +2513,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
       decodeToken.conversationType,
     );
 
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entity_id);
 
     let settledFiles = 0;
 
@@ -2519,7 +2521,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
       files.map((mp) => {
         uploadMessage(
           mp,
-          userID,
+          entity_id,
           conversationID,
           receivers,
           isReply,
@@ -2548,7 +2550,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
       },
     );
 
-    bumpChatScore(conversationID, receivers, id);
+    bumpChatScore(conversationID, receivers, entity_id);
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
