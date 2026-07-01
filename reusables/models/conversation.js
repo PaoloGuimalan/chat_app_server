@@ -1,6 +1,6 @@
 const UserMessage = require("../../schema/messages/message");
 
-const GetAllMessageCountInAConversation = async (userID, conversationID) => {
+const GetAllMessageCountInAConversation = async (entityID, conversationID) => {
   const result = await UserMessage.aggregate([
     {
       $match: {
@@ -18,7 +18,7 @@ const GetAllMessageCountInAConversation = async (userID, conversationID) => {
               $expr: {
                 $and: [
                   { $eq: ["$conversationID", "$$msg_conv_id"] },
-                  { $eq: ["$userID", userID] },
+                  { $eq: ["$entityID", entityID] },
                 ],
               },
             },

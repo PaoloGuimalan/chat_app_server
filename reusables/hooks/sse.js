@@ -143,10 +143,10 @@ function removeNullServerDetails(obj) {
 }
 
 const MessagesTrigger = async (id, details, onseen) => {
-  const userID = id;
-  // const sseWithUserID = sseNotificationsWaiters[userID];
+  const entityID = id;
+  // const sseWithentityID = sseNotificationsWaiters[entityID];
 
-  publish(`events_${userID}`, "messages_list", {
+  publish(`events_${entityID}`, "messages_list", {
     status: true,
     auth: true,
     onseen: onseen,

@@ -136,6 +136,7 @@ function formatConnectionData(rows) {
 
       connection.usersWithInfo.push({
         _id: row.involved_user_id,
+        entityID: row.entity_id,
         userID: row.username,
         fullname: {
           firstName: row.first_name,
@@ -189,6 +190,7 @@ function formatToDesiredStructure(input) {
     },
     usersWithInfo: input.usersWithInfo.map((u) => ({
       _id: u._id,
+      entityID: u.entityID,
       userID: u.userID,
       fullname: u.fullname,
       profile: u.profile,

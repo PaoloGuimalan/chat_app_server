@@ -130,6 +130,7 @@ const {
   GetListOfContactsV2,
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
+  CreateEntity,
 } = require("../../reusables/models/users");
 const {
   isRealmMember,
@@ -1446,11 +1447,12 @@ router.get(
   jwtchecker,
   async (req, res) => {
     const userID = req.params.userID;
+    const entity_id = req.params.entity_id;
     const conversationID = req.params.conversationID;
     const page = req.headers["page"];
     const range = req.headers["range"];
     const totalmessages = await GetAllMessageCountInAConversation(
-      userID,
+      entity_id,
       conversationID,
     );
 
@@ -1461,8 +1463,8 @@ router.get(
 
     if (realm_row.length > 0) {
       const { rows: is_member } = await pool.query(
-        `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
-        [userID, conversationID],
+        `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
+        [entity_id, conversationID],
       );
 
       if (is_member.length <= 0) {
@@ -1491,7 +1493,7 @@ router.get(
                 $expr: {
                   $and: [
                     { $eq: ["$conversationID", "$$msg_conv_id"] },
-                    { $eq: ["$userID", userID] }, // 'userID' of the requesting user
+                    { $eq: ["$entityID", entity_id] }, // 'userID' of the requesting user
                   ],
                 },
               },
@@ -1573,7 +1575,7 @@ router.get(
         const flattenedUsersInReactions = message
           .map((mp) => {
             if (mp.reactions) {
-              const reactionUsers = mp.reactions.map((mpp) => mpp.userID);
+              const reactionUsers = mp.reactions.map((mpp) => mpp.entityID);
 
               return reactionUsers;
             }
@@ -1585,6 +1587,7 @@ router.get(
         const { rows } = await pool.query(
           `SELECT 
               id AS _id,
+              entity_id AS entityID,
               username,
               id AS "userID",
               json_build_object(
@@ -1596,7 +1599,7 @@ router.get(
               is_active AS "isActivated",
               is_verified AS "isVerified"
             FROM user_account
-            WHERE id = ANY($1);`,
+            WHERE entity_id = ANY($1);`,
           [removeDuplicateReactors],
         );
 
@@ -1608,7 +1611,7 @@ router.get(
             if (reactions.length > 0) {
               messageDocument.reactionsWithInfo = reactions.map((mp) => {
                 const returnedRow = rows.filter(
-                  (flt) => flt.userID === mp.userID,
+                  (flt) => flt.entityID === mp.entityID,
                 );
 
                 if (returnedRow.length > 0) {
@@ -1651,7 +1654,7 @@ router.get(
 
 const sendMessageInitForGC = async (
   convID,
-  userID,
+  entityID,
   username,
   recs,
   message,
@@ -1659,9 +1662,9 @@ const sendMessageInitForGC = async (
 ) => {
   const messageID = await checkExistingMessageID(makeID(30));
   const conversationID = convID;
-  const sender = userID;
+  const sender = entityID;
   const receivers = recs; //Array
-  const seeners = [userID]; //Array
+  const seeners = [entityID]; //Array
   const content = `${username} ${message}`;
   const messageDate = {
     date: dateGetter(),
@@ -1720,7 +1723,7 @@ const sendMessageInitForGC = async (
       receivers.map((rcvs, i) => {
         // var sseWithUserID = sseNotificationsWaiters[rcvs];
         MessagesTrigger(rcvs, { conversationID, userID: sender }, false);
-        ContactListTrigger(rcvs, `${userID} created a group chat`);
+        ContactListTrigger(rcvs, `${username} created a group chat`);
       });
     })
     .catch((err) => {
@@ -1730,6 +1733,7 @@ const sendMessageInitForGC = async (
 
 router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
   const id = req.params.id;
   const username = req.params.username;
   const token = req.body.token;
@@ -1743,21 +1747,21 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     const otherUsers = decodeToken.otherUsers;
     const groupName = decodeToken.groupName;
     const privacy = decodeToken.privacy;
-    const allReceivers = [userID, ...otherUsers];
+    const allReceivers = [entity_id, ...otherUsers];
     const userReceivers = allReceivers.map((alr, i) => ({
-      userID: alr,
+      entityID: alr,
     }));
 
     const { rows } = await client.query(
-      `SELECT id from user_account WHERE id = ANY($1)`,
-      [userReceivers.map((mp) => mp.userID)],
+      `SELECT entity_id from user_account WHERE entity_id = ANY($1)`,
+      [userReceivers.map((mp) => mp.entityID)],
     );
 
     const insertValues = [];
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rows.forEach(({ entity_id: accountId }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1765,21 +1769,23 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
       params.push(accountId); // account FK
       params.push(contactID); // pass your realm ID here
-      params.push(id); // who added this member (account FK)
+      params.push(entity_id); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      if (accountId === id) {
+      if (accountId === entity_id) {
         params.push("admin"); // member role
       } else {
         params.push("member"); // member role
       }
     });
 
+    realm_entity_id = await CreateEntity("realm");
+
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score, created_at, is_temporary
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score, created_at, is_temporary, entity_id
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), false
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), false, $12
       )`,
       [
         contactID,
@@ -1787,18 +1793,19 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
         groupName,
         "N/A",
         "group",
-        id,
+        entity_id,
         null,
         true,
         privacy,
         false,
         0,
+        realm_entity_id,
       ],
     );
 
     await client.query(
       `
-        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined, role)
+        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role)
         VALUES ${insertValues.join(", ")}
       `,
       params,
@@ -1806,13 +1813,21 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
 
     await client.query("COMMIT");
 
-    // const newGroup = new UserGroups(groupParams);
-    // newGroup
-    //   .save()
-    //   .then(async () => {
+    allReceivers.map((mp) => {
+      const newChatHistory = new ChatHistory({
+        conversationID: contactID,
+        entityID: mp,
+        cleared_at: null,
+        isArchived: false,
+        isRestricted: false,
+      });
+
+      newChatHistory.save();
+    });
+
     sendMessageInitForGC(
       contactID,
-      userID,
+      entity_id,
       username,
       allReceivers,
       "created the group chat",
@@ -1820,24 +1835,6 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
     );
 
     res.send({ status: true, message: `You created a Group Chat` });
-    // })
-    // .catch((err) => {
-    //   res.send({
-    //     status: false,
-    //     message: "Creating a group encountered an error!",
-    //   });
-    //   console.log(err);
-    // });
-
-    // res.send({ status: true, message: `You created a Group Chat` })
-    // })
-    // .catch((err) => {
-    //   res.send({
-    //     status: false,
-    //     message: "Creating a group contact encountered an error!",
-    //   });
-    //   console.log(err);
-    // });
   } catch (ex) {
     await client.query("ROLLBACK");
     res.send({ status: false, message: "Group token encountered an error!" });
@@ -2300,6 +2297,7 @@ router.post("/createpage", jwtchecker, async (req, res) => {
 
 router.post("/seenNewMessages", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entityID = req.params.entity_id;
   const token = req.body.token;
   const range = req.headers["range"];
 
@@ -2311,10 +2309,8 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     const conversationID = decodeToken.conversationID;
     const messageIDs = decodeToken.messageIDs;
     const receiversfetch = await GetAllReceivers(conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.userID); //Array decodedToken.receivers
+    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
     // const receivers = decodeToken.receivers;
-
-    // console.log(receivers)
 
     UserMessage.updateMany(
       {
@@ -2325,7 +2321,7 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
         // },
       },
       {
-        $addToSet: { seeners: userID },
+        $addToSet: { seeners: entityID },
         // $push: {
         //   seeners: userID,
         // },

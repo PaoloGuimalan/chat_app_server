@@ -1,5 +1,6 @@
 const UserContacts = require("../../schema/users/contacts");
 const pool = require("../../reusables/database/postgres");
+const crypto = require("crypto");
 
 const GetListOfContacts = async (userID) => {
   return await UserContacts.aggregate([
@@ -273,10 +274,40 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
   return rows;
 };
 
+async function CreateEntity(type) {
+  // Validate incoming parameter safely before sending to the database instance
+  if (!type) {
+    throw new Error(
+      "Entity classification type parameter is strictly required.",
+    );
+  }
+
+  const queryText = `
+    INSERT INTO entity_entity (id, type, created_at)
+    VALUES ($1, $2, NOW())
+    RETURNING id, type, created_at;
+  `;
+
+  // Explicitly generate a UUID v4 string to match Django's model default action pattern
+  const entityId = crypto.randomUUID();
+  const values = [entityId, type];
+
+  try {
+    const { rows } = await pool.query(queryText, values);
+
+    // Returns the newly generated row object index directly
+    return rows[0].id;
+  } catch (error) {
+    console.error("Database layer failure creating entity row:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   GetListOfContacts,
   GetListOfContactsV2,
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
   GetRankedUsersInConnections,
+  CreateEntity,
 };

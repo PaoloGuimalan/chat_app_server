@@ -38,6 +38,7 @@ const {
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
 const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
+const conversation = require("../../schema/messages/conversation");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -147,7 +148,7 @@ router.post("/addreaction", jwtchecker, async (req, res) => {
   }
 });
 
-async function getRealmWithUsers(realmId, userID) {
+async function getRealmWithUsers(realmId, entityID) {
   const query = `
     SELECT jsonb_build_object(
       'id', cr.id,
@@ -164,19 +165,20 @@ async function getRealmWithUsers(realmId, userID) {
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm_admin
-        WHERE cm_admin.account_id = $2
+        WHERE cm_admin.entity_id = $2
           AND cm_admin.realm_id = cr.realm_id
           AND cm_admin.role = 'admin'
       ),
       'is_member', EXISTS (
         SELECT 1
         FROM community_member cm_member
-        WHERE cm_member.account_id = $2
+        WHERE cm_member.entity_id = $2
           AND cm_member.realm_id = cr.realm_id
       ),
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
           '_id', ua.id,
+          'entityID', ua.entity_id,
           'userID', ua.username,
           'fullname', jsonb_build_object(
             'firstName', ua.first_name,
@@ -192,12 +194,12 @@ async function getRealmWithUsers(realmId, userID) {
     ) AS realm_with_users
     FROM community_realm cr
     LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
-    LEFT JOIN user_account ua ON cm.account_id = ua.id
+    LEFT JOIN user_account ua ON cm.entity_id = ua.entity_id
     WHERE cr.realm_id = $1
     GROUP BY cr.id;
   `;
 
-  const { rows } = await pool.query(query, [realmId, userID]);
+  const { rows } = await pool.query(query, [realmId, entityID]);
   return rows.length ? rows[0].realm_with_users : null;
 }
 
@@ -207,17 +209,18 @@ router.get(
   async (req, res) => {
     try {
       const userID = req.params.userID;
+      const entity_id = req.params.entity_id;
       const conversationID = req.params.conversationID;
       const type = req.params.type;
 
       if (type === "single") {
         const chatHistory = await ChatHistory.findOne({
           conversationID: conversationID,
-          userID: userID,
+          entityID: entity_id,
         });
 
         const { rows } = await pool.query(
-          "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.id = uc.involved_user_id WHERE uc.connection_id = $1;",
+          "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
           [conversationID],
         );
 
@@ -260,7 +263,7 @@ router.get(
         const resolvedConversationID = realmRows[0].realm_id;
         const chatHistory = await ChatHistory.findOne({
           conversationID: resolvedConversationID,
-          userID: userID,
+          entityID: entity_id,
         });
 
         const result = await getRealmWithUsers(resolvedConversationID, userID);
@@ -1004,7 +1007,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
 
     const realmsEntity = [
       ...new Set(result.filter((flt) => flt.conversationType !== "single")),
-    ];
+    ].map((mp) => mp.conversationID);
 
     const { rows: realmRows } = await pool.query(
       `
@@ -1015,7 +1018,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
         name AS display_name,
         COALESCE(profile, 'none') AS profile
       FROM community_realm
-      WHERE entity_id = ANY($1::TEXT[]);
+      WHERE realm_id = ANY($1::TEXT[]);
     `,
       [realmsEntity],
     );
@@ -1109,6 +1112,169 @@ router.get("/conversations", jwtchecker, async (req, res) => {
         total,
         next,
       },
+    });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error generating conversations list",
+    });
+  }
+});
+
+router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
+  const conversationID = req.params.conversationID;
+
+  try {
+    const baseConversation = await Conversations.findOne({
+      conversationID: conversationID,
+    }).lean();
+
+    const result = baseConversation ? [baseConversation] : [];
+
+    const receiversEntity = await GetAllReceivers(conversationID);
+    const users = receiversEntity.users;
+    const recipients = receiversEntity.users
+      .map((mp) => mp.entityID)
+      .filter((flt) => flt !== entity_id);
+
+    const realmsEntity = [conversationID];
+
+    const { rows: realmRows } = await pool.query(
+      `
+      SELECT 
+        realm_id as id,
+        entity_id,
+        slug AS username,
+        name AS display_name,
+        is_private AS privacy,
+        COALESCE(profile, 'none') AS profile
+      FROM community_realm
+      WHERE realm_id = ANY($1::TEXT[]);
+    `,
+      [realmsEntity],
+    );
+
+    const { rows: accountRows } = await pool.query(
+      `
+        SELECT 
+          id,
+          entity_id,
+          username,
+          FALSE AS privacy,
+          -- Concatenate first and last name safely with a separating space
+          TRIM(first_name || ' ' || last_name) AS display_name,
+          COALESCE(profile, 'none') AS profile
+        FROM user_account
+        WHERE entity_id = ANY($1::TEXT[]);
+      `,
+      [receiversEntity.users.map((mp) => mp.entityID)],
+    );
+
+    const accountMap = new Map(
+      accountRows
+        .filter((flt) => flt.entity_id !== entity_id)
+        .map((row) => [row.entity_id, row]),
+    );
+
+    // 2. Convert realm database rows into an O(1) lookup Map keyed by realm_id (aliased as 'id')
+    const realmMap = new Map(realmRows.map((row) => [row.id, row]));
+
+    // considered as single new conversation
+    if (users.length > 0 && realmRows.length === 0) {
+      const details = (recipients || []).map((entityId) => {
+        return (
+          accountMap.get(entityId) || {
+            id: null,
+            entity_id: entityId,
+            username: "unknown",
+            display_name: "Unknown User",
+            profile: "none",
+          }
+        );
+      });
+
+      const final = {
+        conversationID: conversationID,
+        conversationType: "single",
+        participant_ids: receiversEntity.users.map((mp) => mp.entityID),
+        last_message: null,
+        createdAt: null,
+        updatedAt: null,
+        details: details[0],
+        voice_participants: await getAllParticipants(conversationID),
+      };
+
+      res.send({
+        status: true,
+        message: "OK",
+        result: final,
+      });
+
+      return;
+    }
+
+    // 3. Hydrate the list of conversations
+    const hydratedConversations = result.map((conversation) => {
+      // --- CONDITION A: SINGLE CONVERSATION ---
+      if (conversation.conversationType === "single") {
+        // Map over participant_ids and append full user account details
+        const hydratedParticipants = (
+          conversation.receivers.filter((flt) => flt !== entity_id) || []
+        ).map((entityId) => {
+          return (
+            accountMap.get(entityId) || {
+              id: null,
+              entity_id: entityId,
+              username: "unknown",
+              display_name: "Unknown User",
+              profile: "none",
+            }
+          );
+        });
+
+        return {
+          ...conversation,
+          details: { ...hydratedParticipants[0] }, // Appends user account arrays here
+        };
+      }
+
+      // --- CONDITION B: NOT SINGLE (REALM / GROUP) CONVERSATION ---
+      if (conversation.conversationType !== "single") {
+        // Look up realm info by matching conversationID against the realm_id string
+        const matchedRealm = realmMap.get(conversation.conversationID) || {
+          id: conversation.conversationID,
+          entity_id: conversation.entity_id,
+          username: "unknown",
+          display_name: "Unknown Realm/Community",
+          profile: "none",
+        };
+
+        return {
+          ...conversation,
+          details: matchedRealm, // Appends the specific single realm details object
+        };
+      }
+
+      return conversation;
+    });
+
+    const finalResultWParticipants = await Promise.all(
+      hydratedConversations.map(async (mp) => ({
+        ...mp,
+        voice_participants: await getAllParticipants(mp.conversationID),
+      })),
+    );
+
+    res.send({
+      status: true,
+      message: "OK",
+      result:
+        finalResultWParticipants.length > 0
+          ? finalResultWParticipants[0]
+          : null,
     });
   } catch (err) {
     console.log(err);
