@@ -294,7 +294,7 @@ const SyncConversationParticipants = async (conversationID) => {
   const participantIDs = [
     ...new Set(
       receiversfetch.users
-        .map((member) => member.userID)
+        .map((member) => member.entityID)
         .filter((memberID) => memberID),
     ),
   ];

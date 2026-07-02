@@ -581,14 +581,15 @@ router.get("/getservermembers/:serverID", jwtchecker, async (req, res) => {
 
 router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const realm_id = req.body.realm_id;
   const member_id = req.body.member_id;
   const new_role = req.body.new_role;
 
   try {
     const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
-      [id, realm_id, "admin"],
+      `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 AND role = $3;`,
+      [entityID, realm_id, "admin"],
     );
 
     if (row.length === 0) {
@@ -609,7 +610,7 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
     // event carries no member data — the client pulls the full list via API.
     try {
       const { rows: realmMembers } = await pool.query(
-        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        `SELECT entity_id FROM community_member WHERE realm_id = $1;`,
         [realm_id],
       );
 
@@ -621,7 +622,7 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
 
       realmMembers.forEach((mp) => {
         publish(
-          `events_${mp.account_id}`,
+          `events_${mp.entity_id}`,
           "conference_members_changed",
           changedPayload,
         );

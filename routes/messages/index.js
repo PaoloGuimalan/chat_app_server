@@ -380,6 +380,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const username = req.params.username;
 
   try {
@@ -389,40 +390,33 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = [
       ...decodedToken.receivers,
-      ...receiversfetch.users.map((mp) => mp.userID),
+      ...receiversfetch.users.map((mp) => mp.entityID),
     ];
 
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const { rows } = await pool.query(
       `
         SELECT
           ua.id,
+          ua.entity_id AS "entityID",
           ua.username AS "userID",
           EXISTS (
             SELECT 1
             FROM community_member cm
-            WHERE cm.account_id = ua.id
+            WHERE cm.entity_id = ua.id
               AND cm.realm_id = $2
           ) AS "alreadyMember"
         FROM user_account ua
-        WHERE ua.username = ANY($1);
+        WHERE ua.entity_id = ANY($1);
       `,
-      [memberstoadd.map((mp) => mp.userID), conversationID],
+      [memberstoadd.map((mp) => mp.entityID), conversationID],
     );
 
     const { rows: get_group } = await pool.query(
       `SELECT parent_id, type FROM community_realm WHERE realm_id = $1`, //  AND parent_id IS NOT NULL;
       [conversationID],
     );
-
-    // const { rows: get_page_voice } = await pool.query(
-    //   `SELECT realm_id
-    //     FROM community_realm
-    //     WHERE realm_id = $1
-    //   AND type IN ('page', 'voice');`,
-    //   [conversationID],
-    // );
 
     const conversationType = get_group.length > 0 ? get_group[0].type : "group";
     const isPageOrVoice =
@@ -435,14 +429,14 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
     removeAlreadyJoined.map((mp) => {
-      AddNewMemberToContacts(conversationID, mp.id, id)
+      AddNewMemberToContacts(conversationID, mp.entityID, entityID)
         .then(() => {
-          AddNewMemberToAllMessages(conversationID, mp.userID)
+          AddNewMemberToAllMessages(conversationID, mp.entityID)
             .then(() => {
               if (!isPageOrVoice) {
                 NotificationMessageForConversations(
                   conversationID,
-                  userID,
+                  entityID,
                   receivers,
                   `${username} added ${mp.userID}`,
                   conversationType,

@@ -17,6 +17,7 @@ const router = express.Router();
 router.post("/upload-media", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
 
   new multiparty.Form().parse(req, async (err, fields, files) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -36,11 +37,11 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
             FROM community_member cm
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
             WHERE cr.realm_id = $1 
-                AND cm.account_id = $2 
+                AND cm.entity_id = $2 
                 AND cm.role = 'admin'
             ) as is_admin
         `,
-        [realm_id, id],
+        [realm_id, entityID],
       );
 
       if (media_type !== "profile" && media_type !== "cover_photo") {
@@ -104,25 +105,26 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
 
   try {
     const account_ids = req.body.account_ids;
     const realm_id = req.body.realm_id;
 
-    await isRealmMember(realm_id, id);
+    await isRealmMember(realm_id, entityID);
 
     const { rows: users } = await pool.query(
-      `SELECT username FROM user_account WHERE id = ANY($1::text[])`,
+      `SELECT username FROM user_account WHERE entity_id = ANY($1::text[])`,
       [account_ids],
     );
 
     const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2 AND role = $3;`,
-      [id, realm_id, "admin"],
+      `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 AND role = $3;`,
+      [entityID, realm_id, "admin"],
     );
 
     if (row.length === 0) {
-      const restids = account_ids.filter((flt) => flt !== id);
+      const restids = account_ids.filter((flt) => flt !== entityID);
 
       if (restids.length > 0) {
         res.status(401).send({
@@ -157,7 +159,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       const channel_ids = channels.map((mp) => mp.realm_id);
 
       const { rows: joined_channels } = await pool.query(
-        `SELECT realm_id FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
+        `SELECT realm_id FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
         [account_ids, channel_ids],
       );
 
@@ -165,7 +167,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
       if (joined_channel_ids.length > 0) {
         await pool.query(
-          `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
+          `DELETE FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
           [account_ids, joined_channel_ids],
         );
 
@@ -179,7 +181,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           joined_channel_ids.map((mpp) => {
             NotificationMessageForConversations(
               mpp,
-              userID,
+              entityID,
               [],
               `${username} removed ${mp.username}`,
               "channel",
@@ -190,7 +192,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     }
 
     await pool.query(
-      `DELETE FROM community_member WHERE account_id = ANY($1::text[]) AND realm_id = $2`,
+      `DELETE FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = $2`,
       [account_ids, realm_id],
     );
 
@@ -204,7 +206,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       users.map((mp) => {
         NotificationMessageForConversations(
           realm_id,
-          userID,
+          entityID,
           [],
           `${username} removed ${mp.username}`,
           realm.type,
@@ -220,7 +222,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         message: `User removed from realm ${realm_id}`,
         result: {
           realm_id,
-          userID: mp,
+          entityID: mp,
           type: realm.type,
         },
       });
@@ -230,12 +232,12 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     // participants list (the removed users are notified separately above).
     try {
       const { rows: remainingMembers } = await pool.query(
-        `SELECT account_id FROM community_member WHERE realm_id = $1;`,
+        `SELECT entity_id FROM community_member WHERE realm_id = $1;`,
         [realm_id],
       );
 
       remainingMembers.forEach((mp) => {
-        publish(`events_${mp.account_id}`, "conference_members_changed", {
+        publish(`events_${mp.entity_id}`, "conference_members_changed", {
           status: true,
           auth: true,
           realm_id,

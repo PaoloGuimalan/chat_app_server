@@ -2212,6 +2212,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
 router.post("/createpage", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
 
   new multiparty.Form().parse(req, async (err, fields, files) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -2227,9 +2228,9 @@ router.post("/createpage", jwtchecker, async (req, res) => {
       const pageDescription = decodeToken.pageDescription[0];
       const email = decodeToken.email[0];
       const slug = decodeToken.slug[0];
-      const allReceivers = [userID, ...otherUsers];
+      const allReceivers = [entityID, ...otherUsers];
       const userReceivers = allReceivers.map((alr, i) => ({
-        userID: alr,
+        entityID: alr,
       }));
 
       const { rows } = await pool.query(
@@ -2272,14 +2273,14 @@ router.post("/createpage", jwtchecker, async (req, res) => {
 
       if (coverPhotoUpload && profileUpload) {
         createRealmReusable(
-          id,
+          entityID,
           null,
           pageID,
           pageName,
           profileUpload,
           coverPhotoUpload,
           pageDescription,
-          userID,
+          entityID,
           userReceivers,
           false,
           "page",
