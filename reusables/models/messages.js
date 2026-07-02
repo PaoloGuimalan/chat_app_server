@@ -162,19 +162,19 @@ const SaveConversation = (
 
 const NotificationMessageForConversations = async (
   convID,
-  userID,
+  entityID,
   recs,
   details,
   convType,
 ) => {
   const messageID = await checkExistingMessageID(makeid(30));
   const conversationID = convID;
-  const sender = userID;
+  const sender = entityID;
   const receiversfetch = await GetAllReceivers(conversationID);
   const receivers = [
     ...new Set([
       ...(Array.isArray(recs) ? recs : []),
-      ...receiversfetch.users.map((mp) => mp.userID),
+      ...receiversfetch.users.map((mp) => mp.entityID),
     ]),
   ]; //Array
   const seeners = []; //Array
@@ -235,7 +235,7 @@ const NotificationMessageForConversations = async (
 
       receivers.map((rcvs) => {
         MessagesTrigger(rcvs, { conversationID, entityID: sender }, false);
-        ContactListTrigger(rcvs, `${userID} added you on a group chat`);
+        ContactListTrigger(rcvs, `${entityID} added you on a group chat`);
       });
     })
     .catch((err) => {
@@ -339,13 +339,13 @@ const GetAllReceivers = async (contactID) => {
 };
 
 const AddNewMemberToChannels = async (
-  userIDProp,
+  entityIDProp,
   username,
   tokenProp,
   type,
 ) => {
   const token = tokenProp;
-  const userID = userIDProp;
+  const entityID = entityIDProp;
 
   try {
     const decodedToken = token;
@@ -354,22 +354,22 @@ const AddNewMemberToChannels = async (
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = [
       ...decodedToken.receivers,
-      ...receiversfetch.users.map((mp) => mp.userID),
+      ...receiversfetch.users.map((mp) => mp.entityID),
     ];
 
     memberstoadd.map((mp) => {
-      AddNewMemberToContacts(conversationID, mp.id, userID)
+      AddNewMemberToContacts(conversationID, mp.entityID, entityID)
         .then(() => {
           if (type !== "server" && type !== "voice" && type !== "page") {
-            AddNewMemberToAllMessages(conversationID, mp.userID)
+            AddNewMemberToAllMessages(conversationID, mp.entityID)
               .then(() => {
                 NotificationMessageForConversations(
                   conversationID,
-                  userID,
+                  entityID,
                   receivers,
-                  userID === mp.userID
+                  entityID === mp.entityID
                     ? `${mp.userID} joined`
-                    : `${username} added ${mp.userID}`,
+                    : `${username} added ${mp.entityID}`,
                   type,
                 );
               })
@@ -378,13 +378,8 @@ const AddNewMemberToChannels = async (
         })
         .catch((err) => console.log);
     });
-
-    // console.log(userID, decodedToken.conversationID, decodedToken.memberstoadd);
-
-    // res.send({ status: true, message: "OK" })
   } catch (ex) {
     console.log(ex);
-    // res.send({ status: false, message: "Error decoding token" })
   }
 };
 

@@ -15,11 +15,17 @@ const {
   GetServerDetails,
   GetServerMembers,
 } = require("../../reusables/models/server");
-const { AddNewMemberToChannels } = require("../../reusables/models/messages");
+const {
+  AddNewMemberToChannels,
+  GetAllReceivers,
+} = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
 const { transformServersData } = require("../../reusables/hooks/transformers");
 const { getAllParticipants, publish } = require("../../reusables/redis/pubsub");
-const { isRealmMember } = require("../../reusables/models/realms");
+const {
+  isRealmMember,
+  isRealmPublic,
+} = require("../../reusables/models/realms");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -63,11 +69,13 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
 router.get("/initserverlist", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
 
   const { rows } = await pool.query(
     `
     SELECT 
         cr.id,
+        cr.entity_id,
         cr.realm_id,
         cr.name,
         cr.profile,
@@ -79,30 +87,20 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         (
         SELECT jsonb_agg(jsonb_build_object('userID', ua.username))
         FROM community_member cm2
-        JOIN user_account ua ON cm2.account_id = ua.id
+        JOIN user_account ua ON cm2.entity_id = ua.entity_id
         WHERE cm2.realm_id = cr.realm_id
         ) AS members
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
-    WHERE cm.account_id = $1
+    WHERE cm.entity_id = $1
         AND cr.type = 'server'
-    GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
+    GROUP BY cr.id, cr.entity_id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [id],
+    [entity_id],
   );
 
   const encodedResult = createJWT(transformServersData(rows));
   res.send({ status: true, result: encodedResult });
-
-  //   UserServer.find({ members: { $in: [{ userID: userID }] } })
-  //     .then((result) => {
-  //       const encodedResult = createJWT(result);
-  //       res.send({ status: true, result: encodedResult });
-  //     })
-  //     .catch((err) => {
-  //       console.log(err);
-  //       res.send({ status: false, message: "Error fetching server list" });
-  //     });
 });
 
 router.get(
@@ -111,6 +109,7 @@ router.get(
   async (req, res) => {
     const userID = req.params.userID;
     const id = req.params.id;
+    const entityID = req.params.entity_id;
     const conversationID = req.params.conversationID;
     const parent_realm = req.params.parent_realm;
 
@@ -118,7 +117,7 @@ router.get(
       {
         $match: {
           $and: [
-            { receivers: { $in: [userID] } },
+            { receivers: { $in: [entityID] } },
             { conversationID: conversationID },
           ],
         },
@@ -171,6 +170,7 @@ router.get(
             `
           SELECT
             id AS "_id",
+            entity_id AS "entityID",
             username AS "userID",
             json_build_object(
               'firstName', first_name,
@@ -179,7 +179,7 @@ router.get(
             ) AS fullname,
             profile
           FROM user_account
-          WHERE id = ANY($1)`,
+          WHERE entity_id = ANY($1)`,
             [receivers_list],
           );
 
@@ -189,6 +189,7 @@ router.get(
             `
             SELECT 
                 ua.id AS "_id",
+                ua.entity_id AS "entityID",
                 ua.username AS "userID",
                 json_build_object(
                   'firstName', ua.first_name,
@@ -197,7 +198,7 @@ router.get(
                 ) AS fullname,
                 ua.profile
             FROM community_member cm
-            JOIN user_account ua ON cm.account_id = ua.id
+            JOIN user_account ua ON cm.entity_id = ua.entity_id
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
             WHERE cr.realm_id = $1 AND cr.parent_id = $2;`,
             [conversationID, parent_realm],
@@ -206,7 +207,9 @@ router.get(
           rows_final = rows;
         }
 
-        if (rows_final.filter((flt) => flt._id === id).length === 0) {
+        if (
+          rows_final.filter((flt) => flt.entityID === entityID).length === 0
+        ) {
           res.status(401).send({
             status: false,
             message: "You do not have access to this channel",
@@ -218,6 +221,7 @@ router.get(
           `SELECT
           json_build_object(
             '_id', cr.id,
+            'entityID', cr.entity_id,
             'serverID', cr.parent_id,
             'groupID', cr.realm_id,
             'groupName', cr.name,
@@ -236,6 +240,7 @@ router.get(
           ) AS groupdetails,
           json_build_object(
             '_id', pcr.id,
+            'entityID', pcr.entity_id,
             'serverID', pcr.realm_id,
             'serverName', pcr.name,
             'profile',
@@ -252,16 +257,16 @@ router.get(
                 'userID', cm_username.username
               ))
               FROM community_member cm
-              JOIN user_account cm_username ON cm.account_id = cm_username.id
+              JOIN user_account cm_username ON cm.entity_id = cm_username.entity_id
               WHERE cm.realm_id = pcr.realm_id
             ), '[]'::jsonb),
             'createdBy', pua.username,
             'privacy', pcr.is_private
           ) AS serverdetails
         FROM community_realm cr
-        LEFT JOIN user_account ua ON cr.created_by_id = ua.id
+        LEFT JOIN user_account ua ON cr.created_by_id = ua.entity_id
         LEFT JOIN community_realm pcr ON cr.parent_id = pcr.realm_id
-        LEFT JOIN user_account pua ON pcr.created_by_id = pua.id
+        LEFT JOIN user_account pua ON pcr.created_by_id = pua.entity_id
         WHERE cr.realm_id = $1 AND cr.parent_id = $2;;`,
           [conversationID, parent_realm],
         );
@@ -309,11 +314,12 @@ router.get(
 router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const serverID = req.params.serverID;
 
   const { rows: row } = await pool.query(
-    `SELECT member_id FROM community_member WHERE account_id = $1 AND realm_id = $2;`,
-    [id, serverID],
+    `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
+    [entityID, serverID],
   );
 
   if (row.length === 0) {
@@ -327,6 +333,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     `SELECT 
     json_build_object(
       '_id', cr.id,
+      'entityID', cr.entity_id,
       'serverID', cr.realm_id,
       'serverName', cr.name,
       'cover_photo', cr.cover_photo,
@@ -345,7 +352,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           'userID', cm_username.username
         ))
         FROM community_member cm
-        JOIN user_account cm_username ON cm.account_id = cm_username.id
+        JOIN user_account cm_username ON cm.entity_id = cm_username.entity_id
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb),
       'createdBy', pua.username,
@@ -353,7 +360,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       'is_admin', EXISTS (
         SELECT 1
         FROM community_member cm
-        WHERE cm.account_id = $1
+        WHERE cm.entity_id = $1
           AND cm.realm_id = cr.realm_id
           AND cm.role = 'admin'
       ),
@@ -361,6 +368,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         SELECT jsonb_agg(
           jsonb_build_object(
             '_id', pcr.realm_id,
+            'entityID', cr.entity_id,
             'serverID', pcr.parent_id,
             'groupID', pcr.realm_id,
             'groupName', pcr.name,
@@ -380,18 +388,19 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
             'is_joined', EXISTS (
               SELECT 1
               FROM community_member cm
-              WHERE cm.account_id = $1
+              WHERE cm.entity_id = $1
                 AND cm.realm_id = pcr.realm_id
             )
           )
         )
         FROM community_realm pcr
-        LEFT JOIN user_account ppua ON pcr.created_by_id = ppua.id
+        LEFT JOIN user_account ppua ON pcr.created_by_id = ppua.entity_id
         WHERE pcr.parent_id = cr.realm_id
       ), '[]'::jsonb),
       'usersWithInfo', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           '_id', cmu.id,
+          'entityID', cmu.entity_id,
           'userID', cmu.username,
           'fullname', jsonb_build_object(
             'firstName', cmu.first_name,
@@ -405,14 +414,14 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
             END
         ))
         FROM community_member cm
-        JOIN user_account cmu ON cm.account_id = cmu.id
+        JOIN user_account cmu ON cm.entity_id = cmu.entity_id
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb)
     )
    FROM community_realm cr
-   LEFT JOIN user_account pua ON cr.created_by_id = pua.id
+   LEFT JOIN user_account pua ON cr.created_by_id = pua.entity_id
    WHERE cr.realm_id = $2;`,
-    [id, serverID],
+    [entityID, serverID],
   );
 
   const deconstructedData = {
@@ -425,12 +434,13 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         conversationID: {
           $in: deconstructedData.channels.map((mp) => mp.groupID),
         },
-        seeners: { $nin: [userID] },
+        seeners: { $nin: [entityID] },
       },
     },
     { $group: { _id: "$conversationID", unreadCount: { $sum: 1 } } },
   ])
     .then(async (result) => {
+      // console.log(result);
       const channelsWithReadsCount = deconstructedData.channels.map((mp) => ({
         ...mp,
         messages: result
@@ -472,6 +482,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
 router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const username = req.params.username;
   const token = req.body.token;
 
@@ -480,23 +491,28 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.memberstoadd;
 
-    await isRealmMember(serverID, id);
+    const isrealmpub = await isRealmPublic(serverID);
+
+    if (!isrealmpub) {
+      await isRealmMember(serverID, entityID);
+    }
 
     const { rows } = await pool.query(
       `
           SELECT
             ua.id,
             ua.username AS "userID",
+            ua.entity_id AS "entityID",
             EXISTS (
               SELECT 1
               FROM community_member cm
-              WHERE cm.account_id = ua.id
+              WHERE cm.entity_id = ua.entity_id
                 AND cm.realm_id = $2
             ) AS "alreadyMember"
           FROM user_account ua
-          WHERE ua.username = ANY($1);
+          WHERE ua.entity_id = ANY($1);
         `,
-      [memberstoadd.map((mp) => mp.userID), serverID],
+      [memberstoadd.map((mp) => mp.entityID), serverID],
     );
 
     const ServerChannelsList = await GetServerChannels(serverID, false);
@@ -508,7 +524,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
     AddNewMemberToChannels(
-      id,
+      entityID,
       username,
       {
         conversationID: serverID,
@@ -518,9 +534,9 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
       "server",
     );
 
-    mappedGroupID.map((mp) => {
-      AddNewMemberToChannels(
-        id,
+    mappedGroupID.map(async (mp) => {
+      await AddNewMemberToChannels(
+        entityID,
         username,
         {
           conversationID: mp.groupID,

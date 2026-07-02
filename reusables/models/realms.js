@@ -25,6 +25,21 @@ const isRealmMember = async (realm_id, entity_id) => {
   }
 };
 
+const isRealmPublic = async (realm_id) => {
+  const { rows: realm_row } = await pool.query(
+    `SELECT * FROM community_realm WHERE realm_id = $1`,
+    [realm_id],
+  );
+
+  if (realm_row.length > 0) {
+    const realm = realm_row[0];
+
+    return !realm.is_private;
+  }
+
+  return false;
+};
+
 const GetRealmName = async (realm_id) => {
   const { rows: realm_row } = await pool.query(
     `SELECT * FROM community_realm WHERE realm_id = $1`,
@@ -51,4 +66,5 @@ const GetRealmName = async (realm_id) => {
 module.exports = {
   isRealmMember,
   GetRealmName,
+  isRealmPublic,
 };

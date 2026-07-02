@@ -1780,7 +1780,7 @@ router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
       }
     });
 
-    realm_entity_id = await CreateEntity("realm");
+    const realm_entity_id = await CreateEntity("realm");
 
     await client.query(
       `INSERT INTO community_realm (
@@ -1851,7 +1851,7 @@ const createRealmReusable = async (
   realmProfile,
   realmCoverPhoto,
   realmDesc,
-  userIDpass,
+  entityID,
   userReceivers,
   privacyprop,
   type,
@@ -1861,7 +1861,7 @@ const createRealmReusable = async (
   starts_at = null,
   expires_at = null,
 ) => {
-  const userID = userIDpass;
+  // const userID = userIDpass; entityID
   const profile = realmProfile || "N/A";
 
   const client = await pool.getPool();
@@ -1870,10 +1870,10 @@ const createRealmReusable = async (
     const contactID = realmID ?? (await checkGroupID(`${makeID(20)}`));
     const privacy = privacyprop;
 
-    const allReceivers = userReceivers.map((mp) => mp.userID);
+    const allReceivers = userReceivers.map((mp) => mp.entityID);
 
     const { rows } = await client.query(
-      `SELECT id, username from user_account WHERE id = ANY($1)`,
+      `SELECT id, username, entity_id from user_account WHERE entity_id = ANY($1)`,
       [allReceivers],
     );
 
@@ -1881,7 +1881,7 @@ const createRealmReusable = async (
     const params = [];
     let paramIndex = 1;
 
-    rows.forEach(({ id: accountId }) => {
+    rows.forEach(({ entity_id: accountId }) => {
       insertValues.push(
         `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
       );
@@ -1889,21 +1889,23 @@ const createRealmReusable = async (
       params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
       params.push(accountId); // account FK
       params.push(contactID); // pass your realm ID here
-      params.push(id); // who added this member (account FK)
+      params.push(entityID); // who added this member (account FK)
       params.push(new Date()); // date_joined or null as needed
 
-      if (accountId === userID) {
+      if (accountId === entityID) {
         params.push("admin"); // member role
       } else {
         params.push("member"); // member role
       }
     });
 
+    const realm_entity_id = await CreateEntity("realm");
+
     await client.query(
       `INSERT INTO community_realm (
-      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score, starts_at, expires_at, created_at, is_temporary
+      id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, cover_photo, description, email, slug, ranking_score, starts_at, expires_at, created_at, is_temporary, entity_id
       ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18, $19
       )`,
       [
         contactID,
@@ -1924,12 +1926,13 @@ const createRealmReusable = async (
         starts_at,
         expires_at,
         is_temporary,
+        realm_entity_id,
       ],
     );
 
     await client.query(
       `
-        INSERT INTO community_member (member_id, account_id, realm_id, added_by_id, date_joined, role)
+        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role)
         VALUES ${insertValues.join(", ")}
       `,
       params,
@@ -1940,8 +1943,8 @@ const createRealmReusable = async (
     if (type !== "server" && type !== "voice" && type !== "page") {
       sendMessageInitForGC(
         contactID,
-        userID,
-        rows.filter((mp) => mp.id === userID)[0].username,
+        entityID,
+        rows.filter((mp) => mp.entity_id === entityID)[0].username,
         allReceivers,
         `created the ${type === "group" ? "group chat" : type}`,
         type,
@@ -1956,6 +1959,7 @@ const createRealmReusable = async (
 router.post("/createchannel", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const token = req.body.token;
 
   try {
@@ -1966,23 +1970,23 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const type = decodedToken.type; // channel or voice
     const groupName = decodedToken.groupName;
 
-    const allReceivers = [userID, ...memberstoadd];
+    const allReceivers = [entityID, ...memberstoadd];
     const userReceivers = allReceivers.map((alr, i) => ({
-      userID: alr,
+      entityID: alr,
     }));
 
     const serverMembers = await GetServerMembers(serverID, false);
 
     if (privacy) {
       createRealmReusable(
-        id,
+        entityID,
         serverID,
         null,
         groupName,
         null,
         null,
         null,
-        userID,
+        entityID,
         userReceivers,
         privacy,
         type, // "channel"
@@ -1992,14 +1996,14 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       );
     } else {
       createRealmReusable(
-        id,
+        entityID,
         serverID,
         null,
         groupName,
         null,
         null,
         null,
-        userID,
+        entityID,
         serverMembers,
         privacy,
         type, // "channel"
@@ -2019,6 +2023,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
 router.post("/createserver", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const token = req.body.token;
 
   try {
@@ -2029,20 +2034,20 @@ router.post("/createserver", jwtchecker, async (req, res) => {
     const otherUsers = decodeToken.otherUsers;
     const serverName = decodeToken.groupName;
     const privacy = decodeToken.privacy;
-    const allReceivers = [userID, ...otherUsers];
+    const allReceivers = [entityID, ...otherUsers];
     const userReceivers = allReceivers.map((alr, i) => ({
-      userID: alr,
+      entityID: alr,
     }));
 
     createRealmReusable(
-      id,
+      entityID,
       null,
       serverID,
       serverName,
       null,
       null,
       null,
-      userID,
+      entityID,
       userReceivers,
       privacy,
       "server",
@@ -2053,14 +2058,14 @@ router.post("/createserver", jwtchecker, async (req, res) => {
 
     defaultchannellist.map((mp) => {
       createRealmReusable(
-        id,
+        entityID,
         serverID,
         null,
         mp,
         null,
         null,
         null,
-        userID,
+        entityID,
         userReceivers,
         false,
         "channel",

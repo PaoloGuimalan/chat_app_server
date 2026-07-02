@@ -120,10 +120,10 @@ const SendTagPostNotification = async (details, userID) => {
 };
 
 const ContactListTrigger = async (id, details) => {
-  const userID = id;
-  // const sseWithUserID = sseNotificationsWaiters[userID];
+  const entityID = id;
+  // const sseWithentityID = sseNotificationsWaiters[entityID];
 
-  publish(`events_${userID}`, "contactslist", {
+  publish(`events_${entityID}`, "contactslist", {
     status: true,
     auth: true,
     message: details,

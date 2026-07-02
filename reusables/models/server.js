@@ -9,6 +9,7 @@ const GetServerChannels = async (serverID, privacy) => {
   const { rows } = await pool.query(
     `SELECT 
     cr.realm_id AS _id, 
+    cr.entity_id AS "entityID", 
     cr.parent_id AS "serverID",
     cr.realm_id AS "groupID",
     cr.name AS "groupName",
@@ -72,6 +73,7 @@ const GetServerMembers = async (serverID, withDetails) => {
     const { rows } = await pool.query(
       `SELECT
        pua.id AS _id,
+       pua.entity_id AS "entityID",
        pua.id AS "userID",
        pua.username AS username,
        json_build_object(
@@ -83,7 +85,7 @@ const GetServerMembers = async (serverID, withDetails) => {
        pua.is_active AS "isActivated",
        pua.is_verified AS "isVerified"
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        WHERE realm_id = $1;`,
       [serverID],
     );
@@ -93,22 +95,16 @@ const GetServerMembers = async (serverID, withDetails) => {
     const { rows } = await pool.query(
       `SELECT
        pua.id AS _id,
+       pua.entity_id AS "entityID",
        pua.id AS "userID",
        pua.username AS username
        FROM community_member cr
-       LEFT JOIN user_account pua ON cr.account_id = pua.id
+       LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        WHERE realm_id = $1;`,
       [serverID],
     );
 
     return rows;
-    // return await UserServer.findOne({ serverID: serverID })
-    //   .then((result) => {
-    //     return result.members;
-    //   })
-    //   .catch((err) => {
-    //     throw new Error(err);
-    //   });
   }
 };
 

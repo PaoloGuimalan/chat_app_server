@@ -212,6 +212,7 @@ function transformServersData(serversArray, preview) {
         time: "", //now.toLocaleTimeString("en-US", { hour12: true })
       },
       _id: input.id,
+      entityID: input.entity_id,
       serverID: input.realm_id,
       serverName: input.name,
       profile: input.profile == "N/A" ? "" : input.profile,
