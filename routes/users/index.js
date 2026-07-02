@@ -2568,17 +2568,20 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
 router.post("/call", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
   const token = req.body.token;
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
-    const recepients = decodeToken.recepients;
+    const recepients = await GetAllReceivers(decodeToken.conversationID);
 
-    await isRealmMember(decodeToken.conversationID, id);
+    await isRealmMember(decodeToken.conversationID, entity_id);
 
-    recepients.map((rcp) => {
-      ReachCallRecepients(rcp, decodeToken);
-    });
+    recepients.users
+      .filter((flt) => flt.entityID !== entity_id)
+      .map((rcp) => {
+        ReachCallRecepients(rcp.entityID, decodeToken);
+      });
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
@@ -2591,6 +2594,7 @@ router.post("/call", jwtchecker, async (req, res) => {
 
 router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entityID = req.params.entity_id;
   const username = req.params.username;
   const clientID = req.body.clientID;
   const profile = req.body.profile;
@@ -2599,17 +2603,17 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   const instance = req.body.instance;
 
   const savedRecipients = await GetAllReceivers(channelID);
-  const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
+  const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.entityID);
 
   const recipients = req.body.recipients
-    ? [...req.body.recipients, ...parsedSavedRecipients, userID]
-    : [...parsedSavedRecipients, userID];
+    ? [...req.body.recipients, ...parsedSavedRecipients, entityID]
+    : [...parsedSavedRecipients, entityID];
   const uniqueRecipients = [...new Set(recipients)];
 
   try {
     uniqueRecipients.map((rcp) => {
       ReachVoiceRecepients(rcp, {
-        userID,
+        entityID,
         username,
         profile,
         clientID,
@@ -2619,7 +2623,7 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
     });
 
     addParticipant(channelID, {
-      userID,
+      entityID,
       username,
       profile,
       clientID,
@@ -2888,37 +2892,20 @@ router.get("/activecontacts", jwtchecker, async (req, res) => {
 
 router.post("/rejectcall", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
   const token = req.body.token;
 
   try {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const conversationID = decodeToken.conversationID;
     const conversationType = decodeToken.conversationType;
-    const callerID = decodeToken.caller.userID;
+    const callerID = decodeToken.caller.entityID;
 
     if (conversationType == "single") {
       CallRejectNotif(callerID, {
         conversationID: conversationID,
-        rejectedBy: userID,
+        rejectedBy: entity_id,
       });
-      // publish(`events_${callerID}`, CALL_REJECT_NOTIF, {
-      //   parameters: {
-      //     rcp: callerID,
-      //     decodeToken: {
-      //       conversationID: conversationID,
-      //       rejectedBy: userID,
-      //     },
-      //   },
-      // });
-      //   await producer.publishMessage("INFO:CHATTERLOOP", CALL_REJECT_NOTIF, {
-      //     parameters: {
-      //       rcp: callerID,
-      //       decodeToken: {
-      //         conversationID: conversationID,
-      //         rejectedBy: userID,
-      //       },
-      //     },
-      //   });
     }
 
     res.send({ status: true, message: "OK" });

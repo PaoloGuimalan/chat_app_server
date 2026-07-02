@@ -42,7 +42,9 @@ async function resolveTargetPod(conversationID, explicitInstance = null) {
 
   const roomPod = await getRoomPod(conversationID).catch(() => null);
 
-  console.log(`[resolveTargetPod] room=${conversationID}, roomPod=${roomPod}, POD_NAME=${POD_NAME}`);
+  console.log(
+    `[resolveTargetPod] room=${conversationID}, roomPod=${roomPod}, POD_NAME=${POD_NAME}`,
+  );
 
   if (!roomPod || roomPod === POD_NAME) {
     // Room is here or doesn't exist yet — handle locally
@@ -55,7 +57,9 @@ async function resolveTargetPod(conversationID, explicitInstance = null) {
   const { getPodIp } = require("../../reusables/redis/roomState");
   const remotePodIp = await getPodIp(roomPod).catch(() => null);
   if (!remotePodIp) {
-    console.log(`[resolveTargetPod] Stale pod "${roomPod}" (no IP) — handling locally`);
+    console.log(
+      `[resolveTargetPod] Stale pod "${roomPod}" (no IP) — handling locally`,
+    );
     return POD_NAME;
   }
 
@@ -90,45 +94,83 @@ router.post("/join-room", jwtchecker, async (req, res) => {
   const { conversationID, members, muted, cameraOff } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;
+  const entity_id = req.params.entity_id;
   const username = req.body.username || req.body.displayName || userId;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entity_id;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entity_id);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "join-room-relay",
-      { conversationID, userId, username, members, instance: targetPod, clientId, muted, cameraOff },
-      () => joinRoom(conversationID, userId, username, members, POD_NAME, clientId, muted, cameraOff),
+      {
+        conversationID,
+        entityID: entity_id,
+        username,
+        members,
+        instance: targetPod,
+        clientId,
+        muted,
+        cameraOff,
+      },
+      () =>
+        joinRoom(
+          conversationID,
+          entity_id,
+          username,
+          members,
+          POD_NAME,
+          clientId,
+          muted,
+          cameraOff,
+        ),
     );
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.error("join-room error:", ex);
-    res.status(400).send({ status: false, message: ex.message || ex.toString() });
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
   }
 });
 
 router.post("/create-transport", jwtchecker, async (req, res) => {
   const { conversationID, direction } = req.body;
   const userId = req.params.userID;
+  const entityID = req.params.entity_id;
   const id = req.params.id;
   const username = req.body.username || req.body.displayName || null;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "create-transport-relay",
-      { conversationID, userId, username, instance: targetPod, direction, clientId },
-      () => createTransport(conversationID, userId, username, targetPod, direction, clientId),
+      {
+        conversationID,
+        entityID,
+        username,
+        instance: targetPod,
+        direction,
+        clientId,
+      },
+      () =>
+        createTransport(
+          conversationID,
+          entityID,
+          username,
+          targetPod,
+          direction,
+          clientId,
+        ),
     );
 
     res.send({ status: true, message: "OK" });
@@ -141,19 +183,27 @@ router.post("/create-transport", jwtchecker, async (req, res) => {
 router.post("/transport-connect", jwtchecker, async (req, res) => {
   const { conversationID, transportId, dtlsParameters } = req.body;
   const userId = req.params.userID;
+  const entityID = req.params.entity_id;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "transport-connect-relay",
-      { conversationID, userId, transportId, dtlsParameters, clientId },
-      () => transportConnect(conversationID, userId, transportId, dtlsParameters, clientId),
+      { conversationID, entityID, transportId, dtlsParameters, clientId },
+      () =>
+        transportConnect(
+          conversationID,
+          entityID,
+          transportId,
+          dtlsParameters,
+          clientId,
+        ),
     );
 
     res.send({ status: true, message: "OK" });
@@ -164,22 +214,45 @@ router.post("/transport-connect", jwtchecker, async (req, res) => {
 });
 
 router.post("/produce", jwtchecker, async (req, res) => {
-  const { conversationID, transportId, kind, rtpParameters, members, appData } = req.body;
+  const { conversationID, transportId, kind, rtpParameters, members, appData } =
+    req.body;
   const userId = req.params.userID;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const username = req.body.username || req.body.displayName || null;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "produce-relay",
-      { conversationID, transportId, kind, rtpParameters, userId, username, members, clientId, appData },
-      () => produce(conversationID, transportId, kind, rtpParameters, userId, username, members, clientId, appData),
+      {
+        conversationID,
+        transportId,
+        kind,
+        rtpParameters,
+        entityID,
+        username,
+        members,
+        clientId,
+        appData,
+      },
+      () =>
+        produce(
+          conversationID,
+          transportId,
+          kind,
+          rtpParameters,
+          entityID,
+          username,
+          members,
+          clientId,
+          appData,
+        ),
     );
 
     res.send({ status: true, message: "OK" });
@@ -193,20 +266,38 @@ router.post("/consume", jwtchecker, async (req, res) => {
   const { conversationID, transportId, producerId, rtpCapabilities } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const entityID = req.params.entity_id;
+  const clientId = req.body.clientId || entityID;
 
-  console.log(`[Route] /consume called: conversationID=${conversationID}, producerId=${producerId}, clientId=${clientId}`);
+  console.log(
+    `[Route] /consume called: conversationID=${conversationID}, producerId=${producerId}, clientId=${clientId}`,
+  );
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "consume-relay",
-      { conversationID, userId, transportId, producerId, rtpCapabilities, clientId },
-      () => consume(conversationID, userId, transportId, producerId, rtpCapabilities, clientId),
+      {
+        conversationID,
+        entityID,
+        transportId,
+        producerId,
+        rtpCapabilities,
+        clientId,
+      },
+      () =>
+        consume(
+          conversationID,
+          entityID,
+          transportId,
+          producerId,
+          rtpCapabilities,
+          clientId,
+        ),
     );
 
     res.send({ status: true, message: "OK" });
@@ -220,18 +311,19 @@ router.post("/close-producer", jwtchecker, async (req, res) => {
   const { conversationID, producerId } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const entityID = req.params.entity_id;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "close-producer-relay",
-      { conversationID, userId, clientId, producerId },
-      () => closeProducer(conversationID, userId, clientId, producerId),
+      { conversationID, entityID, clientId, producerId },
+      () => closeProducer(conversationID, entityID, clientId, producerId),
     );
 
     res.send({ status: true, message: "OK" });
@@ -254,27 +346,29 @@ router.post("/leave-room-keepalive", async (req, res) => {
   const jwt = require("jsonwebtoken");
   const JWT_SECRET = process.env.JWT_SECRET;
 
-  let userId;
+  let entityID;
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    userId = decoded.userID;
+    entityID = decoded.entityID;
   } catch (err) {
     res.status(401).send({ status: false, message: "Invalid token" });
     return;
   }
 
   const { conversationID } = req.body;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entityID;
 
   // Respond immediately — cleanup must not block the browser close
   res.send({ status: true, message: "OK" });
 
   try {
-    const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({ users: [] }));
+    const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({
+      users: [],
+    }));
     const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
     const recipients = req.body.recipients
-      ? [...req.body.recipients, ...parsedSavedRecipients, userId]
-      : [...parsedSavedRecipients, userId];
+      ? [...req.body.recipients, ...parsedSavedRecipients, entityID]
+      : [...parsedSavedRecipients, entityID];
     const uniqueRecipients = [...new Set(recipients)];
 
     await Promise.all(
@@ -295,8 +389,8 @@ router.post("/leave-room-keepalive", async (req, res) => {
     await relayOrRun(
       targetPod,
       "leave-room-relay",
-      { conversationID, userId, clientId },
-      () => leaveRoom(conversationID, userId, clientId),
+      { conversationID, entityID, clientId },
+      () => leaveRoom(conversationID, entityID, clientId),
     );
   } catch (error) {
     console.error("leave-room-keepalive cleanup error:", error);
@@ -306,8 +400,9 @@ router.post("/leave-room-keepalive", async (req, res) => {
 router.post("/leave-room", jwtchecker, async (req, res) => {
   const { conversationID } = req.body;
   const userId = req.params.userID;
+  const entityID = req.params.entity_id;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const clientId = req.body.clientId || entityID;
 
   // Respond immediately — leave cleanup must not be blocked by auth/DB errors
   // on keepalive requests (browser close). The cleanup runs unconditionally.
@@ -315,14 +410,18 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
 
   try {
     // Auth check — skip silently on keepalive if it fails, cleanup still runs below
-    await isRealmMember(conversationID, id).catch(() => {});
+    await isRealmMember(conversationID, entityID).catch(() => {});
 
     // Notify conversation recipients about the departure
-    const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({ users: [] }));
-    const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
+    const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({
+      users: [],
+    }));
+    const parsedSavedRecipients = savedRecipients.users.map(
+      (mp) => mp.entityID,
+    );
     const recipients = req.body.recipients
-      ? [...req.body.recipients, ...parsedSavedRecipients, userId]
-      : [...parsedSavedRecipients, userId];
+      ? [...req.body.recipients, ...parsedSavedRecipients, entityID]
+      : [...parsedSavedRecipients, entityID];
     const uniqueRecipients = [...new Set(recipients)];
 
     await Promise.all(
@@ -344,8 +443,8 @@ router.post("/leave-room", jwtchecker, async (req, res) => {
     await relayOrRun(
       targetPod,
       "leave-room-relay",
-      { conversationID, userId, clientId },
-      () => leaveRoom(conversationID, userId, clientId),
+      { conversationID, entityID, clientId },
+      () => leaveRoom(conversationID, entityID, clientId),
     );
   } catch (error) {
     console.error("leave-room cleanup error:", error);
@@ -356,18 +455,20 @@ router.post("/participant-status", jwtchecker, async (req, res) => {
   const { conversationID, muted, cameraOff } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const entityID = req.params.entity_id;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     const targetPod = await resolveTargetPod(conversationID);
 
     await relayOrRun(
       targetPod,
       "participant-status-relay",
-      { conversationID, userId, clientId, muted, cameraOff },
-      () => participantStatus(conversationID, userId, clientId, muted, cameraOff),
+      { conversationID, entityID, clientId, muted, cameraOff },
+      () =>
+        participantStatus(conversationID, entityID, clientId, muted, cameraOff),
     );
 
     res.send({ status: true, message: "OK" });
@@ -383,10 +484,11 @@ router.post("/reconnect", jwtchecker, async (req, res) => {
   const { conversationID, instance } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;
-  const clientId = req.body.clientId || userId;
+  const entityID = req.params.entity_id;
+  const clientId = req.body.clientId || entityID;
 
   try {
-    await isRealmMember(conversationID, id);
+    await isRealmMember(conversationID, entityID);
 
     // Use explicit instance override for reconnect — client knows its prior pod
     const targetPod = await resolveTargetPod(conversationID, instance || null);

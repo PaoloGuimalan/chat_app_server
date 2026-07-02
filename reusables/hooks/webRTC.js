@@ -250,7 +250,7 @@ async function evictClientSession(conversationID, clientId) {
 
 async function joinRoom(
   conversationID,
-  userId,
+  entityID,
   username,
   members,
   instance,
@@ -259,7 +259,7 @@ async function joinRoom(
   cameraOff,
 ) {
   console.log(
-    `[WebRTC] joinRoom called: conversationID=${conversationID}, userId=${userId}, clientId=${clientId}`,
+    `[WebRTC] joinRoom called: conversationID=${conversationID}, entityID=${entityID}, clientId=${clientId}`,
   );
 
   const room = await getOrCreateNativeRoom(conversationID);
@@ -288,13 +288,13 @@ async function joinRoom(
     .catch(() => ({}));
   const existingUserIds = new Set(
     Object.values(existingMembers)
-      .filter((entry) => entry.userId !== userId)
-      .map((entry) => entry.userId),
+      .filter((entry) => entry.entityID !== entityID)
+      .map((entry) => entry.entityID),
   );
 
   // Write member + status to Redis — include pod name for cross-pod pipe routing
   await rs.setMember(conversationID, clientId, {
-    userId,
+    entityID,
     username,
     pod: POD_NAME,
   });
@@ -313,7 +313,7 @@ async function joinRoom(
     .filter(([participantClientId]) => participantClientId !== clientId)
     .map(([participantClientId, participantData]) => ({
       clientId: participantClientId,
-      username: participantData?.username || participantData?.userId || "",
+      username: participantData?.username || participantData?.entityID || "",
       ...(allStatuses[participantClientId] || {
         muted: false,
         cameraOff: false,
@@ -327,7 +327,7 @@ async function joinRoom(
         publish(`events_${existingUserId}`, "participant-joined", {
           conversationID,
           username,
-          userId,
+          entityID,
           clientId,
           ...joinedStatus,
           timestamp: Date.now(),
@@ -337,7 +337,7 @@ async function joinRoom(
     );
   }
 
-  await publish(`events_${userId}`, "join-room-response", {
+  await publish(`events_${entityID}`, "join-room-response", {
     status: true,
     routerRtpCapabilities: room.router.rtpCapabilities,
     instance,
@@ -345,7 +345,7 @@ async function joinRoom(
     participants,
   });
   console.log(
-    `[WebRTC] joinRoom: join-room-response published to events_${userId}`,
+    `[WebRTC] joinRoom: join-room-response published to events_${entityID}`,
   );
 
   // Late-join sync: replay active producers to the newly joined user.
@@ -370,10 +370,10 @@ async function joinRoom(
     const ownerMember = meta.clientId
       ? await rs.getMember(conversationID, meta.clientId).catch(() => null)
       : null;
-    await publish(`events_${userId}`, "new_producer", {
+    await publish(`events_${entityID}`, "new_producer", {
       conversationID,
       username: ownerMember?.username || username,
-      userId: ownerMember?.userId || userId,
+      entityID: ownerMember?.entityID || entityID,
       clientId: meta.clientId,
       producerId,
       kind: meta.kind,
@@ -388,7 +388,7 @@ async function joinRoom(
 
 async function createTransport(
   conversationID,
-  userId,
+  entityID,
   username,
   instance,
   direction,
@@ -409,9 +409,14 @@ async function createTransport(
   });
 
   // Only native transport object stays in-process
-  room.transports.set(transport.id, { transport, clientId, userId, direction });
+  room.transports.set(transport.id, {
+    transport,
+    clientId,
+    entityID,
+    direction,
+  });
 
-  await publish(`events_${userId}`, "create-transport-response", {
+  await publish(`events_${entityID}`, "create-transport-response", {
     response: {
       id: transport.id,
       iceParameters: transport.iceParameters,
@@ -428,7 +433,7 @@ async function createTransport(
 
 async function transportConnect(
   conversationID,
-  userId,
+  entityID,
   transportId,
   dtlsParameters,
   clientId,
@@ -437,7 +442,7 @@ async function transportConnect(
   const entry = room?.transports.get(transportId);
 
   if (!entry || entry.clientId !== clientId) {
-    await publish(`events_${userId}`, "transport-connect-error", {
+    await publish(`events_${entityID}`, "transport-connect-error", {
       conversationID,
       clientId,
     });
@@ -446,7 +451,7 @@ async function transportConnect(
 
   await entry.transport.connect({ dtlsParameters });
 
-  await publish(`events_${userId}`, "transport-connect-response", {
+  await publish(`events_${entityID}`, "transport-connect-response", {
     conversationID,
     message: "OK",
     clientId,
@@ -460,7 +465,7 @@ async function produce(
   transportId,
   kind,
   rtpParameters,
-  userId,
+  entityID,
   username,
   _members,
   clientId,
@@ -470,7 +475,7 @@ async function produce(
   const entry = room?.transports.get(transportId);
 
   if (!entry || entry.clientId !== clientId) {
-    await publish(`events_${userId}`, "produce-error", {
+    await publish(`events_${entityID}`, "produce-error", {
       conversationID,
       clientId,
     });
@@ -521,11 +526,11 @@ async function produce(
   // Read all current members once — used for both pipe routing and fan-out
   const allMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
   const recipientUserIds = Array.from(
-    new Set(Object.values(allMembers).map((m) => m.userId)),
+    new Set(Object.values(allMembers).map((m) => m.entityID)),
   );
   const ownerMember = allMembers[clientId];
   const displayUsername = ownerMember?.username || username;
-  const displayUserId = ownerMember?.userId || userId;
+  const displayUserId = ownerMember?.entityID || entityID;
 
   // Auto-notify consumer pods that a new producer is available to pipe.
   // This is fire-and-forget — it never blocks the produce flow.
@@ -555,7 +560,7 @@ async function produce(
       publish(`events_${memberUserId}`, "new_producer", {
         conversationID,
         username: displayUsername,
-        userId: displayUserId,
+        entityID: displayUserId,
         clientId,
         producerId: producer.id,
         kind,
@@ -566,7 +571,7 @@ async function produce(
     ),
   );
 
-  await publish(`events_${userId}`, "produce-response", {
+  await publish(`events_${entityID}`, "produce-response", {
     conversationID,
     id: producer.id,
     clientId,
@@ -577,7 +582,7 @@ async function produce(
 
 async function consume(
   conversationID,
-  userId,
+  entityID,
   transportId,
   producerId,
   rtpCapabilities,
@@ -594,7 +599,7 @@ async function consume(
     console.log(
       `[WebRTC] consume: transport not found or clientId mismatch. room=${!!room}, entry=${!!entry}, entry.clientId=${entry?.clientId}`,
     );
-    await publish(`events_${userId}`, "consume-transport-error", {
+    await publish(`events_${entityID}`, "consume-transport-error", {
       conversationID,
       clientId,
     });
@@ -621,7 +626,7 @@ async function consume(
           `[WebRTC] On-demand pipe failed for producer ${producerId}:`,
           pipeErr,
         );
-        await publish(`events_${userId}`, "consume-error", {
+        await publish(`events_${entityID}`, "consume-error", {
           conversationID,
           clientId,
         });
@@ -630,7 +635,7 @@ async function consume(
 
       // Re-check after pipe is established
       if (!room.router.canConsume({ producerId, rtpCapabilities })) {
-        await publish(`events_${userId}`, "consume-error", {
+        await publish(`events_${entityID}`, "consume-error", {
           conversationID,
           clientId,
         });
@@ -638,7 +643,7 @@ async function consume(
       }
     } else {
       // Producer genuinely doesn't exist or caps mismatch — not a cross-pod issue
-      await publish(`events_${userId}`, "consume-error", {
+      await publish(`events_${entityID}`, "consume-error", {
         conversationID,
         clientId,
       });
@@ -661,7 +666,7 @@ async function consume(
     .getProducerMeta(conversationID, producerId)
     .catch(() => null);
 
-  await publish(`events_${userId}`, "consume-response", {
+  await publish(`events_${entityID}`, "consume-response", {
     conversationID,
     id: consumer.id,
     producerId,
@@ -674,7 +679,7 @@ async function consume(
 
 // ─── closeProducer ───────────────────────────────────────────────────────────
 
-async function closeProducer(conversationID, userId, clientId, producerId) {
+async function closeProducer(conversationID, entityID, clientId, producerId) {
   const room = nativeRooms.get(conversationID);
   if (!room) return;
 
@@ -702,12 +707,12 @@ async function closeProducer(conversationID, userId, clientId, producerId) {
   const allMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
   const notifiedUsers = new Set();
   for (const member of Object.values(allMembers)) {
-    if (notifiedUsers.has(member.userId)) continue;
-    notifiedUsers.add(member.userId);
-    await publish(`events_${member.userId}`, "producer-closed", {
+    if (notifiedUsers.has(member.entityID)) continue;
+    notifiedUsers.add(member.entityID);
+    await publish(`events_${member.entityID}`, "producer-closed", {
       conversationID,
       username: member.username || null,
-      userId,
+      entityID,
       clientId,
       producerId,
       timestamp: Date.now(),
@@ -717,7 +722,7 @@ async function closeProducer(conversationID, userId, clientId, producerId) {
 
 // ─── leaveRoom ───────────────────────────────────────────────────────────────
 
-async function leaveRoom(conversationID, userId, clientId) {
+async function leaveRoom(conversationID, entityID, clientId) {
   // Read the leaving member's data BEFORE deleting — needed for participant-left broadcast
   const leavingMember = await rs
     .getMember(conversationID, clientId)
@@ -766,13 +771,13 @@ async function leaveRoom(conversationID, userId, clientId) {
     .catch(() => ({}));
   const notifiedUsers = new Set();
   for (const [memberClientId, member] of Object.entries(remainingMembers)) {
-    if (memberClientId === clientId || notifiedUsers.has(member.userId))
+    if (memberClientId === clientId || notifiedUsers.has(member.entityID))
       continue;
-    notifiedUsers.add(member.userId);
-    await publish(`events_${member.userId}`, "participant-left", {
+    notifiedUsers.add(member.entityID);
+    await publish(`events_${member.entityID}`, "participant-left", {
       conversationID,
       username: leavingMember?.username || null,
-      userId: leavingMember?.userId || userId,
+      entityID: leavingMember?.entityID || entityID,
       clientId,
       producerIds: ownedProducerIds,
       timestamp: Date.now(),
@@ -789,7 +794,7 @@ async function leaveRoom(conversationID, userId, clientId) {
 
 async function participantStatus(
   conversationID,
-  userId,
+  entityID,
   clientId,
   muted,
   cameraOff,
@@ -815,7 +820,7 @@ async function participantStatus(
 
   const allMembers = await rs.getAllMembers(conversationID).catch(() => ({}));
   const recipientUserIds = Array.from(
-    new Set(Object.values(allMembers).map((m) => m.userId)),
+    new Set(Object.values(allMembers).map((m) => m.entityID)),
   );
   const member = allMembers[clientId];
 
@@ -824,7 +829,7 @@ async function participantStatus(
       publish(`events_${memberUserId}`, "participant-status", {
         conversationID,
         username: member?.username || null,
-        userId: member?.userId || userId,
+        entityID: member?.entityID || entityID,
         clientId,
         ...nextStatus,
         timestamp: Date.now(),
@@ -840,7 +845,7 @@ function webRTCEvents(event, message) {
     case "join-room-relay": {
       const {
         conversationID,
-        userId,
+        entityID,
         username,
         members,
         instance,
@@ -850,7 +855,7 @@ function webRTCEvents(event, message) {
       } = message;
       joinRoom(
         conversationID,
-        userId,
+        entityID,
         username,
         members,
         instance,
@@ -863,7 +868,7 @@ function webRTCEvents(event, message) {
     case "create-transport-relay":
       createTransport(
         message.conversationID,
-        message.userId,
+        message.entityID,
         message.username,
         message.instance,
         message.direction,
@@ -871,11 +876,16 @@ function webRTCEvents(event, message) {
       ).catch((err) => console.error("create-transport-relay error:", err));
       break;
     case "transport-connect-relay": {
-      const { conversationID, userId, transportId, dtlsParameters, clientId } =
-        message;
+      const {
+        conversationID,
+        entityID,
+        transportId,
+        dtlsParameters,
+        clientId,
+      } = message;
       transportConnect(
         conversationID,
-        userId,
+        entityID,
         transportId,
         dtlsParameters,
         clientId,
@@ -888,7 +898,7 @@ function webRTCEvents(event, message) {
         transportId,
         kind,
         rtpParameters,
-        userId,
+        entityID,
         username,
         members,
         clientId,
@@ -899,7 +909,7 @@ function webRTCEvents(event, message) {
         transportId,
         kind,
         rtpParameters,
-        userId,
+        entityID,
         username,
         members,
         clientId,
@@ -910,7 +920,7 @@ function webRTCEvents(event, message) {
     case "consume-relay": {
       const {
         conversationID,
-        userId,
+        entityID,
         transportId,
         producerId,
         rtpCapabilities,
@@ -918,7 +928,7 @@ function webRTCEvents(event, message) {
       } = message;
       consume(
         conversationID,
-        userId,
+        entityID,
         transportId,
         producerId,
         rtpCapabilities,
@@ -929,20 +939,22 @@ function webRTCEvents(event, message) {
     case "close-producer-relay":
       closeProducer(
         message.conversationID,
-        message.userId,
+        message.entityID,
         message.clientId,
         message.producerId,
       ).catch((err) => console.error("close-producer-relay error:", err));
       break;
     case "leave-room-relay":
-      leaveRoom(message.conversationID, message.userId, message.clientId).catch(
-        (err) => console.error("leave-room-relay error:", err),
-      );
+      leaveRoom(
+        message.conversationID,
+        message.entityID,
+        message.clientId,
+      ).catch((err) => console.error("leave-room-relay error:", err));
       break;
     case "participant-status-relay":
       participantStatus(
         message.conversationID,
-        message.userId,
+        message.entityID,
         message.clientId,
         message.muted,
         message.cameraOff,
