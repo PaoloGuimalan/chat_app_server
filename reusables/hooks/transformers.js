@@ -104,7 +104,7 @@ function generateUUID() {
 }
 
 function formatConnectionData(rows) {
-  if (!rows.length) return null;
+  if (!rows.length) return {};
 
   const connection = {
     _id: rows[0].connection_id, // assuming connection_id is unique for this group

@@ -232,7 +232,7 @@ router.get(
         const receivers = await GetAllReceivers(conversationID);
 
         if (!chatHistory) {
-          receivers.users.map((mp) => {
+          await receivers.users.map(async (mp) => {
             const newChatHistory = new ChatHistory({
               conversationID: conversationID,
               entityID: mp.entityID,
@@ -241,7 +241,7 @@ router.get(
               isRestricted: false,
             });
 
-            newChatHistory.save();
+            await newChatHistory.save();
 
             if (entity_id === mp.entityID) {
               chatHistory = newChatHistory;
@@ -536,6 +536,7 @@ function removeNullServerDetails(obj) {
 router.get("/archives", jwtchecker, async (req, res) => {
   try {
     const id = req.params.id;
+    const entityID = req.params.entity_id;
     const page = req.headers["page"];
     const range = req.headers["range"];
 
@@ -550,7 +551,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$conversationID", "$$msg_conv_id"] },
-                    { $eq: ["$userID", id] },
+                    { $eq: ["$entityID", entityID] },
                     { $eq: ["$isArchived", true] }, // Only archived for this user
                   ],
                 },
@@ -622,7 +623,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
             $sum: {
               $cond: {
                 if: {
-                  $in: [id, "$seeners"],
+                  $in: [entityID, "$seeners"],
                 },
                 then: 0,
                 else: 1,
@@ -673,26 +674,27 @@ router.get("/archives", jwtchecker, async (req, res) => {
 
         const usersWCns = await GetUsersWithConnectionIDs(directConversations);
         const flattenedReceiversArray = usersWCns
-          .map((mp) => mp.user_id)
+          .map((mp) => mp.entity_id)
           .flat();
         const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
         const usersByConversationID = {};
 
         for (const item of usersWCns) {
-          const { user_id, connection_ids } = item;
+          const { entity_id, connection_ids } = item;
 
           for (const connID of connection_ids) {
             if (!usersByConversationID[connID]) {
               usersByConversationID[connID] = [];
             }
-            usersByConversationID[connID].push(user_id);
+            usersByConversationID[connID].push(entity_id);
           }
         }
 
         const { rows } = await pool.query(
           `SELECT 
                 id AS _id,
+                entity_id AS "entityID",
                 username AS "userID",
                 json_build_object(
                   'firstName', first_name,
@@ -701,7 +703,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
                 ) AS fullname,
                 COALESCE(profile, 'none') AS profile
               FROM user_account
-              WHERE id = ANY($1);`,
+              WHERE entity_id = ANY($1);`,
           [removeDuplicateReceivers],
         );
 
@@ -709,6 +711,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
           `SELECT 
                 json_build_object(
                   '_id', cr.id,
+                  'entityID', cr.entity_id,
                   'serverID', cr.parent_id,
                   'groupID', cr.realm_id,
                   'profile', COALESCE(cr.profile, 'N/A'),
@@ -726,6 +729,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
                   WHEN cr.parent_id IS NOT NULL THEN
                     json_build_object(
                       '_id', pr.id,
+                      'entityID', pr.entity_id,
                       'serverID', pr.realm_id,
                       'serverName', pr.name,
                       'profile', COALESCE(pr.profile, 'N/A'),
@@ -736,7 +740,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
                       'members', (
                         SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
                         FROM community_member m
-                        JOIN user_account a ON m.account_id = a.id
+                        JOIN user_account a ON m.entity_id = a.entity_id
                         WHERE m.realm_id = pr.realm_id
                       ),
                       'createdBy', parent_created_by.username,
@@ -746,8 +750,8 @@ router.get("/archives", jwtchecker, async (req, res) => {
                 END AS serverdetails
               FROM community_realm cr
               LEFT JOIN community_realm pr ON cr.parent_id = pr.realm_id
-              LEFT JOIN user_account created_by ON cr.created_by_id = created_by.id
-              LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.id
+              LEFT JOIN user_account created_by ON cr.created_by_id = created_by.entity_id
+              LEFT JOIN user_account parent_created_by ON pr.created_by_id = parent_created_by.entity_id
               WHERE cr.realm_id = ANY($1);
               `,
           [flattenedGroupsArray],
@@ -774,7 +778,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
           return {
             ...final_mp,
             content: final_mp.isDeleted ? "" : final_mp.content,
-            users: rows.filter((flt) => involvedUserIDs.includes(flt._id)), // mp.receivers.includes(flt._id)
+            users: rows.filter((flt) => involvedUserIDs.includes(flt.entityID)), // mp.receivers.includes(flt._id)
           };
         });
 
@@ -1269,7 +1273,7 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
       if (conversation.conversationType === "single") {
         // Map over participant_ids and append full user account details
         const hydratedParticipants = (
-          conversation.receivers.filter((flt) => flt !== entity_id) || []
+          conversation.participant_ids.filter((flt) => flt !== entity_id) || []
         ).map((entityId) => {
           return (
             accountMap.get(entityId) || {
