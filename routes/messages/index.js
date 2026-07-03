@@ -346,12 +346,12 @@ router.get(
         );
         const formattedResult = formatToDesiredStructure(result);
 
-        const receivers = await GetAllReceivers(conversationID);
+        const receivers = await GetAllReceivers(resolvedConversationID);
 
         if (!chatHistory) {
           receivers.users.map((mp) => {
             const newChatHistory = new ChatHistory({
-              conversationID: conversationID,
+              conversationID: resolvedConversationID,
               entityID: mp.entityID,
               cleared_at: null,
               isArchived: false,
@@ -385,6 +385,7 @@ router.get(
           });
       }
     } catch (err) {
+      console.log(err);
       res.status(500).send({ status: false, message: "Invalid Group/Channel" });
     }
   },

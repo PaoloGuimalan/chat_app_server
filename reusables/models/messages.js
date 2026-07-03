@@ -348,7 +348,7 @@ const GetAllReceivers = async (contactID) => {
      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
      WHERE p.id = ANY($1)`,
-    [conversation.participant_ids],
+    [conversation.participant_ids ?? []],
   );
 
   if (receiversFromChatHistory.length > 0) {

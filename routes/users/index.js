@@ -2083,6 +2083,7 @@ router.post("/createserver", jwtchecker, async (req, res) => {
 
 router.post("/createconference", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
+  const entityID = req.params.entity_id;
   const id = req.params.id;
   const token = req.body.token;
 
@@ -2137,7 +2138,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
     const inviteAccounts = inviteEmailList.length
       ? await pool.query(
           `
-            SELECT id, email
+            SELECT id, email, entity_id
             FROM user_account
             WHERE LOWER(email) = ANY($1::text[])
           `,
@@ -2147,7 +2148,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
     const inviteAccountMap = new Map(
       inviteAccounts.rows.map((mp) => [
         String(mp.email).trim().toLowerCase(),
-        mp.id,
+        mp.entity_id,
       ]),
     );
     const resolvedInvites = normalizedInviteTargets.map((invite, index) => ({
@@ -2157,9 +2158,9 @@ router.post("/createconference", jwtchecker, async (req, res) => {
       kind: invite.kind,
       status: invite.status,
       target_email: invite.target_email,
-      target_user_id:
-        invite.target_user_id ?? inviteAccountMap.get(invite.target_email),
-      accepted_by_user_id: invite.accepted_by_user_id ?? null,
+      target_entity_id:
+        invite.target_entity_id ?? inviteAccountMap.get(invite.target_email),
+      accepted_by_entity_id: invite.accepted_by_entity_id ?? null,
       invite_token: invite.invite_token ?? `${makeID(12)}`,
       created_by: invite.created_by ?? userID,
       created_at: invite.created_at ?? new Date().toISOString(),
@@ -2167,20 +2168,20 @@ router.post("/createconference", jwtchecker, async (req, res) => {
     }));
 
     const conferenceSlug = await checkConferenceSlug(`${makeID(6)}`);
-    const allReceivers = [userID, ...otherUsers];
+    const allReceivers = [entityID, ...otherUsers];
     const userReceivers = allReceivers.map((alr) => ({
-      userID: alr,
+      entityID: alr,
     }));
 
     await createRealmReusable(
-      id,
+      entityID,
       null,
       conferenceID,
       conferenceTitle,
       null,
       null,
       null,
-      userID,
+      entityID,
       userReceivers,
       privacy,
       "conference",
