@@ -180,11 +180,11 @@ const GetRankedUsersInConnections = async (entityID, limit = 500) => {
       c.interaction_score,
       c.last_interaction_at
     FROM user_connection c
-    JOIN user_account ab ON c.action_by_id = ab.id
-    JOIN user_account iu ON c.involved_entity_id = iu.id
+    JOIN user_account ab ON c.action_by_id = ab.entity_id
+    JOIN user_account iu ON c.involved_entity_id = iu.entity_id
     WHERE
       (ab.entity_id = $1 OR iu.entity_id = $1)
-      AND ab.id != iu.id
+      AND ab.entity_id != iu.entity_id
       AND ab.is_active = TRUE
       AND ab.is_verified = TRUE
       AND iu.is_active = TRUE
