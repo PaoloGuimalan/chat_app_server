@@ -340,7 +340,14 @@ const GetAllReceivers = async (contactID) => {
   });
 
   const { rows: receiversFromChatHistory } = await pool.query(
-    "SELECT * FROM user_account WHERE entity_id = ANY($1)",
+    `SELECT 
+       p.id AS entity_id,
+       COALESCE(u.id, r.id) AS id,
+       COALESCE(u.username, r.slug) AS username
+     FROM entity_entity p
+     LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+     LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     WHERE p.id = ANY($1)`,
     [conversation.participant_ids],
   );
 

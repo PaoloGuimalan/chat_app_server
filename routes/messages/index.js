@@ -258,7 +258,26 @@ router.get(
           });
 
           const { rows: receiversFromChatHistory } = await pool.query(
-            "SELECT * FROM user_account WHERE entity_id = ANY($1)",
+            `SELECT 
+              p.id AS "entity_id",
+              -- entityID maps to the entity table ID column directly
+              p.id AS "entityID",
+              -- userID acts as the user_account username or community_realm slug
+              COALESCE(u.username, r.slug) AS "userID",
+              COALESCE(u.username, r.slug) AS "username",
+              -- first_name pulls the real first name, or falls back to the community_realm name
+              COALESCE(u.first_name, r.name) AS "first_name",
+              -- middle_name and last_name are empty strings for realms
+              COALESCE(u.middle_name, '') AS "middle_name",
+              COALESCE(u.last_name, '') AS "last_name",
+              COALESCE(u.profile, r.profile, 'none') AS "profile",
+              -- Maps activation and verification states across tables
+              COALESCE(u.is_active, r.is_active, TRUE) AS "isActivated",
+              COALESCE(u.is_verified, FALSE) AS "isVerified"
+            FROM entity_entity p
+            LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+            LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+            WHERE p.id = ANY($1)`,
             [conversation.participant_ids],
           );
 
@@ -1105,14 +1124,17 @@ router.get("/conversations", jwtchecker, async (req, res) => {
     const { rows: accountRows } = await pool.query(
       `
         SELECT 
-          id,
-          entity_id,
-          username,
-          -- Concatenate first and last name safely with a separating space
-          TRIM(first_name || ' ' || last_name) AS display_name,
-          COALESCE(profile, 'none') AS profile
-        FROM user_account
-        WHERE entity_id = ANY($1::TEXT[]);
+          p.id AS entity_id,
+          COALESCE(u.id, r.id) AS id,
+          COALESCE(u.username, r.slug) AS username,
+          FALSE AS privacy,
+          -- Fallback mapping: uses concatenated user names or the realm name
+          COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
+          COALESCE(u.profile, r.profile, 'none') AS profile
+        FROM entity_entity p
+        LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+        LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        WHERE p.id = ANY($1::TEXT[]);
       `,
       [receiversEntity],
     );
@@ -1340,15 +1362,17 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
     const { rows: accountRows } = await pool.query(
       `
         SELECT 
-          id,
-          entity_id,
-          username,
+          p.id AS entity_id,
+          COALESCE(u.id, r.id) AS id,
+          COALESCE(u.username, r.slug) AS username,
           FALSE AS privacy,
-          -- Concatenate first and last name safely with a separating space
-          TRIM(first_name || ' ' || last_name) AS display_name,
-          COALESCE(profile, 'none') AS profile
-        FROM user_account
-        WHERE entity_id = ANY($1::TEXT[]);
+          -- Fallback mapping: uses concatenated user names or the realm name
+          COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
+          COALESCE(u.profile, r.profile, 'none') AS profile
+        FROM entity_entity p
+        LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+        LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        WHERE p.id = ANY($1::TEXT[]);
       `,
       [recipients],
     );
