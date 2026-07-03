@@ -215,7 +215,7 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
     });
 });
 
-const notifyTaggedUser = async (userID, username, postID, tagged_users) => {
+const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
   tagged_users.map(async (mp) => {
     const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
     const notifParams = {
@@ -223,7 +223,7 @@ const notifyTaggedUser = async (userID, username, postID, tagged_users) => {
       referenceID: postID,
       referenceStatus: false,
       toUserID: mp,
-      fromUserID: userID,
+      fromUserID: entityID,
       content: {
         headline: `You were tagged`,
         details: `@${username} tagged you on a post.`,
@@ -241,7 +241,7 @@ const notifyTaggedUser = async (userID, username, postID, tagged_users) => {
     newNotif
       .save()
       .then(async () => {
-        SendTagPostNotification(`@${userID} tagged you on a post.`, mp);
+        SendTagPostNotification(`@${username} tagged you on a post.`, mp);
       })
       .catch((err) => {
         console.log(err);
@@ -300,6 +300,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
   const id = req.params.id;
+  const entityID = req.params.entity_id;
   const postID = await checkPostIDExisting(makeID(30));
   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
 
@@ -309,7 +310,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     const decodeToken = jwt.verify(token, JWT_SECRET);
     const filereferencesraw = decodeToken.content.references;
     const content_type = decodeToken.type.contentType;
-    const realm_id = decodeToken.realm_id;
+    const otherEntityID = decodeToken.otherEntityID;
     const filereferences = filereferencesraw.map((mp) => ({
       name: mp.name || `${postID}_${makeID(20)}`,
       caption: mp.caption,
@@ -330,13 +331,14 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         const { rows: query_post_user } = await pool.query(
           `SELECT 
                 ua.username,
-                ua.id 
+                ua.id,
+                ua.entity_id AS "entityID" 
             FROM 
                 newsfeed_post np 
             JOIN 
                 user_account ua  
             ON 
-                np.user_id  = ua.id 
+                np.entity_id  = ua.entity_id 
             WHERE
                 np.post_id = $1
           `,
@@ -344,11 +346,16 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         );
 
         if (query_post_user.length > 0) {
-          const post_user = query_post_user[0].id;
+          const post_user = query_post_user[0].entityID;
 
-          if (post_user !== userID) {
-            interactionScoreBump(id, post_user, "SHARE", false);
-            followerInteractionScoreBump(id, realm_id, "SHARE", false);
+          if (post_user !== entityID) {
+            interactionScoreBump(entityID, post_user, "SHARE", false);
+            followerInteractionScoreBump(
+              entityID,
+              otherEntityID,
+              "SHARE",
+              false,
+            );
 
             const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
             const notifParams = {
@@ -356,7 +363,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
               referenceID: postID,
               referenceStatus: false,
               toUserID: post_user,
-              fromUserID: userID,
+              fromUserID: entityID,
               content: {
                 headline: `Shared post`,
                 details: `@${username} shared your post.`,
@@ -410,16 +417,16 @@ router.post("/createpost", jwtchecker, async (req, res) => {
     // Prepare main post insert
     const postInsertQuery = `
       INSERT INTO newsfeed_post (
-        post_id, user_id, is_sponsored, is_live, on_feed, from_system, date_posted,
-        is_shared, file_type, caption, content_type, is_tagged, privacy_status, author_realm_id, is_archived
+        post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
+        is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived
       ) VALUES (
         $1, $2, $3, $4, $5, $6, to_timestamp($7),
-        $8, $9, $10, $11, $12, $13, $14, $15
+        $8, $9, $10, $11, $12, $13, $14
       );
     `;
     const postValues = [
       postID,
-      id,
+      entityID,
       false, // isSponsored
       false, // isLive
       decodeToken.onfeed,
@@ -431,7 +438,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       decodeToken.type.contentType,
       decodeToken.tagging.isTagged,
       decodeToken.privacy.status,
-      realm_id,
       false,
     ];
 
@@ -450,43 +456,41 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
         if (content_type === "profile") {
-          if (realm_id) {
-            await pool.query(
-              `UPDATE community_realm
-                SET profile = $1
-                WHERE realm_id = $2
-              `,
-              [finaluploadedreferences[0].reference, realm_id],
-            );
-          } else {
-            await pool.query(
-              `UPDATE user_account
-                SET profile = $1
-                WHERE id = $2
-              `,
-              [finaluploadedreferences[0].reference, userID],
-            );
-          }
+          await pool.query(
+            `WITH target_record AS (
+                SELECT type FROM entity_entity WHERE id = $1
+              )
+              , run_realm_update AS (
+                UPDATE community_realm
+                SET profile = $2
+                WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
+              )
+              UPDATE user_account
+              SET profile = $2
+              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
+              RETURNING id;
+            `,
+            [entityID, finaluploadedreferences[0].reference],
+          );
         }
 
         if (content_type === "cover_photo") {
-          if (realm_id) {
-            await pool.query(
-              `UPDATE community_realm
-                SET cover_photo = $1
-                WHERE realm_id = $2
-              `,
-              [finaluploadedreferences[0].reference, realm_id],
-            );
-          } else {
-            await pool.query(
-              `UPDATE user_account
-                SET coverphoto = $1
-                WHERE id = $2
-              `,
-              [finaluploadedreferences[0].reference, userID],
-            );
-          }
+          await pool.query(
+            `WITH target_record AS (
+                SELECT type FROM entity_entity WHERE id = $1
+              )
+              , run_realm_update AS (
+                UPDATE community_realm
+                SET cover_photo = $2
+                WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
+              )
+              UPDATE user_account
+              SET coverphoto = $2
+              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
+              RETURNING id;
+            `,
+            [entityID, finaluploadedreferences[0].reference],
+          );
         }
 
         const refValues = [];
@@ -525,9 +529,9 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
         // Query user IDs for all tagged usernames
         const userQuery = `
-          SELECT id, username
+          SELECT id, username, entity_id AS "entityID"
           FROM user_account
-          WHERE username = ANY($1)
+          WHERE entity_id = ANY($1)
         `;
 
         const { rows: userRows } = await client.query(userQuery, [
@@ -535,23 +539,24 @@ router.post("/createpost", jwtchecker, async (req, res) => {
         ]);
 
         // Map of username -> real user id
-        const usernameToId = new Map(userRows.map((u) => [u.username, u.id]));
+        const usernameToId = new Map(userRows.map((u) => [u.id, u.entityID]));
 
         // Prepare tagValues and tagRowsSQL with real user ids
         const tagValues = [];
-        const tagRowsSQL = taggedUsernames
-          .map((username, i) => {
+        const tagRowsSQL = userRows
+          .map((user, i) => {
             const postTagId = generateUUID();
-            const userId = usernameToId.get(username);
-            if (!userId) throw new Error(`Tagged user "${username}" not found`);
-            tagValues.push(postTagId, postID, userId);
+            const entityID = usernameToId.get(user.id);
+            if (!entityID)
+              throw new Error(`Tagged user "${user.username}" not found`);
+            tagValues.push(postTagId, postID, entityID);
             const baseIndex = i * 3;
             return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
           })
           .join(", ");
 
         const insertTagQuery = `
-          INSERT INTO newsfeed_posttag (post_tag_id, post_id, user_id)
+          INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
           VALUES ${tagRowsSQL};
         `;
 
@@ -565,15 +570,6 @@ router.post("/createpost", jwtchecker, async (req, res) => {
       `;
 
       await client.query(insertPreviewCountsQuery, [postID]);
-
-      // const insertActivityCount = `
-      //   INSERT INTO newsfeed_activitycount (count_id, count_type, count, post_id)
-      //   VALUES
-      //   (uuid_generate_v4(), 'share', 0, $1),
-      //   (uuid_generate_v4(), 'comment', 0, $1);
-      // `;
-
-      // await client.query(insertActivityCount, [postID]);
 
       // POST SCORE TABLE SAVE
 
@@ -637,53 +633,13 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
       // END: POST SCORE TABLE SAVE
 
-      // CASSANDRA FEED BUILDER
-
-      //   const cassandra_feed_query = `
-      //   INSERT INTO chatterloop.newsfeed_index (
-      //     bucket,
-      //     latest_activity,
-      //     post_id,
-      //     author_id,
-      //     ranking_score
-      //   ) VALUES (?, ?, ?, ?, ?)
-      // `;
-
-      //   const cassandra_feed_params = [
-      //     String(realm_id ?? id),
-      //     new Date(),
-      //     String(postID),
-      //     String(realm_id ?? id),
-      //     Number(ranking_score),
-      //   ];
-
-      //   await query(cassandra_feed_query, cassandra_feed_params, {
-      //     prepare: true,
-      //   });
-
-      // END: CASSANDRA FEED BUILDER
-
-      // if (decodeToken.content.isShared) {
-      //   const reference_post_id = finaluploadedreferences[0].reference;
-      //   await pool.query(
-      //     `
-      //       INSERT INTO newsfeed_engagementlog (
-      //           log_id, post_id, user_id, action, reference_id, created_at, updated_at
-      //       ) VALUES (
-      //           gen_random_uuid(), $1, $2, 'shared', $3, NOW(), NOW()
-      //       )
-      //     `,
-      //     [postID, id, reference_post_id],
-      //   );
-      // }
-
       await client.query("COMMIT");
 
-      const fanoutCandidates = await GetRankedUsersInConnections(id);
+      const fanoutCandidates = await GetRankedUsersInConnections(entityID);
 
       bulkFanoutToCache(
         fanoutCandidates,
-        { id: postID, author_id: id },
+        { id: postID, author_id: entityID },
         "fanout",
       );
 
@@ -699,7 +655,7 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
         const cassandra_log_params = [
           pending_log_id,
-          id,
+          entityID,
           0,
           "share",
           "post",
@@ -720,19 +676,19 @@ router.post("/createpost", jwtchecker, async (req, res) => {
 
         // Query user IDs for all tagged usernames
         const userQuery = `
-          SELECT id
+          SELECT entity_id AS "entityID"
           FROM user_account
-          WHERE username = ANY($1)
+          WHERE entity_id = ANY($1)
         `;
 
         const { rows: userRows } = await client.query(userQuery, [
           taggedUsernames,
         ]);
         notifyTaggedUser(
-          userID,
+          entityID,
           username,
           postID,
-          userRows.map((mp) => mp.id),
+          userRows.map((mp) => mp.entityID),
         );
       }
 

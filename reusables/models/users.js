@@ -172,18 +172,18 @@ const GetListOfContactsV2 = async (userID) => {
   return rows.map((mp) => mp.connection_id);
 };
 
-const GetRankedUsersInConnections = async (userID, limit = 500) => {
+const GetRankedUsersInConnections = async (entityID, limit = 500) => {
   const query = `
     SELECT DISTINCT ON (c.connection_id)
       c.action_by_id,
-      c.involved_user_id,
+      c.involved_entity_id,
       c.interaction_score,
       c.last_interaction_at
     FROM user_connection c
     JOIN user_account ab ON c.action_by_id = ab.id
-    JOIN user_account iu ON c.involved_user_id = iu.id
+    JOIN user_account iu ON c.involved_entity_id = iu.id
     WHERE
-      (ab.id = $1 OR iu.id = $1)
+      (ab.entity_id = $1 OR iu.entity_id = $1)
       AND ab.id != iu.id
       AND ab.is_active = TRUE
       AND ab.is_verified = TRUE
@@ -196,7 +196,7 @@ const GetRankedUsersInConnections = async (userID, limit = 500) => {
       c.last_interaction_at DESC;
   `;
 
-  const { rows } = await pool.query(query, [userID]);
+  const { rows } = await pool.query(query, [entityID]);
 
   const sortedRows = rows.sort((a, b) => {
     if (b.interaction_score !== a.interaction_score) {
@@ -210,9 +210,9 @@ const GetRankedUsersInConnections = async (userID, limit = 500) => {
 
   for (const row of sortedRows) {
     const targetID =
-      row.action_by_id === userID ? row.involved_user_id : row.action_by_id;
+      row.action_by_id === entityID ? row.involved_entity_id : row.action_by_id;
 
-    if (targetID !== userID && !seen.has(targetID)) {
+    if (targetID !== entityID && !seen.has(targetID)) {
       uniqueValues.push(targetID);
       seen.add(targetID);
     }
