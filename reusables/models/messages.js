@@ -335,6 +335,25 @@ const GetAllReceivers = async (contactID) => {
     };
   }
 
+  const conversation = await Conversation.findOne({
+    conversationID: contactID,
+  });
+
+  const { rows: receiversFromChatHistory } = await pool.query(
+    "SELECT * FROM user_account WHERE entity_id = ANY($1)",
+    [conversation.participant_ids],
+  );
+
+  if (receiversFromChatHistory.length > 0) {
+    return {
+      users: receiversFromChatHistory.map((mp) => ({
+        userID: mp.id,
+        entityID: mp.entity_id,
+        username: mp.username,
+      })),
+    };
+  }
+
   return { users: [] };
 };
 

@@ -131,11 +131,11 @@ function formatConnectionData(rows) {
       userIds.add(row.username);
       connection.users.push({
         userID: row.username,
-        _id: row.involved_user_id,
+        _id: row.involved_entity_id,
       });
 
       connection.usersWithInfo.push({
-        _id: row.involved_user_id,
+        _id: row.involved_entity_id,
         entityID: row.entity_id,
         userID: row.username,
         fullname: {

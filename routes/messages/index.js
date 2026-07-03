@@ -249,7 +249,33 @@ router.get(
           });
         }
 
-        const formattedResult = formatConnectionData(rows);
+        let finalrows = rows;
+
+        if (finalrows.length === 0) {
+          const conversation = await Conversations.findOne({
+            conversationID: conversationID,
+          });
+
+          const { rows: receiversFromChatHistory } = await pool.query(
+            "SELECT * FROM user_account WHERE entity_id = ANY($1)",
+            [conversation.participant_ids],
+          );
+
+          finalrows = receiversFromChatHistory.map((mp) => ({
+            ...mp,
+            connection_id: conversationID,
+            nickname: null,
+            status: false,
+            action_date: Date.now(),
+            type: type,
+            interaction_score: 0,
+            last_interaction_at: Date.now(),
+            action_by_id: mp.entity_id,
+            involved_entity_id: mp.entity_id,
+          }));
+        }
+
+        const formattedResult = formatConnectionData(finalrows);
 
         UploadedFiles.find({ foreignID: conversationID })
           .then((result) => {
@@ -1187,9 +1213,22 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
 
     const receiversEntity = await GetAllReceivers(conversationID);
     const users = receiversEntity.users;
-    const recipients = receiversEntity.users
+    let recipients = receiversEntity.users
       .map((mp) => mp.entityID)
       .filter((flt) => flt !== entity_id);
+
+    if (recipients.length === 0) {
+      const conversation = await Conversations.findOne({
+        conversationID: conversationID,
+      });
+
+      const { rows: receiversFromChatHistory } = await pool.query(
+        'SELECT entity_id AS "entityID" FROM user_account WHERE entity_id = ANY($1)',
+        [conversation.participant_ids.filter((flt) => flt !== entity_id)],
+      );
+
+      recipients = receiversFromChatHistory.map((mp) => mp.entityID);
+    }
 
     const realmsEntity = [conversationID];
 
@@ -1221,7 +1260,7 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
         FROM user_account
         WHERE entity_id = ANY($1::TEXT[]);
       `,
-      [receiversEntity.users.map((mp) => mp.entityID)],
+      [recipients],
     );
 
     const accountMap = new Map(
@@ -1250,7 +1289,7 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
       const final = {
         conversationID: conversationID,
         conversationType: "single",
-        participant_ids: receiversEntity.users.map((mp) => mp.entityID),
+        participant_ids: recipients,
         last_message: null,
         createdAt: null,
         updatedAt: null,
