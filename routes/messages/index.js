@@ -39,6 +39,7 @@ const {
 const { isRealmMember } = require("../../reusables/models/realms");
 const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
 const conversation = require("../../schema/messages/conversation");
+const makeid = require("../../reusables/hooks/makeID");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -858,6 +859,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
 
     const match = {
       participant_ids: { $in: [entity_id] },
+      last_message: { $ne: null, $exists: true },
     };
 
     if (type !== "all") {
@@ -1195,6 +1197,94 @@ router.get("/conversations", jwtchecker, async (req, res) => {
     res.send({
       status: false,
       message: "Error generating conversations list",
+    });
+  }
+});
+
+const checkExistingConversationID = async (conversationID) => {
+  return await Conversations.find({ conversation_id: conversationID })
+    .then((result) => {
+      if (result.length > 0) {
+        // Crucial: Must use 'return' here so the final clean ID passes back up the loop
+        return checkExistingConversationID(makeid(20));
+      } else {
+        return conversationID;
+      }
+    })
+    .catch((err) => {
+      console.log(err);
+      return false;
+    });
+};
+
+router.post("/crtc", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
+
+  try {
+    const otherEntityID = req.body.otherEntityID;
+
+    // Safety check to ensure both keys are present before querying database collections
+    if (!entity_id || !otherEntityID) {
+      return res.status(400).json({
+        status: false,
+        message: "Missing entity identifiers for conversation creation.",
+      });
+    }
+
+    // Do not let a user open a private chat room with themselves
+    if (entity_id === otherEntityID) {
+      return res.status(400).json({
+        status: false,
+        message: "Cannot initialize a direct conversation with yourself.",
+      });
+    }
+
+    const initialParticipants = [entity_id, otherEntityID];
+
+    // 1. Race Condition Check: Must contain exactly only those two participant IDs
+    // $all checks for presence of both elements, $size enforces strict direct chat boundaries
+    const existingConversation = await Conversations.findOne({
+      participant_ids: {
+        $all: initialParticipants,
+        $size: 2,
+      },
+      conversationType: "single",
+    });
+
+    if (existingConversation) {
+      // If a private room already exists, return its ID safely to prevent duplication
+      return res.status(200).json({
+        status: true,
+        message: "Conversation already initialized",
+        conversationID: existingConversation.conversationID,
+        isNew: false,
+      });
+    }
+
+    const newConversationID = await checkExistingConversationID(makeid(20));
+
+    // 2. Fallback execution: Create a clean initialization layout
+    const newConversation = await Conversations.create({
+      conversationID: newConversationID,
+      participant_ids: initialParticipants,
+      conversationType: "single",
+      last_message: null, // Kept null so it stays hidden from inbox listing aggregation maps
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    return res.status(201).json({
+      status: true,
+      message: "Conversation successfully initialized",
+      conversationID: newConversation.conversationID,
+      isNew: true,
+    });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error initializing conversation",
     });
   }
 });
