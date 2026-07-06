@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
+const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
 const { publish_pub, publish } = require("../../reusables/redis/pubsub");
 const {
   createTransport,
@@ -90,7 +91,11 @@ router.get("/encodings", jwtchecker, (_req, res) => {
   });
 });
 
-router.post("/join-room", jwtchecker, async (req, res) => {
+router.post(
+  "/join-room",
+  jwtchecker,
+  requiresPermission("webrtc.call.join"),
+  async (req, res) => {
   const { conversationID, members, muted, cameraOff } = req.body;
   const userId = req.params.userID;
   const id = req.params.id;

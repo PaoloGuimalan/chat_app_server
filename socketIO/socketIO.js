@@ -1,5 +1,30 @@
 const socketIO = require("socket.io");
+const jwt = require("jsonwebtoken");
 const { BroadcastCoordinates } = require("../reusables/hooks/sse");
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// The /call namespace previously accepted connections with zero
+// authentication - anyone could connect and emit signaling events for any
+// conversationID. This verifies the same JWT issued at login before any
+// event handler below runs, mirroring jwtchecker's token decoding
+// (reusables/hooks/jwthelper.js).
+const requireCallAuth = (socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+
+  if (!token) {
+    return next(new Error("Authentication required"));
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return next(new Error("Invalid or expired token"));
+    }
+    socket.entity_id = decoded.entity;
+    socket.userID = decoded.userID;
+    next();
+  });
+};
 
 var callCollections = Object.create(null);
 
@@ -15,6 +40,8 @@ const initSocketIO = (server) => {
 
   const callSocket = io.of("/call");
   const mapSocket = io.of("/map");
+
+  callSocket.use(requireCallAuth);
 
   callSocket.on("connection", (socket) => {
     var socketID = socket.id;

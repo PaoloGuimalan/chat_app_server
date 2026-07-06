@@ -20,6 +20,7 @@ const {
   GetAllReceivers,
 } = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
+const { hasPermission } = require("../../reusables/hooks/permissionChecker");
 const { transformServersData } = require("../../reusables/hooks/transformers");
 const { getAllParticipants, publish } = require("../../reusables/redis/pubsub");
 const {
@@ -362,7 +363,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         FROM community_member cm
         WHERE cm.entity_id = $1
           AND cm.realm_id = cr.realm_id
-          AND cm.role = 'admin'
+          AND cm.role IN ('admin', 'owner')
       ),
       'channels', COALESCE((
         SELECT jsonb_agg(
@@ -587,17 +588,45 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
   const new_role = req.body.new_role;
 
   try {
-    const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 AND role = $3;`,
-      [entityID, realm_id, "admin"],
-    );
-
-    if (row.length === 0) {
+    if (!(await hasPermission(entityID, "realm.member.role.update", realm_id))) {
       res.status(401).send({
         status: false,
         message: "You are not authorized to do this action",
       });
       return;
+    }
+
+    // Setting someone as owner would create a second owner alongside the
+    // existing one - that's an ownership transfer (realm.ownership.transfer),
+    // not a plain role update, and isn't implemented via this endpoint yet.
+    if (new_role === "owner") {
+      res.status(400).send({
+        status: false,
+        message: "Use ownership transfer to change the realm owner.",
+      });
+      return;
+    }
+
+    // Target-role-aware rule: an admin can change a plain member/moderator's
+    // role, but only the owner can change a fellow admin's (or the owner's).
+    const { rows: actorRow } = await pool.query(
+      `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+      [entityID, realm_id],
+    );
+    const actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+
+    if (actorRole !== "owner") {
+      const { rows: targetRow } = await pool.query(
+        `SELECT role FROM community_member WHERE member_id = $1 AND realm_id = $2`,
+        [member_id, realm_id],
+      );
+      if (targetRow.length > 0 && ["admin", "owner"].includes(targetRow[0].role)) {
+        res.status(401).send({
+          status: false,
+          message: "Only the realm owner can change an admin's role.",
+        });
+        return;
+      }
     }
 
     await pool.query(

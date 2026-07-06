@@ -5,10 +5,14 @@ const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const Axios = require("axios");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
+const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
 
 const UserMessage = require("../../schema/messages/message");
 
-router.post("/reply-assist", [jwtchecker], async (req, res) => {
+router.post(
+  "/reply-assist",
+  [jwtchecker, requiresPermission("ai.prompt.assist")],
+  async (req, res) => {
   const userID = req.params.userID;
   const conversationID = req.body.conversationID;
   const messageIDs = req.body.messageIDs;

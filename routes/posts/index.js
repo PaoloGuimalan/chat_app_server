@@ -10,6 +10,7 @@ const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
+const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
 const router = express.Router();
 
 const Posts = require("../../schema/posts/posts");
@@ -296,7 +297,11 @@ router.post("/upload", jwtchecker, async (req, res) => {
   }
 });
 
-router.post("/createpost", jwtchecker, async (req, res) => {
+router.post(
+  "/createpost",
+  jwtchecker,
+  requiresPermission("posts.create"),
+  async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
   const id = req.params.id;

@@ -111,6 +111,7 @@ const {
   jwtchecker,
   jwtssechecker,
 } = require("../../reusables/hooks/jwthelper");
+const { requiresPermission, hasPermission } = require("../../reusables/hooks/permissionChecker");
 const producer = require("../../reusables/rabbitmq/producer");
 const {
   SSE_NOTIFICATIONS_TRIGGER,
@@ -507,7 +508,11 @@ const checkContactRequest = async (requesterID, responderID) => {
     });
 };
 
-router.post("/requestContact", jwtchecker, async (req, res) => {
+router.post(
+  "/requestContact",
+  jwtchecker,
+  requiresPermission("contacts.request.create"),
+  async (req, res) => {
   const userID = req.params.userID;
   const token = req.body.token;
 
@@ -986,7 +991,11 @@ const checkExistingMessageID = async (messageID) => {
     });
 };
 
-router.post("/sendMessage", jwtchecker, async (req, res) => {
+router.post(
+  "/sendMessage",
+  jwtchecker,
+  requiresPermission("messages.send"),
+  async (req, res) => {
   const userID = req.params.userID;
   const username = req.params.username;
   const id = req.params.id;
@@ -1732,7 +1741,11 @@ const sendMessageInitForGC = async (
     });
 };
 
-router.post("/createContactGroupChat", jwtchecker, async (req, res) => {
+router.post(
+  "/createContactGroupChat",
+  jwtchecker,
+  requiresPermission("conversations.create"),
+  async (req, res) => {
   const userID = req.params.userID;
   const entity_id = req.params.entity_id;
   const id = req.params.id;
@@ -1893,7 +1906,7 @@ const createRealmReusable = async (
       params.push(new Date()); // date_joined or null as needed
 
       if (accountId === entityID) {
-        params.push("admin"); // member role
+        params.push("owner"); // realm creator - full control, incl. delete/ownership transfer
       } else {
         params.push("member"); // member role
       }
@@ -1975,6 +1988,13 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       entityID: alr,
     }));
 
+    if (!(await hasPermission(entityID, "realm.channel.create", serverID))) {
+      return res.status(403).send({
+        status: false,
+        message: "You are not allowed to create channels in this server.",
+      });
+    }
+
     const serverMembers = await GetServerMembers(serverID, false);
 
     if (privacy) {
@@ -2020,7 +2040,11 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
   }
 });
 
-router.post("/createserver", jwtchecker, async (req, res) => {
+router.post(
+  "/createserver",
+  jwtchecker,
+  requiresPermission("realm.server.create"),
+  async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
   const entityID = req.params.entity_id;

@@ -13,6 +13,7 @@ const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
 const Conversations = require("../../schema/messages/conversation");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
+const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
 const {
   GetMessageReceivers,
   AddNewMemberToAllMessages,
@@ -64,6 +65,17 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
 
     await isRealmMember(decodedToken.conversationID, entity_id);
 
+    const targetMessage = await UserMessage.findOne({
+      conversationID: decodedToken.conversationID,
+      messageID: decodedToken.messageID,
+    });
+
+    if (!targetMessage || String(targetMessage.sender) !== String(entity_id)) {
+      return res
+        .status(403)
+        .send({ status: false, message: "You do not own this message." });
+    }
+
     UserMessage.updateOne(
       {
         conversationID: decodedToken.conversationID,
@@ -106,7 +118,11 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
   }
 });
 
-router.post("/addreaction", jwtchecker, async (req, res) => {
+router.post(
+  "/addreaction",
+  jwtchecker,
+  requiresPermission("messages.react"),
+  async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
   const id = req.params.id;
@@ -172,7 +188,7 @@ async function getRealmWithUsers(realmId, entityID) {
         FROM community_member cm_admin
         WHERE cm_admin.entity_id = $2
           AND cm_admin.realm_id = cr.realm_id
-          AND cm_admin.role = 'admin'
+          AND cm_admin.role IN ('admin', 'owner')
       ),
       'is_member', EXISTS (
         SELECT 1
@@ -1240,7 +1256,11 @@ const checkExistingConversationID = async (conversationID) => {
     });
 };
 
-router.post("/crtc", jwtchecker, async (req, res) => {
+router.post(
+  "/crtc",
+  jwtchecker,
+  requiresPermission("conversations.create"),
+  async (req, res) => {
   const userID = req.params.userID;
   const entity_id = req.params.entity_id;
 

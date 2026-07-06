@@ -12,6 +12,7 @@ const {
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
 const { publish } = require("../../reusables/redis/pubsub");
+const { hasPermission } = require("../../reusables/hooks/permissionChecker");
 const router = express.Router();
 
 router.post("/upload-media", jwtchecker, async (req, res) => {
@@ -29,30 +30,19 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
       const image = files.image[0].path;
 
       const { rows } = await pool.query(
-        `
-        SELECT 
-            EXISTS (SELECT 1 FROM community_realm WHERE realm_id = $1) as realm_exists,
-            EXISTS (
-            SELECT 1 
-            FROM community_member cm
-            JOIN community_realm cr ON cm.realm_id = cr.realm_id
-            WHERE cr.realm_id = $1 
-                AND cm.entity_id = $2 
-                AND cm.role = 'admin'
-            ) as is_admin
-        `,
-        [realm_id, entityID],
+        `SELECT EXISTS (SELECT 1 FROM community_realm WHERE realm_id = $1) as realm_exists`,
+        [realm_id],
       );
 
       if (media_type !== "profile" && media_type !== "cover_photo") {
         throw new Error("Media type mismatch");
       }
 
-      if (rows.length <= 0) {
+      if (rows.length <= 0 || !rows[0].realm_exists) {
         throw new Error("Realm does not exist");
       }
 
-      if (!rows[0].realm_exists || !rows[0].is_admin) {
+      if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
         throw new Error("You do not have permission to make this action.");
       }
 
@@ -118,20 +108,40 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       [account_ids],
     );
 
-    const { rows: row } = await pool.query(
-      `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 AND role = $3;`,
-      [entityID, realm_id, "admin"],
-    );
+    // Removing yourself (leaving) is always allowed. Removing anyone else
+    // requires realm.member.remove, plus a target-role-aware rule: an admin
+    // can remove a plain member/moderator, but only the owner can
+    // remove/demote a fellow admin or the owner (see the NOTE in
+    // entity/permissions.py about this not being a flat permission).
+    const restids = account_ids.filter((flt) => flt !== entityID);
 
-    if (row.length === 0) {
-      const restids = account_ids.filter((flt) => flt !== entityID);
-
-      if (restids.length > 0) {
+    if (restids.length > 0) {
+      if (!(await hasPermission(entityID, "realm.member.remove", realm_id))) {
         res.status(401).send({
           status: false,
           message: "You are not authorized to do this action",
         });
         return;
+      }
+
+      const { rows: actorRow } = await pool.query(
+        `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+        [entityID, realm_id],
+      );
+      const actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+
+      if (actorRole !== "owner") {
+        const { rows: targetAdminRows } = await pool.query(
+          `SELECT entity_id FROM community_member WHERE realm_id = $1 AND entity_id = ANY($2::text[]) AND role IN ('admin', 'owner')`,
+          [realm_id, restids],
+        );
+        if (targetAdminRows.length > 0) {
+          res.status(401).send({
+            status: false,
+            message: "Only the realm owner can remove or demote an admin.",
+          });
+          return;
+        }
       }
     }
 
