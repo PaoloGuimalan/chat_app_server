@@ -1466,32 +1466,19 @@ router.get(
       conversationID,
     );
 
-    const { rows: realm_row } = await pool.query(
-      `SELECT * FROM community_realm WHERE realm_id = $1`,
-      [conversationID],
-    );
-
-    if (realm_row.length > 0) {
-      // A page's own entity can never appear as a Member row of its own
-      // realm (community_member only ever holds personal accounts) - so
-      // once switched to act as this exact realm, the lookup below would
-      // always miss and wrongly deny access to its own conversation.
-      const isSelfRealmEntity = realm_row[0].entity_id === entity_id;
-
-      if (!isSelfRealmEntity) {
-        const { rows: is_member } = await pool.query(
-          `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
-          [entity_id, conversationID],
-        );
-
-        if (is_member.length <= 0) {
-          res.status(401).send({
-            status: false,
-            message: "You do not have access to this conversation",
-          });
-          return;
-        }
-      }
+    try {
+      // isRealmMember covers both realm-backed (group/channel) conversations
+      // and single/DM conversations (via user_connection, or the Mongo
+      // Conversations doc's participant_ids for connection-less
+      // conversations) - was previously missing entirely for the single
+      // case, letting any authenticated account load any conversationID's
+      // full message history just by knowing its id.
+      await isRealmMember(conversationID, entity_id);
+    } catch (err) {
+      return res.status(401).send({
+        status: false,
+        message: err.message || "You do not have access to this conversation",
+      });
     }
 
     await UserMessage.aggregate([
@@ -1835,17 +1822,28 @@ router.post(
 
     await client.query("COMMIT");
 
-    allReceivers.map((mp) => {
-      const newChatHistory = new ChatHistory({
-        conversationID: contactID,
-        entityID: mp,
-        cleared_at: null,
-        isArchived: false,
-        isRestricted: false,
-      });
-
-      newChatHistory.save();
-    });
+    // Atomic upsert instead of an unawaited, unconditional .save() - same
+    // fix as messages/index.js's ChatHistory creation, guarding against
+    // duplicate chat_history rows (no unique index on conversationID+
+    // entityID exists) that would later fan this conversation out into
+    // multiple rows in the conversations list.
+    await Promise.all(
+      allReceivers.map((mp) =>
+        ChatHistory.findOneAndUpdate(
+          { conversationID: contactID, entityID: mp },
+          {
+            $setOnInsert: {
+              conversationID: contactID,
+              entityID: mp,
+              cleared_at: null,
+              isArchived: false,
+              isRestricted: false,
+            },
+          },
+          { upsert: true, new: true },
+        ),
+      ),
+    );
 
     sendMessageInitForGC(
       contactID,

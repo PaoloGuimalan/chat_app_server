@@ -241,6 +241,13 @@ router.get(
       const type = req.params.type;
 
       if (type === "single") {
+        // Was previously missing - any authenticated account could load any
+        // single/DM conversation's full details just by knowing its id, not
+        // just their own. isRealmMember also covers single conversations
+        // (checks user_connection and, for connection-less conversations,
+        // the Mongo Conversations doc's participant_ids).
+        await isRealmMember(conversationID, entity_id);
+
         let chatHistory = null;
         chatHistory = await ChatHistory.findOne({
           conversationID: conversationID,
@@ -255,21 +262,35 @@ router.get(
         const receivers = await GetAllReceivers(conversationID);
 
         if (!chatHistory) {
-          await receivers.users.map(async (mp) => {
-            const newChatHistory = new ChatHistory({
-              conversationID: conversationID,
-              entityID: mp.entityID,
-              cleared_at: null,
-              isArchived: false,
-              isRestricted: false,
-            });
+          // findOneAndUpdate+upsert instead of an unconditional .save() -
+          // ChatHistory has no unique index on (conversationID, entityID),
+          // so concurrent requests (e.g. two tabs opening the same
+          // conversation) could each see chatHistory as null and both
+          // insert, leaving a duplicate row that later fans this
+          // conversation out into multiple rows in the conversations list.
+          // Also fixed the missing await - .map() with an async callback
+          // returns an array of promises that plain `await` doesn't wait on.
+          await Promise.all(
+            receivers.users.map(async (mp) => {
+              const upsertedChatHistory = await ChatHistory.findOneAndUpdate(
+                { conversationID: conversationID, entityID: mp.entityID },
+                {
+                  $setOnInsert: {
+                    conversationID: conversationID,
+                    entityID: mp.entityID,
+                    cleared_at: null,
+                    isArchived: false,
+                    isRestricted: false,
+                  },
+                },
+                { upsert: true, new: true },
+              );
 
-            await newChatHistory.save();
-
-            if (entity_id === mp.entityID) {
-              chatHistory = newChatHistory;
-            }
-          });
+              if (entity_id === mp.entityID) {
+                chatHistory = upsertedChatHistory;
+              }
+            }),
+          );
         }
 
         let finalrows = rows;
@@ -355,6 +376,11 @@ router.get(
 
         const resolvedConversationID = realmRows[0].realm_id;
 
+        // Was previously missing - any authenticated account could load any
+        // group/channel's full member list and details just by knowing its
+        // realm_id/slug, not just realms they belong to.
+        await isRealmMember(resolvedConversationID, entity_id);
+
         let chatHistory = null;
 
         chatHistory = await ChatHistory.findOne({
@@ -371,21 +397,31 @@ router.get(
         const receivers = await GetAllReceivers(resolvedConversationID);
 
         if (!chatHistory) {
-          receivers.users.map((mp) => {
-            const newChatHistory = new ChatHistory({
-              conversationID: resolvedConversationID,
-              entityID: mp.entityID,
-              cleared_at: null,
-              isArchived: false,
-              isRestricted: false,
-            });
+          // Same fix as the single-conversation branch above: atomic
+          // upsert instead of an unawaited, unconditional .save() - avoids
+          // duplicate chat_history rows under concurrent requests, which
+          // fan a conversation out into multiple rows in the list later.
+          await Promise.all(
+            receivers.users.map(async (mp) => {
+              const upsertedChatHistory = await ChatHistory.findOneAndUpdate(
+                { conversationID: resolvedConversationID, entityID: mp.entityID },
+                {
+                  $setOnInsert: {
+                    conversationID: resolvedConversationID,
+                    entityID: mp.entityID,
+                    cleared_at: null,
+                    isArchived: false,
+                    isRestricted: false,
+                  },
+                },
+                { upsert: true, new: true },
+              );
 
-            newChatHistory.save();
-
-            if (entity_id === mp.entityID) {
-              chatHistory = newChatHistory;
-            }
-          });
+              if (entity_id === mp.entityID) {
+                chatHistory = upsertedChatHistory;
+              }
+            }),
+          );
         }
 
         UploadedFiles.find({ foreignID: resolvedConversationID })
@@ -408,7 +444,9 @@ router.get(
       }
     } catch (err) {
       console.log(err);
-      res.status(500).send({ status: false, message: "Invalid Group/Channel" });
+      res
+        .status(err.message ? 403 : 500)
+        .send({ status: false, message: err.message || "Invalid Group/Channel" });
     }
   },
 );
@@ -931,6 +969,12 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                 },
               },
             },
+            // chat_history has no unique index on (conversationID, entityID)
+            // and a handful of duplicate rows already exist from a prior race
+            // condition in its creation path - without this, $unwind below
+            // would fan a single conversation out into one row per duplicate,
+            // showing the same conversation multiple times in the list.
+            { $limit: 1 },
           ],
           as: "historySetting",
         },
@@ -1051,6 +1095,11 @@ router.get("/conversations", jwtchecker, async (req, res) => {
                       },
                     },
                   },
+                  // Same duplicate chat_history guard as /conversations above
+                  // - without it, a conversation with a duplicate row would
+                  // fan every one of its messages out into 2+ copies here,
+                  // doubling (or worse) its unread count.
+                  { $limit: 1 },
                 ],
                 as: "historySetting",
               },
@@ -1344,6 +1393,13 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
   const conversationID = req.params.conversationID;
 
   try {
+    // Was previously missing entirely - any authenticated account could
+    // load full details (participants, display names, profiles) of any
+    // conversationID, not just their own. isRealmMember throws if entity_id
+    // isn't a participant/member, same guard already used by every other
+    // route in this file that touches a conversation by id.
+    await isRealmMember(conversationID, entity_id);
+
     const baseConversation = await Conversations.findOne({
       conversationID: conversationID,
     }).lean();
@@ -1509,10 +1565,9 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
     });
   } catch (err) {
     console.log(err);
-    res.send({
-      status: false,
-      message: "Error generating conversations list",
-    });
+    res
+      .status(400)
+      .send({ status: false, message: err.message || "Error generating conversations list" });
   }
 });
 

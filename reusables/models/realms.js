@@ -1,5 +1,6 @@
 const pool = require("../database/postgres");
 const { AddNewMemberToContacts } = require("./messages");
+const Conversations = require("../../schema/messages/conversation");
 
 const isRealmMember = async (realm_id, entity_id) => {
   const { rows: realm_row } = await pool.query(
@@ -30,6 +31,27 @@ const isRealmMember = async (realm_id, entity_id) => {
     if (is_member.length <= 0) {
       throw new Error("You do not have access to this conversation");
     }
+    return;
+  }
+
+  // Not a realm - this is a single/DM conversation. Some are backed by a
+  // user_connection row (the normal "add contact" flow), but not all -
+  // some conversations only ever exist as a Mongo Conversations doc with
+  // participant_ids and were never a Connection, so either can prove
+  // entity_id is actually a party to it.
+  const [connectionRows, mongoConversation] = await Promise.all([
+    pool.query(
+      `SELECT 1 FROM user_connection WHERE connection_id = $1 AND (action_by_id = $2 OR involved_entity_id = $2) LIMIT 1`,
+      [realm_id, entity_id],
+    ),
+    Conversations.findOne({
+      conversationID: realm_id,
+      participant_ids: entity_id,
+    }),
+  ]);
+
+  if (connectionRows.rows.length === 0 && mongoConversation === null) {
+    throw new Error("You do not have access to this conversation");
   }
 };
 
