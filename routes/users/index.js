@@ -1472,17 +1472,25 @@ router.get(
     );
 
     if (realm_row.length > 0) {
-      const { rows: is_member } = await pool.query(
-        `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
-        [entity_id, conversationID],
-      );
+      // A page's own entity can never appear as a Member row of its own
+      // realm (community_member only ever holds personal accounts) - so
+      // once switched to act as this exact realm, the lookup below would
+      // always miss and wrongly deny access to its own conversation.
+      const isSelfRealmEntity = realm_row[0].entity_id === entity_id;
 
-      if (is_member.length <= 0) {
-        res.status(401).send({
-          status: false,
-          message: "You do not have access to this conversation",
-        });
-        return;
+      if (!isSelfRealmEntity) {
+        const { rows: is_member } = await pool.query(
+          `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
+          [entity_id, conversationID],
+        );
+
+        if (is_member.length <= 0) {
+          res.status(401).send({
+            status: false,
+            message: "You do not have access to this conversation",
+          });
+          return;
+        }
       }
     }
 

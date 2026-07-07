@@ -318,16 +318,27 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const entityID = req.params.entity_id;
   const serverID = req.params.serverID;
 
-  const { rows: row } = await pool.query(
-    `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
-    [entityID, serverID],
+  // A page's own entity can never appear as a Member row of its own realm
+  // (community_member only ever holds personal accounts) - so once switched
+  // to act as this exact server, the Member lookup below would always miss
+  // and wrongly deny access to its own channel list.
+  const { rows: selfRealmRow } = await pool.query(
+    `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2`,
+    [serverID, entityID],
   );
 
-  if (row.length === 0) {
-    res
-      .status(401)
-      .send({ status: false, message: "You do not have access to this realm" });
-    return;
+  if (selfRealmRow.length === 0) {
+    const { rows: row } = await pool.query(
+      `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
+      [entityID, serverID],
+    );
+
+    if (row.length === 0) {
+      res
+        .status(401)
+        .send({ status: false, message: "You do not have access to this realm" });
+      return;
+    }
   }
 
   const { rows } = await pool.query(
@@ -358,12 +369,15 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       ), '[]'::jsonb),
       'createdBy', pua.username,
       'privacy', cr.is_private,
-      'is_admin', EXISTS (
-        SELECT 1
-        FROM community_member cm
-        WHERE cm.entity_id = $1
-          AND cm.realm_id = cr.realm_id
-          AND cm.role IN ('admin', 'owner')
+      'is_admin', (
+        cr.entity_id = $1
+        OR EXISTS (
+          SELECT 1
+          FROM community_member cm
+          WHERE cm.entity_id = $1
+            AND cm.realm_id = cr.realm_id
+            AND cm.role IN ('admin', 'owner')
+        )
       ),
       'channels', COALESCE((
         SELECT jsonb_agg(
@@ -609,11 +623,23 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
 
     // Target-role-aware rule: an admin can change a plain member/moderator's
     // role, but only the owner can change a fellow admin's (or the owner's).
-    const { rows: actorRow } = await pool.query(
-      `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
-      [entityID, realm_id],
+    // A page's own entity can never appear as a Member row of its own realm,
+    // so once switched to act as this exact realm, resolve as owner tier
+    // directly instead of letting the lookup below miss and wrongly deny it.
+    const { rows: selfRealmActorRow } = await pool.query(
+      `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2`,
+      [realm_id, entityID],
     );
-    const actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+    let actorRole;
+    if (selfRealmActorRow.length > 0) {
+      actorRole = "owner";
+    } else {
+      const { rows: actorRow } = await pool.query(
+        `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+        [entityID, realm_id],
+      );
+      actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+    }
 
     if (actorRole !== "owner") {
       const { rows: targetRow } = await pool.query(

@@ -14,6 +14,14 @@ const isRealmMember = async (realm_id, entity_id) => {
       await AddNewMemberToContacts(realm_id, entity_id, entity_id);
     }
 
+    // A page's own entity can never appear as a Member row of its own
+    // realm (community_member only ever holds personal accounts) - so
+    // once switched to act as this exact realm, the lookup below would
+    // always miss and wrongly deny access to its own conversation/realm.
+    if (realm.entity_id === entity_id) {
+      return;
+    }
+
     const { rows: is_member } = await pool.query(
       `SELECT member_id FROM community_member WHERE entity_id = $1 AND realm_id = $2;`,
       [entity_id, realm_id],

@@ -124,11 +124,24 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         return;
       }
 
-      const { rows: actorRow } = await pool.query(
-        `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
-        [entityID, realm_id],
+      // A page's own entity can never appear as a Member row of its own
+      // realm, so once switched to act as this exact realm, resolve as
+      // owner tier directly instead of letting the lookup below miss and
+      // wrongly deny it.
+      const { rows: selfRealmActorRow } = await pool.query(
+        `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2`,
+        [realm_id, entityID],
       );
-      const actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+      let actorRole;
+      if (selfRealmActorRow.length > 0) {
+        actorRole = "owner";
+      } else {
+        const { rows: actorRow } = await pool.query(
+          `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+          [entityID, realm_id],
+        );
+        actorRole = actorRow.length > 0 ? actorRow[0].role : null;
+      }
 
       if (actorRole !== "owner") {
         const { rows: targetAdminRows } = await pool.query(

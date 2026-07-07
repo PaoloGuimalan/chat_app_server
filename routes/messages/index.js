@@ -183,18 +183,24 @@ async function getRealmWithUsers(realmId, entityID) {
       'expires_at', cr.expires_at,
       'is_temporary', cr.is_temporary,
       'created_at', cr.created_at,
-      'is_admin', EXISTS (
-        SELECT 1
-        FROM community_member cm_admin
-        WHERE cm_admin.entity_id = $2
-          AND cm_admin.realm_id = cr.realm_id
-          AND cm_admin.role IN ('admin', 'owner')
+      'is_admin', (
+        cr.entity_id = $2
+        OR EXISTS (
+          SELECT 1
+          FROM community_member cm_admin
+          WHERE cm_admin.entity_id = $2
+            AND cm_admin.realm_id = cr.realm_id
+            AND cm_admin.role IN ('admin', 'owner')
+        )
       ),
-      'is_member', EXISTS (
-        SELECT 1
-        FROM community_member cm_member
-        WHERE cm_member.entity_id = $2
-          AND cm_member.realm_id = cr.realm_id
+      'is_member', (
+        cr.entity_id = $2
+        OR EXISTS (
+          SELECT 1
+          FROM community_member cm_member
+          WHERE cm_member.entity_id = $2
+            AND cm_member.realm_id = cr.realm_id
+        )
       ),
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(

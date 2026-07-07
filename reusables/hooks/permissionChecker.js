@@ -9,17 +9,20 @@
  *   - user_service/entity/services/permission_resolver.py
  *   - user_service/entity/services/permission_catalog_cache.py
  *
- * The permission catalog and role-default matrix are DATABASE-BACKED
- * (entity_permissioncatalogentry, entity_rolepermission), not hardcoded
+ * The permission catalog, role-default matrix, and entity-type-default
+ * matrix are DATABASE-BACKED (entity_permissioncatalogentry,
+ * entity_rolepermission, entity_entitytypedefaultpermission), not hardcoded
  * here - both repos read the same shared Redis instance
- * (permcache:catalog:v1 / permcache:role_matrix:v1, plain JSON strings) with
- * a direct-query fallback on a cache miss, so an admin editing the catalog
- * on the Django side is visible here without a deploy.
+ * (permcache:catalog:v1 / permcache:role_matrix:v1 /
+ * permcache:entity_type_matrix:v1, plain JSON strings) with a direct-query
+ * fallback on a cache miss, so an admin editing the catalog on the Django
+ * side is visible here without a deploy.
  *
  * Resolution priority (highest to lowest):
  *   1. Explicit deny (entity_entitypermission, effect='deny', not expired) -> false, always.
  *   2. Explicit grant (effect='grant', not expired) -> true.
- *   3. Role-derived default (realm-scoped) OR platform default (global-scoped).
+ *   3. Entity-type default (entity_type-scoped) OR role-derived default
+ *      (realm-scoped) OR platform default (global-scoped).
  *   4. Deny-by-default fallback -> false.
  */
 
@@ -29,6 +32,7 @@ const { REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD } = require("../v
 
 const CATALOG_CACHE_KEY = "permcache:catalog:v1";
 const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v1";
+const ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1";
 const CACHE_TTL_SECONDS = 60 * 60; // safety-net only; Django invalidates on write
 
 let cacheClient = null;
@@ -107,6 +111,37 @@ async function getRoleMatrix() {
   return matrix;
 }
 
+async function getEntityTypeMatrix() {
+  const cached = await _cacheGet(ENTITY_TYPE_MATRIX_CACHE_KEY);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT etp.entity_type, pce.codename
+    FROM entity_entitytypedefaultpermission etp
+    JOIN entity_permissioncatalogentry pce ON etp.permission_id = pce.id
+    WHERE pce.is_active = true
+    `,
+  );
+  const matrix = {};
+  for (const row of rows) {
+    if (!matrix[row.entity_type]) matrix[row.entity_type] = [];
+    matrix[row.entity_type].push(row.codename);
+  }
+  await _cacheSet(ENTITY_TYPE_MATRIX_CACHE_KEY, JSON.stringify(matrix));
+  return matrix;
+}
+
+async function _getEntityType(entityId) {
+  const { rows } = await pool.query(
+    `SELECT type FROM entity_entity WHERE id = $1 LIMIT 1`,
+    [entityId],
+  );
+  return rows.length > 0 ? rows[0].type : null;
+}
+
 async function _activeOverride(entityId, permission, realmId) {
   const { rows } = await pool.query(
     `
@@ -154,11 +189,11 @@ async function hasPermission(entityId, permission, realmId = null) {
     throw new Error(`Unknown permission string: ${permission}`);
   }
 
-  const isGlobal = entry.scope === "global";
-  if (isGlobal && realmId != null) {
-    throw new Error(`${permission} is global-scoped and cannot take a realm`);
+  const scope = entry.scope;
+  if ((scope === "global" || scope === "entity_type") && realmId != null) {
+    throw new Error(`${permission} is ${scope}-scoped and cannot take a realm`);
   }
-  if (!isGlobal && realmId == null) {
+  if (scope === "realm" && realmId == null) {
     throw new Error(`${permission} is realm-scoped and requires a realm`);
   }
 
@@ -167,7 +202,31 @@ async function hasPermission(entityId, permission, realmId = null) {
     return override === "grant";
   }
 
+  if (scope === "entity_type") {
+    const entityType = await _getEntityType(entityId);
+    const entityTypeMatrix = await getEntityTypeMatrix();
+    const allowedForType = entityType ? entityTypeMatrix[entityType] : null;
+    return allowedForType ? allowedForType.includes(permission) : false;
+  }
+
   if (realmId != null) {
+    // A page's own entity can never appear as a Member row of its own realm
+    // (community_member only ever holds personal accounts), so once "acting
+    // as" that exact page (entity switch re-issues the JWT's entity claim to
+    // the realm's own entity), the Member lookup below would always miss and
+    // wrongly deny. Resolve self-administration as owner tier directly -
+    // this can only match the realm this entity's own id belongs to, so it
+    // can't be used to bypass authorization on any other realm.
+    const { rows: selfRealmRows } = await pool.query(
+      `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2 LIMIT 1`,
+      [realmId, entityId],
+    );
+    if (selfRealmRows.length > 0) {
+      const roleMatrix = await getRoleMatrix();
+      const ownerDefaults = roleMatrix["owner"];
+      return ownerDefaults ? ownerDefaults.includes(permission) : false;
+    }
+
     const { rows } = await pool.query(
       `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2 LIMIT 1`,
       [entityId, realmId],
@@ -221,4 +280,5 @@ module.exports = {
   requiresPermission,
   getCatalog,
   getRoleMatrix,
+  getEntityTypeMatrix,
 };
