@@ -77,7 +77,7 @@ const jwtchecker = async (req, res, next) => {
 
           const session_result = await UserSessions.findOne({
             deviceToken: deviceToken,
-            userID: decode.entity_id,
+            entityID: decode.entity,
           });
 
           if (!session_result) {
