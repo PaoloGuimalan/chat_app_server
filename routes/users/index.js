@@ -2530,10 +2530,165 @@ const saveFileMessage = async (
     });
 };
 
+const uploadMessageFromFile = async (
+  file,
+  pendingID,
+  entityID,
+  conversationID,
+  receivers,
+  isReply,
+  replyingTo,
+  conversationType,
+  onComplete,
+) => {
+  try {
+    var messageID = await checkExistingMessageID(makeID(30));
+
+    const buffer = await fs.readFile(file.path);
+    const mimeType = file.headers["content-type"] || "application/octet-stream";
+    const publicUrl = await Storage.upload(
+      `${makeID(10)}_${file.originalFilename}`,
+      buffer,
+      `uploads/messages/${conversationID}`,
+    );
+
+    // Mirrors the client's existing type bucketing: images are tagged
+    // "image", everything else keeps its real mime type.
+    const messageType = mimeType.startsWith("image/") ? "image" : mimeType;
+
+    await saveFileMessage(
+      entityID,
+      messageID,
+      pendingID,
+      conversationID,
+      receivers,
+      publicUrl,
+      isReply,
+      replyingTo,
+      messageType,
+      conversationType,
+      onComplete,
+    );
+
+    await saveFileRecordToDatabase(
+      [messageID, conversationID],
+      publicUrl,
+      "message",
+      messageType,
+      "firebase",
+      file.originalFilename,
+    );
+
+    fs.unlink(file.path).catch(() => {});
+  } catch (err) {
+    console.log(err);
+    onComplete(false);
+  }
+};
+
+const SENDFILES_MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB, matches the pre-existing client-side cap
+
 router.post("/sendFiles", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
   const entity_id = req.params.entity_id;
+
+  const isMultipart = (req.headers["content-type"] || "").includes(
+    "multipart/form-data",
+  );
+
+  if (isMultipart) {
+    new multiparty.Form({ maxFilesSize: SENDFILES_MAX_FILE_SIZE }).parse(
+      req,
+      async (err, fields, files) => {
+        if (err) {
+          const isSizeErr = /maxFilesSize/i.test(err.message || "");
+          res.status(isSizeErr ? 413 : 400).send({
+            status: false,
+            message: isSizeErr
+              ? "File exceeds the maximum allowed size"
+              : "Error processing upload",
+            details: err.message,
+          });
+          return;
+        }
+
+        try {
+          const conversationID = fields.conversationID?.[0];
+          const isReply = fields.isReply?.[0] === "true";
+          const replyingTo = fields.replyingTo?.[0] || null;
+          const conversationType = normalizeConversationType(
+            fields.conversationType?.[0],
+          );
+          const pendingIDs = fields.pendingIDs
+            ? JSON.parse(fields.pendingIDs[0])
+            : [];
+          const attachedFiles = files.files || [];
+
+          if (!conversationID || attachedFiles.length === 0) {
+            res.status(400).send({
+              status: false,
+              message: "Missing conversationID or files",
+            });
+            return;
+          }
+
+          const receiversfetch = await GetAllReceivers(conversationID);
+          const receivers = receiversfetch.users.map((mp) => mp.entityID);
+
+          await isRealmMember(conversationID, entity_id);
+
+          let settledFiles = 0;
+
+          await Promise.allSettled(
+            attachedFiles.map((file, i) =>
+              uploadMessageFromFile(
+                file,
+                pendingIDs[i] || null,
+                entity_id,
+                conversationID,
+                receivers,
+                isReply,
+                replyingTo,
+                conversationType,
+                (status) => {
+                  settledFiles += 1;
+                  if (attachedFiles.length === settledFiles) {
+                    receivers.map((rcvs) => {
+                      MessagesTrigger(
+                        rcvs,
+                        { conversationID, entityID: entity_id },
+                        false,
+                      );
+                    });
+                  }
+                },
+              ),
+            ),
+          );
+
+          await ChatHistory.updateMany(
+            { conversationID: conversationID },
+            { $set: { isArchived: false } },
+          );
+
+          bumpChatScore(conversationID, receivers, entity_id);
+
+          res.send({ status: true, message: "OK" });
+        } catch (ex) {
+          console.log(ex);
+          res
+            .status(400)
+            .send({ status: false, message: ex.message || ex.toString() });
+        }
+      },
+    );
+    return;
+  }
+
+  // Legacy signed-JWT base64 path - kept alive during rollout so older
+  // frontend builds keep working; remove once all callers are confirmed
+  // on multipart.
   const token = req.body.token;
 
   try {

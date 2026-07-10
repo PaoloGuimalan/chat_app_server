@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const cassandra = require("cassandra-driver");
+const multiparty = require("multiparty");
+const fs = require("fs/promises");
 const {
   sseNotificationsWaiters,
   SendTagPostNotification,
@@ -250,10 +252,104 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
   });
 };
 
+const UPLOAD_MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB, matches the pre-existing client-side cap
+
 router.post("/upload", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
 
+  const isMultipart = (req.headers["content-type"] || "").includes(
+    "multipart/form-data",
+  );
+
+  if (isMultipart) {
+    // New multipart path: used by post media, diary attachments (arbitrary
+    // file types are intentionally allowed here since diary attachments
+    // aren't restricted to image/video the way post media is client-side -
+    // enforcement of that narrower rule stays client-side, as it was before).
+    new multiparty.Form({ maxFilesSize: UPLOAD_MAX_FILE_SIZE }).parse(
+      req,
+      async (err, fields, files) => {
+        if (err) {
+          const isSizeErr = /maxFilesSize/i.test(err.message || "");
+          res.status(isSizeErr ? 413 : 400).send({
+            status: false,
+            message: isSizeErr
+              ? "File exceeds the maximum allowed size"
+              : "Error processing upload",
+            details: err.message,
+          });
+          return;
+        }
+
+        const mediaFiles = files.media || [];
+
+        if (mediaFiles.length === 0) {
+          res.status(400).send({ status: false, message: "No files provided" });
+          return;
+        }
+
+        try {
+          const captions = fields.captions ? JSON.parse(fields.captions[0]) : [];
+          const referenceMediaTypes = fields.referenceMediaTypes
+            ? JSON.parse(fields.referenceMediaTypes[0])
+            : [];
+
+          const finaluploadedreferences = await Promise.all(
+            mediaFiles.map(async (file, i) => {
+              const buffer = await fs.readFile(file.path);
+              const url = await Storage.upload(
+                `${makeID(10)}_${file.originalFilename}`,
+                buffer,
+                `uploads/entries/${id}`,
+              );
+
+              return {
+                referenceID: id,
+                reference: url,
+                referenceMediaType:
+                  referenceMediaTypes[i] ||
+                  file.headers["content-type"] ||
+                  "application/octet-stream",
+                name: file.originalFilename,
+                caption: captions[i] || "",
+              };
+            }),
+          );
+
+          await Promise.all(
+            mediaFiles.map((file) => fs.unlink(file.path).catch(() => {})),
+          );
+
+          const savedFiles = await Promise.all(
+            finaluploadedreferences.map((mp) =>
+              saveFileRecordToDatabase(
+                [mp.referenceID, `NTR_ATTCH_${makeID(20)}`],
+                mp.reference,
+                "entry",
+                mp.referenceMediaType,
+                "firebase",
+                mp.name,
+              ),
+            ),
+          );
+
+          res.send({ status: true, result: savedFiles });
+        } catch (ex) {
+          console.error(ex);
+          res.status(400).send({
+            status: false,
+            message: "Error processing request",
+            details: ex.message,
+          });
+        }
+      },
+    );
+    return;
+  }
+
+  // Legacy base64-JSON path - kept alive during rollout so older frontend
+  // builds keep working; remove once all callers are confirmed on multipart.
   try {
     const body = req.body;
     const filereferencesraw = body.references;
@@ -264,9 +360,6 @@ router.post("/upload", jwtchecker, async (req, res) => {
       referenceMediaType: mp.referenceMediaType,
       referenceID: id,
     }));
-
-    // const finaluploadedreferences =
-    //   await uploadFirebaseMultiple(filereferences);
 
     const finaluploadedreferences = await Storage.uploadMultipleBase64(
       filereferences,
@@ -324,12 +417,22 @@ router.post(
       referenceID: `${postID}_${makeID(20)}`,
     }));
 
-    const finaluploadedreferences = decodeToken.content.isShared
-      ? filereferences
-      : await Storage.uploadMultipleBase64(
-          filereferences,
-          `uploads/posts/${id}/${postID}`,
-        );
+    // References may already be CDN URLs if the client uploaded media
+    // up-front via POST /posts/upload (the new two-step flow) - in that case
+    // there's nothing left to upload here. Legacy clients that still embed
+    // base64 media directly in the signed payload fall through to the
+    // original inline-upload path for backward compatibility.
+    const isAlreadyUploaded = (ref) =>
+      typeof ref === "string" && /^https?:\/\//i.test(ref);
+
+    const finaluploadedreferences =
+      decodeToken.content.isShared ||
+      filereferences.every((mp) => isAlreadyUploaded(mp.reference))
+        ? filereferences
+        : await Storage.uploadMultipleBase64(
+            filereferences,
+            `uploads/posts/${id}/${postID}`,
+          );
 
     if (decodeToken.content.isShared) {
       finaluploadedreferences.forEach(async (mp) => {
