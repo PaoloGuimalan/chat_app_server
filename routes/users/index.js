@@ -111,7 +111,10 @@ const {
   jwtchecker,
   jwtssechecker,
 } = require("../../reusables/hooks/jwthelper");
-const { requiresPermission, hasPermission } = require("../../reusables/hooks/permissionChecker");
+const {
+  requiresPermission,
+  hasPermission,
+} = require("../../reusables/hooks/permissionChecker");
 const producer = require("../../reusables/rabbitmq/producer");
 const {
   SSE_NOTIFICATIONS_TRIGGER,
@@ -141,6 +144,70 @@ const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
+const LINK_PREVIEW_SERVICE_URL = process.env.LINK_PREVIEW_SERVICE_URL;
+const INTERNAL_SERVICE_SECRET = process.env.INTERNAL_SERVICE_SECRET;
+
+// Fire-and-forget: resolves a link preview for a just-sent text message via
+// the Django user_service (centralized SSRF-guarded fetch/parse/cache -
+// see newsfeed/services/link_preview.py) and patches the result onto the
+// already-saved message, then pushes a follow-up SSE event so clients that
+// already rendered the message can upgrade it in place. Never awaited by
+// the /sendMessage handler - a slow/broken Django call must never delay a
+// chat send.
+async function resolveLinkPreviewForMessage(
+  messageID,
+  conversationID,
+  content,
+  receivers,
+  senderEntityID,
+) {
+  if (!LINK_PREVIEW_SERVICE_URL || !INTERNAL_SERVICE_SECRET) return;
+
+  let linkPreview = { status: "failed" };
+
+  try {
+    const response = await Axios.post(
+      LINK_PREVIEW_SERVICE_URL,
+      { text: content },
+      {
+        headers: { "X-Internal-Service-Secret": INTERNAL_SERVICE_SECRET },
+        timeout: 6000,
+      },
+    );
+    if (response.data) {
+      linkPreview = response.data;
+    }
+  } catch (err) {
+    console.log("[linkPreview] resolve failed:", err.message || err);
+  }
+
+  // No URL in the message at all - nothing to store, skip the write/push.
+  if (!linkPreview.url) return;
+
+  try {
+    await UserMessage.updateOne(
+      { messageID: messageID },
+      { $set: { linkPreview: linkPreview } },
+    );
+  } catch (err) {
+    console.log("[linkPreview] failed to persist:", err.message || err);
+    return;
+  }
+
+  // Reuse the same "messages_list" SSE channel real new-message delivery
+  // already uses (see MessagesTrigger below and its listener in the webapp's
+  // reusables/hooks/sse.ts, which dispatches a per-conversation "reload"
+  // CustomEvent that ConversationV2.tsx/Conversation.tsx already listen for
+  // and react to by refetching via GetConversation()) rather than a bespoke
+  // event nothing on the frontend was ever wired to consume. Includes the
+  // sender too, not just receivers - they're the one who pasted the URL and
+  // need their own open conversation view to pick up the resolved preview
+  // without navigating away and back.
+  const notifyOfPreviewUpdate = [...new Set([...receivers, senderEntityID])];
+  notifyOfPreviewUpdate.map((rcvs) => {
+    MessagesTrigger(rcvs, { conversationID, entityID: senderEntityID }, false);
+  });
+}
 
 router.get("/search/:searchdata", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -513,81 +580,82 @@ router.post(
   jwtchecker,
   requiresPermission("contacts.request.create"),
   async (req, res) => {
-  const userID = req.params.userID;
-  const token = req.body.token;
+    const userID = req.params.userID;
+    const token = req.body.token;
 
-  try {
-    const decodeToken = jwt.verify(token, JWT_SECRET);
+    try {
+      const decodeToken = jwt.verify(token, JWT_SECRET);
 
-    const contactID = await checkContactID(`${makeID(20)}`);
-    const addUserID = decodeToken.addUserID;
+      const contactID = await checkContactID(`${makeID(20)}`);
+      const addUserID = decodeToken.addUserID;
 
-    const payload = {
-      contactID: contactID,
-      actionBy: userID,
-      actionDate: {
-        date: dateGetter(),
-        time: timeGetter(),
-      },
-      status: false,
-      type: "single",
-      users: [
-        {
-          userID: userID,
+      const payload = {
+        contactID: contactID,
+        actionBy: userID,
+        actionDate: {
+          date: dateGetter(),
+          time: timeGetter(),
         },
-        {
-          userID: addUserID,
+        status: false,
+        type: "single",
+        users: [
+          {
+            userID: userID,
+          },
+          {
+            userID: addUserID,
+          },
+        ],
+      };
+
+      // if (await checkContactRequest(userID, addUserID)) {
+      //   const newContact = new UserContacts(payload);
+
+      //   newContact
+      //     .save()
+      //     .then(async () => {
+      const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+      const notifParams = {
+        notificationID: awaitNotifID,
+        referenceID: contactID,
+        referenceStatus: false,
+        toUserID: addUserID,
+        fromUserID: userID,
+        content: {
+          headline: `Contact Request`,
+          details: `@${userID} have sent a contact request for you.`,
         },
-      ],
-    };
+        date: {
+          date: dateGetter(),
+          time: timeGetter(),
+        },
+        type: "contact_request",
+      };
 
-    // if (await checkContactRequest(userID, addUserID)) {
-    //   const newContact = new UserContacts(payload);
+      sendNotification(notifParams, "You have sent a contact request");
 
-    //   newContact
-    //     .save()
-    //     .then(async () => {
-    const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
-    const notifParams = {
-      notificationID: awaitNotifID,
-      referenceID: contactID,
-      referenceStatus: false,
-      toUserID: addUserID,
-      fromUserID: userID,
-      content: {
-        headline: `Contact Request`,
-        details: `@${userID} have sent a contact request for you.`,
-      },
-      date: {
-        date: dateGetter(),
-        time: timeGetter(),
-      },
-      type: "contact_request",
-    };
-
-    sendNotification(notifParams, "You have sent a contact request");
-
-    res.send({
-      status: true,
-      message: `You have sent a contact request to @${addUserID}`,
-    });
-    // })
-    // .catch((err) => {
-    //   res.send({
-    //     status: false,
-    //     message: "Contact request encountered an error!",
-    //   });
-    //   console.log(err);
-    // });
-    // }
-  } catch (ex) {
-    res.send({
-      status: false,
-      message: "Contact request encountered an error!",
-    });
-    console.log(ex);
-  }
-});
+      res.send({
+        status: true,
+        message: `You have sent a contact request to @${addUserID}`,
+      });
+      // })
+      // .catch((err) => {
+      //   res.send({
+      //     status: false,
+      //     message: "Contact request encountered an error!",
+      //   });
+      //   console.log(err);
+      // });
+      // }
+    } catch (ex) {
+      res.send({
+        status: false,
+        message: "Contact request encountered an error!",
+      });
+      console.log(ex);
+    }
+  },
+);
 
 router.post("/readnotifications", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -996,148 +1064,159 @@ router.post(
   jwtchecker,
   requiresPermission("messages.send"),
   async (req, res) => {
-  const userID = req.params.userID;
-  const username = req.params.username;
-  const id = req.params.id;
-  const entity_id = req.params.entity_id;
-  const token = req.body.token;
+    const userID = req.params.userID;
+    const username = req.params.username;
+    const id = req.params.id;
+    const entity_id = req.params.entity_id;
+    const token = req.body.token;
 
-  try {
-    const decodedToken = jwt.verify(token, JWT_SECRET);
+    try {
+      const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    const pendingID = decodedToken.pendingID;
+      const pendingID = decodedToken.pendingID;
 
-    const messageID = await checkExistingMessageID(makeID(30));
-    const conversationID = decodedToken.conversationID;
+      const messageID = await checkExistingMessageID(makeID(30));
+      const conversationID = decodedToken.conversationID;
 
-    await isRealmMember(conversationID, entity_id);
+      await isRealmMember(conversationID, entity_id);
 
-    const sender = entity_id;
-    const receiversfetch = await GetAllReceivers(conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
+      const sender = entity_id;
+      const receiversfetch = await GetAllReceivers(conversationID);
+      const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
 
-    const mentionedUsernames = extractMentionUsernames(decodedToken.content);
+      const mentionedUsernames = extractMentionUsernames(decodedToken.content);
 
-    const receiverMap = new Map(
-      receiversfetch.users.map((rcv) => [
-        String(rcv.username).toLowerCase(),
-        rcv.entityID,
-      ]),
-    );
+      const receiverMap = new Map(
+        receiversfetch.users.map((rcv) => [
+          String(rcv.username).toLowerCase(),
+          rcv.entityID,
+        ]),
+      );
 
-    const mentionedReceiverIds = mentionedUsernames
-      .map((usern) => receiverMap.get(usern.toLowerCase()))
-      .filter(Boolean);
+      const mentionedReceiverIds = mentionedUsernames
+        .map((usern) => receiverMap.get(usern.toLowerCase()))
+        .filter(Boolean);
 
-    const mentionedReceiverSet = new Set(mentionedReceiverIds);
+      const mentionedReceiverSet = new Set(mentionedReceiverIds);
 
-    const realmName =
-      decodedToken.conversationType === "single"
-        ? null
-        : await GetRealmName(conversationID);
+      const realmName =
+        decodedToken.conversationType === "single"
+          ? null
+          : await GetRealmName(conversationID);
 
-    const mentioner = {
-      entityID: sender,
-      username: `@${username}`,
-      realmName: realmName,
-      isSingle: decodedToken.conversationType === "single",
-    };
+      const mentioner = {
+        entityID: sender,
+        username: `@${username}`,
+        realmName: realmName,
+        isSingle: decodedToken.conversationType === "single",
+      };
 
-    // const seeners = [userID]; //Array
-    const seeners = [entity_id]; //Array
-    const content = decodedToken.content;
-    // const messageDate = {
-    //   date: dateGetter(),
-    //   time: timeGetter(),
-    // };
-    const isReply = decodedToken.isReply;
-    const replyingTo = decodedToken.replyingTo;
-    const messageType = decodedToken.messageType;
-    const conversationType = normalizeConversationType(
-      decodedToken.conversationType,
-    );
+      // const seeners = [userID]; //Array
+      const seeners = [entity_id]; //Array
+      const content = decodedToken.content;
+      // const messageDate = {
+      //   date: dateGetter(),
+      //   time: timeGetter(),
+      // };
+      const isReply = decodedToken.isReply;
+      const replyingTo = decodedToken.replyingTo;
+      const messageType = decodedToken.messageType;
+      const conversationType = normalizeConversationType(
+        decodedToken.conversationType,
+      );
 
-    const sanitizedContent = sanitizeForStorage(content);
+      const sanitizedContent = sanitizeForStorage(content);
 
-    const payload = {
-      messageID: messageID,
-      conversationID: conversationID,
-      pendingID: pendingID,
-      sender: sender,
-      receivers: [], // receivers
-      seeners: seeners,
-      content: sanitizedContent,
-      // messageDate: messageDate,
-      isReply: isReply,
-      replyingTo: replyingTo,
-      reactions: [],
-      isDeleted: false,
-      messageType: messageType,
-      conversationType: conversationType,
-    };
+      const payload = {
+        messageID: messageID,
+        conversationID: conversationID,
+        pendingID: pendingID,
+        sender: sender,
+        receivers: [], // receivers
+        seeners: seeners,
+        content: sanitizedContent,
+        // messageDate: messageDate,
+        isReply: isReply,
+        replyingTo: replyingTo,
+        reactions: [],
+        isDeleted: false,
+        messageType: messageType,
+        conversationType: conversationType,
+      };
 
-    const newMessage = new UserMessage(payload);
+      const newMessage = new UserMessage(payload);
 
-    newMessage
-      .save()
-      .then(async () => {
-        await ChatHistory.updateMany(
-          {
-            conversationID: conversationID,
-          },
-          {
-            $set: {
-              isArchived: false,
-            },
-          },
-        );
-
-        await SaveConversation(
-          conversationID,
-          conversationType,
-          "user",
-          null,
-          receivers,
-          messageID,
-          sender,
-          sanitizedContent,
-          new Date(),
-          messageType,
-          false,
-        );
-
-        res.send({
-          status: true,
-          message: "Message Sent",
-          pendingID: pendingID,
-        });
-
-        receivers.map((rcvs, i) => {
-          const isMentioned = mentionedReceiverSet.has(rcvs);
-
-          MessagesTrigger(
-            rcvs,
+      newMessage
+        .save()
+        .then(async () => {
+          await ChatHistory.updateMany(
             {
-              conversationID,
-              entityID: sender,
-              mentioner: isMentioned ? mentioner : null,
+              conversationID: conversationID,
             },
+            {
+              $set: {
+                isArchived: false,
+              },
+            },
+          );
+
+          await SaveConversation(
+            conversationID,
+            conversationType,
+            "user",
+            null,
+            receivers,
+            messageID,
+            sender,
+            sanitizedContent,
+            new Date(),
+            messageType,
             false,
           );
+
+          res.send({
+            status: true,
+            message: "Message Sent",
+            pendingID: pendingID,
+          });
+
+          receivers.map((rcvs, i) => {
+            const isMentioned = mentionedReceiverSet.has(rcvs);
+
+            MessagesTrigger(
+              rcvs,
+              {
+                conversationID,
+                entityID: sender,
+                mentioner: isMentioned ? mentioner : null,
+              },
+              false,
+            );
+          });
+          bumpChatScore(conversationID, receivers, entity_id);
+
+          if (messageType === "text") {
+            resolveLinkPreviewForMessage(
+              messageID,
+              conversationID,
+              sanitizedContent,
+              receivers,
+              sender,
+            );
+          }
+        })
+        .catch((err) => {
+          console.log(err);
+          res.send({ status: false, message: "Error checking message" });
         });
-        bumpChatScore(conversationID, receivers, entity_id);
-      })
-      .catch((err) => {
-        console.log(err);
-        res.send({ status: false, message: "Error checking message" });
-      });
-  } catch (ex) {
-    console.log(ex);
-    res
-      .status(400)
-      .send({ status: false, message: ex.message || ex.toString() });
-  }
-});
+    } catch (ex) {
+      console.log(ex);
+      res
+        .status(400)
+        .send({ status: false, message: ex.message || ex.toString() });
+    }
+  },
+);
 
 function removeNullServerDetails(obj) {
   // Check if serverdetails key exists and its value is null or undefined
@@ -1741,126 +1820,127 @@ router.post(
   jwtchecker,
   requiresPermission("conversations.create"),
   async (req, res) => {
-  const userID = req.params.userID;
-  const entity_id = req.params.entity_id;
-  const id = req.params.id;
-  const username = req.params.username;
-  const token = req.body.token;
+    const userID = req.params.userID;
+    const entity_id = req.params.entity_id;
+    const id = req.params.id;
+    const username = req.params.username;
+    const token = req.body.token;
 
-  const client = await pool.getPool();
+    const client = await pool.getPool();
 
-  try {
-    const decodeToken = jwt.verify(token, JWT_SECRET);
+    try {
+      const decodeToken = jwt.verify(token, JWT_SECRET);
 
-    const contactID = await checkGroupID(`${makeID(20)}`);
-    const otherUsers = decodeToken.otherUsers;
-    const groupName = decodeToken.groupName;
-    const privacy = decodeToken.privacy;
-    const allReceivers = [entity_id, ...otherUsers];
-    const userReceivers = allReceivers.map((alr, i) => ({
-      entityID: alr,
-    }));
+      const contactID = await checkGroupID(`${makeID(20)}`);
+      const otherUsers = decodeToken.otherUsers;
+      const groupName = decodeToken.groupName;
+      const privacy = decodeToken.privacy;
+      const allReceivers = [entity_id, ...otherUsers];
+      const userReceivers = allReceivers.map((alr, i) => ({
+        entityID: alr,
+      }));
 
-    const { rows } = await client.query(
-      `SELECT entity_id from user_account WHERE entity_id = ANY($1)`,
-      [userReceivers.map((mp) => mp.entityID)],
-    );
-
-    const insertValues = [];
-    const params = [];
-    let paramIndex = 1;
-
-    rows.forEach(({ entity_id: accountId }) => {
-      insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+      const { rows } = await client.query(
+        `SELECT entity_id from user_account WHERE entity_id = ANY($1)`,
+        [userReceivers.map((mp) => mp.entityID)],
       );
-      // member_id - generate UUID here or use a package during insert if your DB auto-generates
-      params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
-      params.push(accountId); // account FK
-      params.push(contactID); // pass your realm ID here
-      params.push(entity_id); // who added this member (account FK)
-      params.push(new Date()); // date_joined or null as needed
 
-      if (accountId === entity_id) {
-        params.push("admin"); // member role
-      } else {
-        params.push("member"); // member role
-      }
-    });
+      const insertValues = [];
+      const params = [];
+      let paramIndex = 1;
 
-    const realm_entity_id = await CreateEntity("realm");
+      rows.forEach(({ entity_id: accountId }) => {
+        insertValues.push(
+          `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+        );
+        // member_id - generate UUID here or use a package during insert if your DB auto-generates
+        params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
+        params.push(accountId); // account FK
+        params.push(contactID); // pass your realm ID here
+        params.push(entity_id); // who added this member (account FK)
+        params.push(new Date()); // date_joined or null as needed
 
-    await client.query(
-      `INSERT INTO community_realm (
+        if (accountId === entity_id) {
+          params.push("admin"); // member role
+        } else {
+          params.push("member"); // member role
+        }
+      });
+
+      const realm_entity_id = await CreateEntity("realm");
+
+      await client.query(
+        `INSERT INTO community_realm (
       id, realm_id, name, profile, type, created_by_id, parent_id, is_active, is_private, is_verified, ranking_score, created_at, is_temporary, entity_id
       ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), false, $12
       )`,
-      [
-        contactID,
-        contactID,
-        groupName,
-        "N/A",
-        "group",
-        entity_id,
-        null,
-        true,
-        privacy,
-        false,
-        0,
-        realm_entity_id,
-      ],
-    );
+        [
+          contactID,
+          contactID,
+          groupName,
+          "N/A",
+          "group",
+          entity_id,
+          null,
+          true,
+          privacy,
+          false,
+          0,
+          realm_entity_id,
+        ],
+      );
 
-    await client.query(
-      `
+      await client.query(
+        `
         INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role)
         VALUES ${insertValues.join(", ")}
       `,
-      params,
-    );
+        params,
+      );
 
-    await client.query("COMMIT");
+      await client.query("COMMIT");
 
-    // Atomic upsert instead of an unawaited, unconditional .save() - same
-    // fix as messages/index.js's ChatHistory creation, guarding against
-    // duplicate chat_history rows (no unique index on conversationID+
-    // entityID exists) that would later fan this conversation out into
-    // multiple rows in the conversations list.
-    await Promise.all(
-      allReceivers.map((mp) =>
-        ChatHistory.findOneAndUpdate(
-          { conversationID: contactID, entityID: mp },
-          {
-            $setOnInsert: {
-              conversationID: contactID,
-              entityID: mp,
-              cleared_at: null,
-              isArchived: false,
-              isRestricted: false,
+      // Atomic upsert instead of an unawaited, unconditional .save() - same
+      // fix as messages/index.js's ChatHistory creation, guarding against
+      // duplicate chat_history rows (no unique index on conversationID+
+      // entityID exists) that would later fan this conversation out into
+      // multiple rows in the conversations list.
+      await Promise.all(
+        allReceivers.map((mp) =>
+          ChatHistory.findOneAndUpdate(
+            { conversationID: contactID, entityID: mp },
+            {
+              $setOnInsert: {
+                conversationID: contactID,
+                entityID: mp,
+                cleared_at: null,
+                isArchived: false,
+                isRestricted: false,
+              },
             },
-          },
-          { upsert: true, new: true },
+            { upsert: true, new: true },
+          ),
         ),
-      ),
-    );
+      );
 
-    sendMessageInitForGC(
-      contactID,
-      entity_id,
-      username,
-      allReceivers,
-      "created the group chat",
-      "group",
-    );
+      sendMessageInitForGC(
+        contactID,
+        entity_id,
+        username,
+        allReceivers,
+        "created the group chat",
+        "group",
+      );
 
-    res.send({ status: true, message: `You created a Group Chat` });
-  } catch (ex) {
-    await client.query("ROLLBACK");
-    res.send({ status: false, message: "Group token encountered an error!" });
-    console.log(ex);
-  }
-});
+      res.send({ status: true, message: `You created a Group Chat` });
+    } catch (ex) {
+      await client.query("ROLLBACK");
+      res.send({ status: false, message: "Group token encountered an error!" });
+      console.log(ex);
+    }
+  },
+);
 
 const createRealmReusable = async (
   id,
@@ -2051,65 +2131,66 @@ router.post(
   jwtchecker,
   requiresPermission("realm.server.create"),
   async (req, res) => {
-  const userID = req.params.userID;
-  const id = req.params.id;
-  const entityID = req.params.entity_id;
-  const token = req.body.token;
+    const userID = req.params.userID;
+    const id = req.params.id;
+    const entityID = req.params.entity_id;
+    const token = req.body.token;
 
-  try {
-    const decodeToken = jwt.verify(token, JWT_SECRET);
-    const defaultchannellist = ["General", "Announcements", "Random"];
+    try {
+      const decodeToken = jwt.verify(token, JWT_SECRET);
+      const defaultchannellist = ["General", "Announcements", "Random"];
 
-    const serverID = await checkGroupID(`${makeID(20)}`);
-    const otherUsers = decodeToken.otherUsers;
-    const serverName = decodeToken.groupName;
-    const privacy = decodeToken.privacy;
-    const allReceivers = [entityID, ...otherUsers];
-    const userReceivers = allReceivers.map((alr, i) => ({
-      entityID: alr,
-    }));
+      const serverID = await checkGroupID(`${makeID(20)}`);
+      const otherUsers = decodeToken.otherUsers;
+      const serverName = decodeToken.groupName;
+      const privacy = decodeToken.privacy;
+      const allReceivers = [entityID, ...otherUsers];
+      const userReceivers = allReceivers.map((alr, i) => ({
+        entityID: alr,
+      }));
 
-    createRealmReusable(
-      entityID,
-      null,
-      serverID,
-      serverName,
-      null,
-      null,
-      null,
-      entityID,
-      userReceivers,
-      privacy,
-      "server",
-      null,
-      null,
-      false,
-    );
-
-    defaultchannellist.map((mp) => {
       createRealmReusable(
         entityID,
-        serverID,
         null,
-        mp,
+        serverID,
+        serverName,
         null,
         null,
         null,
         entityID,
         userReceivers,
-        false,
-        "channel",
+        privacy,
+        "server",
         null,
         null,
         false,
       );
-    });
-    res.send({ status: true, message: `You created a Group Chat` });
-  } catch (ex) {
-    res.send({ status: false, message: "Group token encountered an error!" });
-    console.log(ex);
-  }
-});
+
+      defaultchannellist.map((mp) => {
+        createRealmReusable(
+          entityID,
+          serverID,
+          null,
+          mp,
+          null,
+          null,
+          null,
+          entityID,
+          userReceivers,
+          false,
+          "channel",
+          null,
+          null,
+          false,
+        );
+      });
+      res.send({ status: true, message: `You created a Group Chat` });
+    } catch (ex) {
+      res.send({ status: false, message: "Group token encountered an error!" });
+      console.log(ex);
+    }
+  },
+);
 
 router.post("/createconference", jwtchecker, async (req, res) => {
   const userID = req.params.userID;

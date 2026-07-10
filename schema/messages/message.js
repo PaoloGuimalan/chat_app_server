@@ -15,6 +15,7 @@ const usermessage = mongoose.Schema({
   isDeleted: { type: Boolean, require: true },
   messageType: { type: mongoose.Schema.Types.Mixed, require: true },
   conversationType: { type: mongoose.Schema.Types.Mixed, require: true },
+  linkPreview: { type: mongoose.Schema.Types.Mixed, required: false },
 });
 
 module.exports = mongoose.model("UserMessage", usermessage, "messages");
