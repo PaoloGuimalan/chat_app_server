@@ -173,6 +173,30 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
     const realm = realm_row[0];
 
+    // A realm can't be left with zero owners - whether via self-leave or an
+    // owner removing a co-owner (only an owner can remove/demote a fellow
+    // owner, per the actorRole check above), so this covers the whole
+    // batch, not just self-removal.
+    const { rows: ownerRows } = await pool.query(
+      `SELECT entity_id FROM community_member WHERE realm_id = $1 AND role = 'owner'`,
+      [realm_id],
+    );
+    const currentOwnerIds = ownerRows.map((mp) => mp.entity_id);
+    const ownersBeingRemoved = account_ids.filter((flt) =>
+      currentOwnerIds.includes(flt),
+    );
+
+    if (
+      ownersBeingRemoved.length > 0 &&
+      ownersBeingRemoved.length >= currentOwnerIds.length
+    ) {
+      res.status(400).send({
+        status: false,
+        message: "Transfer ownership to another member before leaving.",
+      });
+      return;
+    }
+
     if (realm.type === "server") {
       const { rows: channels } = await pool.query(
         `SELECT realm_id FROM community_realm WHERE parent_id = $1`,

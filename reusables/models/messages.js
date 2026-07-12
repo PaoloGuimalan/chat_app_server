@@ -305,8 +305,21 @@ const SyncConversationParticipants = async (conversationID) => {
 };
 
 const GetAllReceivers = async (contactID) => {
+  // involved_entity_id/community_member.entity_id can be a personal account
+  // or a switched-to realm/page entity - user_account only has rows for the
+  // former, so anchor on entity_entity and left-join both detail tables
+  // (same pattern as the chat-history fallback below) rather than filtering
+  // realm entities out entirely.
   const { rows: rows_connections } = await pool.query(
-    "SELECT ua.id, ua.username, ua.entity_id FROM user_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
+    `SELECT
+       p.id AS entity_id,
+       COALESCE(u.id, r.id) AS id,
+       COALESCE(u.username, r.slug) AS username
+     FROM user_connection uc
+     JOIN entity_entity p ON p.id = uc.involved_entity_id
+     LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+     LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     WHERE uc.connection_id = $1;`,
     [contactID],
   );
 
@@ -321,7 +334,15 @@ const GetAllReceivers = async (contactID) => {
   }
 
   const { rows: rows_members } = await pool.query(
-    "SELECT ua.id, ua.username, ua.entity_id FROM community_member uc JOIN user_account ua ON ua.entity_id = uc.entity_id WHERE uc.realm_id = $1;",
+    `SELECT
+       p.id AS entity_id,
+       COALESCE(u.id, r.id) AS id,
+       COALESCE(u.username, r.slug) AS username
+     FROM community_member uc
+     JOIN entity_entity p ON p.id = uc.entity_id
+     LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+     LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     WHERE uc.realm_id = $1;`,
     [contactID],
   );
 

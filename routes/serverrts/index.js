@@ -167,20 +167,28 @@ router.get(
         let rows_final = [];
 
         if (receivers_list) {
+          // receivers can be personal accounts (bulk-add-by-admin) or a
+          // switched-to realm/page entity (self-join) - user_account only
+          // has rows for the former, so anchor on entity_entity and
+          // left-join both detail tables (same pattern as GetAllReceivers
+          // in reusables/models/messages.js) rather than filtering realm
+          // entities out entirely.
           const { rows } = await pool.query(
             `
           SELECT
-            id AS "_id",
-            entity_id AS "entityID",
-            username AS "userID",
+            p.id AS "entityID",
+            COALESCE(u.id, r.id) AS "_id",
+            COALESCE(u.username, r.slug) AS "userID",
             json_build_object(
-              'firstName', first_name,
-              'middleName', middle_name,
-              'lastName', last_name
+              'firstName', COALESCE(u.first_name, r.name),
+              'middleName', COALESCE(u.middle_name, 'N/A'),
+              'lastName', COALESCE(u.last_name, '')
             ) AS fullname,
-            profile
-          FROM user_account
-          WHERE entity_id = ANY($1)`,
+            COALESCE(u.profile, r.profile) AS profile
+          FROM entity_entity p
+          LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+          LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+          WHERE p.id = ANY($1)`,
             [receivers_list],
           );
 
@@ -188,19 +196,21 @@ router.get(
         } else {
           const { rows } = await pool.query(
             `
-            SELECT 
-                ua.id AS "_id",
-                ua.entity_id AS "entityID",
-                ua.username AS "userID",
+            SELECT
+                p.id AS "entityID",
+                COALESCE(u.id, r.id) AS "_id",
+                COALESCE(u.username, r.slug) AS "userID",
                 json_build_object(
-                  'firstName', ua.first_name,
-                  'middleName', ua.middle_name,
-                  'lastName', ua.last_name
+                  'firstName', COALESCE(u.first_name, r.name),
+                  'middleName', COALESCE(u.middle_name, 'N/A'),
+                  'lastName', COALESCE(u.last_name, '')
                 ) AS fullname,
-                ua.profile
+                COALESCE(u.profile, r.profile) AS profile
             FROM community_member cm
-            JOIN user_account ua ON cm.entity_id = ua.entity_id
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
+            JOIN entity_entity p ON cm.entity_id = p.id
+            LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+            LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
             WHERE cr.realm_id = $1 AND cr.parent_id = $2;`,
             [conversationID, parent_realm],
           );
@@ -237,7 +247,17 @@ router.get(
             ),
             'createdBy', ua.username,
             'privacy', cr.is_private,
-            'type', cr.type
+            'type', cr.type,
+            'is_admin', (
+              pcr.entity_id = $3
+              OR EXISTS (
+                SELECT 1
+                FROM community_member cm
+                WHERE cm.entity_id = $3
+                  AND cm.realm_id = pcr.realm_id
+                  AND cm.role IN ('admin', 'owner')
+              )
+            )
           ) AS groupdetails,
           json_build_object(
             '_id', pcr.id,
@@ -269,7 +289,7 @@ router.get(
         LEFT JOIN community_realm pcr ON cr.parent_id = pcr.realm_id
         LEFT JOIN user_account pua ON pcr.created_by_id = pua.entity_id
         WHERE cr.realm_id = $1 AND cr.parent_id = $2;;`,
-          [conversationID, parent_realm],
+          [conversationID, parent_realm, entityID],
         );
 
         const details_result = details[0];
@@ -512,20 +532,50 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
       await isRealmMember(serverID, entityID);
     }
 
+    // A realm's own entity can never be a Member of its own realm - the
+    // self-administration permission check (isRealmMember/hasPermission)
+    // already resolves that entity as owner-tier directly, so inserting a
+    // literal Member row for it would create a second, conflicting source
+    // of truth for the same realm's ownership. Block it explicitly rather
+    // than letting it silently no-op via ON CONFLICT DO NOTHING below.
+    const { rows: realmRow } = await pool.query(
+      `SELECT entity_id FROM community_realm WHERE realm_id = $1`,
+      [serverID],
+    );
+    const realmEntityId = realmRow.length > 0 ? realmRow[0].entity_id : null;
+
+    if (
+      realmEntityId &&
+      memberstoadd.some((mp) => mp.entityID === realmEntityId)
+    ) {
+      res.status(400).send({
+        status: false,
+        message: "A realm cannot join itself.",
+      });
+      return;
+    }
+
+    // memberstoadd can hold either personal accounts (bulk-add-by-admin) or
+    // a switched-to realm/page entity (self-join) - user_account only has
+    // rows for the former, so anchor on entity_entity and left-join both
+    // detail tables (same pattern as GetAllReceivers in
+    // reusables/models/messages.js) rather than filtering realm entities
+    // out entirely.
     const { rows } = await pool.query(
       `
           SELECT
-            ua.id,
-            ua.username AS "userID",
-            ua.entity_id AS "entityID",
+            p.id AS "entityID",
+            COALESCE(u.username, r.slug) AS "userID",
             EXISTS (
               SELECT 1
               FROM community_member cm
-              WHERE cm.entity_id = ua.entity_id
+              WHERE cm.entity_id = p.id
                 AND cm.realm_id = $2
             ) AS "alreadyMember"
-          FROM user_account ua
-          WHERE ua.entity_id = ANY($1);
+          FROM entity_entity p
+          LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+          LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+          WHERE p.id = ANY($1);
         `,
       [memberstoadd.map((mp) => mp.entityID), serverID],
     );
