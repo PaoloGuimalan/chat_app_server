@@ -161,7 +161,12 @@ async function resolveLinkPreviewForMessage(
   receivers,
   senderEntityID,
 ) {
-  if (!LINK_PREVIEW_SERVICE_URL || !INTERNAL_SERVICE_SECRET) return;
+  if (!LINK_PREVIEW_SERVICE_URL || !INTERNAL_SERVICE_SECRET) {
+    console.log(
+      "[linkPreview] skipped: LINK_PREVIEW_SERVICE_URL/INTERNAL_SERVICE_SECRET not set in this process's environment (server restart needed after editing .env)",
+    );
+    return;
+  }
 
   let linkPreview = { status: "failed" };
 
