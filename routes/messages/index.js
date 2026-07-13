@@ -1195,8 +1195,9 @@ router.get("/conversations", jwtchecker, async (req, res) => {
 
     const { rows: accountRows } = await pool.query(
       `
-        SELECT 
+        SELECT
           p.id AS entity_id,
+          p.type AS type,
           COALESCE(u.id, r.id) AS id,
           COALESCE(u.username, r.slug) AS username,
           FALSE AS privacy,
@@ -1444,8 +1445,9 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
 
     const { rows: accountRows } = await pool.query(
       `
-        SELECT 
+        SELECT
           p.id AS entity_id,
+          p.type AS type,
           COALESCE(u.id, r.id) AS id,
           COALESCE(u.username, r.slug) AS username,
           FALSE AS privacy,
