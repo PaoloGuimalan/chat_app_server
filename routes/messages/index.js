@@ -360,7 +360,7 @@ router.get(
       } else {
         const { rows: realmRows } = await pool.query(
           `
-            SELECT realm_id
+            SELECT realm_id, type
             FROM community_realm
             WHERE realm_id = $1 OR slug = $1
             LIMIT 1
@@ -375,11 +375,47 @@ router.get(
         }
 
         const resolvedConversationID = realmRows[0].realm_id;
+        // realm.type is read from the DB, never trusted from the client's
+        // :type route param, since that param is only used above to branch
+        // single-vs-group and isn't validated against the actual realm.
+        const isConferenceRealm = realmRows[0].type === "conference";
 
         // Was previously missing - any authenticated account could load any
         // group/channel's full member list and details just by knowing its
         // realm_id/slug, not just realms they belong to.
-        await isRealmMember(resolvedConversationID, entity_id);
+        let isMember = true;
+        try {
+          await isRealmMember(resolvedConversationID, entity_id);
+        } catch (err) {
+          if (!isConferenceRealm) {
+            throw err;
+          }
+          // Conferences show a lobby before the caller has joined/accepted an
+          // invite, so a non-member still needs enough info to render it -
+          // just not the member roster or chat history (handled below).
+          isMember = false;
+        }
+
+        if (!isMember) {
+          const result = await getRealmWithUsers(
+            resolvedConversationID,
+            entity_id,
+          );
+
+          if (!result) {
+            return res
+              .status(404)
+              .send({ status: false, message: "Invalid Group/Channel" });
+          }
+
+          const lobbyResult = { ...result, usersWithInfo: [] };
+          const formattedResult = formatToDesiredStructure(lobbyResult);
+          formattedResult.chatHistory = null;
+          formattedResult.conversationfiles = [];
+
+          const encodedResult = createJWT({ data: formattedResult });
+          return res.send({ status: true, result: encodedResult });
+        }
 
         let chatHistory = null;
 
