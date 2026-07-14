@@ -10,6 +10,7 @@ const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const { encode, decode } = require("../../reusables/hooks/bycrypt");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
+const { resolveAllowedModulesAndContext } = require("../../reusables/hooks/permissionChecker");
 const pool = require("../../reusables/database/postgres");
 
 const UserAccount = require("../../schema/auth/useraccount");
@@ -170,10 +171,22 @@ router.get("/jwtchecker", jwtchecker, async (req, res) => {
       },
     );
 
+    // Merged directly into this response so session restore (AuthCheck in
+    // the webapp) no longer needs a separate follow-up call to Django's
+    // /api/entity/me/modules just to learn allowed_modules/active_entity.
+    const { allowedModules, activeEntity } = await resolveAllowedModulesAndContext(
+      entity_id,
+      rows[0].entity_id,
+      rows[0].profile,
+    );
+
     res.send({
       status: true,
       result: {
         usertoken: usertoken,
+        allowed_modules: allowedModules,
+        active_entity: activeEntity,
+        personal_entity_id: rows[0].entity_id,
       },
     });
   } else {

@@ -243,6 +243,68 @@ async function hasPermission(entityId, permission, realmId = null) {
 }
 
 /**
+ * resolveAllowedModulesAndContext(entityId, personalEntityId, personalProfile)
+ * -> Promise<{ allowedModules, activeEntity }>
+ *
+ * Node-side port of Django's entity.services.allowed_modules
+ * .resolve_allowed_modules_and_context() / entity.views.MyAllowedModules -
+ * used directly by GET /auth/jwtchecker so session restore gets
+ * allowed_modules/active_entity in the SAME response as the refreshed
+ * usertoken, instead of a separate follow-up call to Django's
+ * /api/entity/me/modules. Keep in sync with the Django version.
+ *
+ * entity_type-scoped codenames are read straight from the shared catalog
+ * (scope === "entity_type") rather than a hardcoded list here, unlike
+ * Django's Permission.ENTITY_TYPE_SCOPED constant - the catalog is already
+ * the single source of truth this file reads for everything else.
+ */
+async function resolveAllowedModulesAndContext(entityId, personalEntityId, personalProfile) {
+  const catalog = await getCatalog();
+  const entityTypeCodenames = Object.entries(catalog)
+    .filter(([, entry]) => entry.scope === "entity_type" && entry.is_active)
+    .map(([codename]) => codename);
+
+  const allowedModules = [];
+  for (const codename of entityTypeCodenames) {
+    if (await hasPermission(entityId, codename, null)) {
+      allowedModules.push(codename);
+    }
+  }
+
+  const isPersonal = entityId === personalEntityId;
+  let activeEntity;
+
+  if (isPersonal) {
+    activeEntity = {
+      id: entityId,
+      type: "user",
+      realm_type: null,
+      realm_id: null,
+      name: null,
+      slug: null,
+      profile: personalProfile,
+    };
+  } else {
+    const { rows } = await pool.query(
+      `SELECT id, type, name, slug, profile FROM community_realm WHERE entity_id = $1 LIMIT 1`,
+      [entityId],
+    );
+    const realm = rows.length > 0 ? rows[0] : null;
+    activeEntity = {
+      id: entityId,
+      type: "realm",
+      realm_type: realm ? realm.type : null,
+      realm_id: realm ? realm.id : null,
+      name: realm ? realm.name : null,
+      slug: realm ? realm.slug || realm.id : null,
+      profile: realm ? realm.profile : null,
+    };
+  }
+
+  return { allowedModules, activeEntity };
+}
+
+/**
  * requiresPermission(permission, { realmId }) - Express middleware factory,
  * used the same way as jwtchecker (reusables/hooks/jwthelper.js). Must run
  * after jwtchecker, since it reads req.params.entity_id.
@@ -281,4 +343,5 @@ module.exports = {
   getCatalog,
   getRoleMatrix,
   getEntityTypeMatrix,
+  resolveAllowedModulesAndContext,
 };
