@@ -3096,7 +3096,7 @@ router.post("/logout", jwtchecker, async (req, res) => {
     { $set: { fcmToken: null } },
   )
     .then((result) => {
-      res.send({ status: false, message: "Error purging session" });
+      res.send({ status: true, message: "OK" });
     })
     .catch((err) => {
       console.log(err);
