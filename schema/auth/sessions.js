@@ -7,6 +7,7 @@ const sessions = mongoose.Schema({
   userAgent: { type: mongoose.Schema.Types.Mixed, require: true },
   deviceType: { type: mongoose.Schema.Types.Mixed, require: true },
   deviceToken: { type: mongoose.Schema.Types.Mixed, require: true },
+  fcmToken: { type: mongoose.Schema.Types.Mixed, default: null },
   browser: { type: mongoose.Schema.Types.Mixed, default: null },
   os: { type: mongoose.Schema.Types.Mixed, default: null },
   ip: { type: mongoose.Schema.Types.Mixed, default: null },

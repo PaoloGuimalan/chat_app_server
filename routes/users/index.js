@@ -2993,6 +2993,7 @@ const setUserSession = async (entityID, deviceToken, status, resolve) => {
   );
   const newSessionPayload = {
     status: status,
+    fcmToken: null,
     lastSeen: dateGetter(),
   };
 
@@ -3209,28 +3210,6 @@ router.post("/endcall", jwtchecker, async (req, res) => {
         endedBy: userID,
       });
     });
-    // publish(`events_${mp}`, CALL_REJECT_NOTIF_LOOPER, {
-    //   parameters: {
-    //     recepients: recepients,
-    //     decodeToken: {
-    //       conversationID: conversationID,
-    //       endedBy: userID,
-    //     },
-    //   },
-    // });
-    // await producer.publishMessage(
-    //   "INFO:CHATTERLOOP",
-    //   CALL_REJECT_NOTIF_LOOPER,
-    //   {
-    //     parameters: {
-    //       recepients: recepients,
-    //       decodeToken: {
-    //         conversationID: conversationID,
-    //         endedBy: userID,
-    //       },
-    //     },
-    //   }
-    // );
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {

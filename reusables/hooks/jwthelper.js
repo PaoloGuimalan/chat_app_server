@@ -13,6 +13,7 @@ const jwtchecker = async (req, res, next) => {
   const origin = req.headers["origin"];
   const nonce = req.headers["x-nonce"];
   const deviceToken = req.headers["device-token"];
+  const fcm = req.headers["fcm-token"];
 
   if (!origin) {
     res.status(403).send({ status: false, message: "Request not allowed!" });
@@ -87,6 +88,12 @@ const jwtchecker = async (req, res, next) => {
             });
             return;
           }
+
+          if (fcm && session_result.fcmToken !== fcm)
+            await UserSessions.updateOne(
+              { deviceToken, entityID: decode.entity },
+              { $set: { fcmToken: fcm } },
+            );
 
           req.params.userID = currentRow.id;
           req.params.id = currentRow.id;
