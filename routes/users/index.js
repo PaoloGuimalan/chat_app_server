@@ -2993,7 +2993,6 @@ const setUserSession = async (entityID, deviceToken, status, resolve) => {
   );
   const newSessionPayload = {
     status: status,
-    fcmToken: null,
     lastSeen: dateGetter(),
   };
 
@@ -3087,12 +3086,28 @@ router.get(
   },
 );
 
+router.get("/logout", jwtchecker, async (req, res) => {
+  const userID = req.params.userID;
+  const entity_id = req.params.entity_id;
+  const deviceToken = req.params.deviceToken;
+
+  await UserSessions.updateOne(
+    { deviceToken, entityID: entity_id },
+    { $set: { fcmToken: null } },
+  )
+    .then((result) => {
+      res.send({ status: false, message: "Error purging session" });
+    })
+    .catch((err) => {
+      console.log(err);
+      res.send({ status: false, message: "Error purging session" });
+    });
+});
+
 router.get("/activecontacts", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const entity_id = req.params.entity_id;
   const contacts = await getContactsForSession(entity_id);
-
-  // console.log(contacts)
 
   await UserSessions.aggregate([
     {
