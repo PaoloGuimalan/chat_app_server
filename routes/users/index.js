@@ -3086,7 +3086,7 @@ router.get(
   },
 );
 
-router.get("/logout", jwtchecker, async (req, res) => {
+router.post("/logout", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const entity_id = req.params.entity_id;
   const deviceToken = req.params.deviceToken;
