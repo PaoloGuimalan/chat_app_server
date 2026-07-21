@@ -169,6 +169,40 @@ const GetSenderDetails = async (entity_id) => {
   return rows[0] || null;
 };
 
+/**
+ * Handles for many entities at once, as a Map keyed by entity_id.
+ *
+ * Same user-or-realm union as GetSenderDetails, but batched - the callers are
+ * loops over members being added or removed, where calling the single-entity
+ * version per member would be one round trip each.
+ *
+ * Entities that resolve to neither table are simply absent from the Map, so
+ * callers should fall back rather than assume a hit.
+ */
+const GetEntityHandles = async (entity_ids = []) => {
+  const ids = [...new Set((entity_ids || []).filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+
+  const { rows } = await pool.query(
+    `SELECT entity_id,
+            'user' AS entity_type,
+            username AS handle,
+            TRIM(CONCAT(first_name, ' ', last_name)) AS display_name
+       FROM user_account
+      WHERE entity_id = ANY($1::text[])
+      UNION ALL
+     SELECT entity_id,
+            'realm' AS entity_type,
+            slug AS handle,
+            name AS display_name
+       FROM community_realm
+      WHERE entity_id = ANY($1::text[]);`,
+    [ids],
+  );
+
+  return new Map(rows.map((r) => [String(r.entity_id), r]));
+};
+
 const GetListOfContactsV2 = async (userID) => {
   const { rows } = await pool.query(
     `
@@ -333,4 +367,5 @@ module.exports = {
   GetRankedUsersInConnections,
   CreateEntity,
   GetSenderDetails,
+  GetEntityHandles,
 };

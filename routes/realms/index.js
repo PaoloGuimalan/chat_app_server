@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 const express = require("express");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
 const pool = require("../../reusables/database/postgres");
@@ -11,6 +11,7 @@ const {
   SyncConversationParticipants,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { GetSenderDetails } = require("../../reusables/models/users");
 const { publish } = require("../../reusables/redis/pubsub");
 const { hasPermission } = require("../../reusables/hooks/permissionChecker");
 const router = express.Router();
@@ -98,6 +99,11 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
   const entityID = req.params.entity_id;
 
   try {
+    // entityID is the ACTING entity - removing a member while switched to the
+    // page must read as the page, not the human behind it. `username` stays
+    // as the fallback.
+    const actorDetails = await GetSenderDetails(entityID);
+    const actorHandle = actorDetails?.handle || username;
     const account_ids = req.body.account_ids;
     const realm_id = req.body.realm_id;
 
@@ -230,7 +236,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
               mpp,
               entityID,
               [],
-              `${username} removed ${mp.username}`,
+              `${actorHandle} removed ${mp.username}`,
               "channel",
             );
           });
@@ -255,7 +261,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           realm_id,
           entityID,
           [],
-          `${username} removed ${mp.username}`,
+          `${actorHandle} removed ${mp.username}`,
           realm.type,
         );
       });

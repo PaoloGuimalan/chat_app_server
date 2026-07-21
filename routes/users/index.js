@@ -1111,9 +1111,14 @@ router.post(
           ? null
           : await GetRealmName(conversationID);
 
+      // `sender` is the ACTING entity, so a mention made while switched to a
+      // page must be attributed to the page. `username` (from jwtchecker) is
+      // always the human behind it, and is kept only as a fallback.
+      const mentionerDetails = await GetSenderDetails(sender);
+
       const mentioner = {
         entityID: sender,
-        username: `@${username}`,
+        username: `@${mentionerDetails?.handle || username}`,
         realmName: realmName,
         isSingle: decodedToken.conversationType === "single",
       };
@@ -1782,7 +1787,13 @@ const sendMessageInitForGC = async (
   const sender = entityID;
   const receivers = recs; //Array
   const seeners = [entityID]; //Array
-  const content = `${username} ${message}`;
+  // entityID is the ACTING entity, so a group created while switched to a
+  // page must read as the page. `username` is the human behind it and stays
+  // as the fallback. This text is STORED on the message, so it's what the
+  // conversation shows, not just the notification.
+  const creatorDetails = await GetSenderDetails(entityID);
+  const creatorHandle = creatorDetails?.handle || username;
+  const content = `${creatorHandle} ${message}`;
   const messageDate = {
     date: dateGetter(),
     time: timeGetter(),
@@ -1840,7 +1851,24 @@ const sendMessageInitForGC = async (
       receivers.map((rcvs, i) => {
         // var sseWithUserID = sseNotificationsWaiters[rcvs];
         MessagesTrigger(rcvs, { conversationID, entityID: sender }, false);
-        ContactListTrigger(rcvs, `${username} created a group chat`);
+        ContactListTrigger(rcvs, `${creatorHandle} created a group chat`);
+      });
+
+      // Being added to a group is exactly the kind of thing you need to hear
+      // about while the app is closed - without this, you'd only discover the
+      // group on next launch. Body reuses `content`, the same text stored on
+      // the message, so the push and the conversation can't disagree.
+      // creatorDetails is already resolved above; no second lookup needed.
+      push.sendMessage({
+        receivers: receivers.filter((r) => String(r) !== String(sender)),
+        conversationId: conversationID,
+        conversationName: await GetRealmName(conversationID),
+        isGroup: true,
+        senderId: sender,
+        senderName: creatorDetails?.display_name || `@${username}`,
+        senderAvatarUrl: creatorDetails?.profile || "",
+        body: content,
+        messageId: messageID,
       });
     })
     .catch((err) => {

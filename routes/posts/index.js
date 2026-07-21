@@ -504,6 +504,12 @@ router.post(
             );
 
             const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+            // entityID is the ACTING entity; `username` is always the human
+            // behind it (jwtchecker sets it from the user row), so sharing as
+            // a page credited the owner instead of the page.
+            const sharerDetails = await GetSenderDetails(entityID);
+            const shareDetails = `@${sharerDetails?.handle || username} shared your post.`;
+
             const notifParams = {
               notificationID: awaitNotifID,
               referenceID: postID,
@@ -512,7 +518,7 @@ router.post(
               fromUserID: entityID,
               content: {
                 headline: `Shared post`,
-                details: `@${username} shared your post.`,
+                details: shareDetails,
               },
               date: {
                 date: dateGetter(),
@@ -529,7 +535,7 @@ router.post(
                 publish(`events_${post_user}`, `notifications`, {
                   status: true,
                   auth: true,
-                  message: `@${username} shared your post.`,
+                  message: shareDetails,
                   result: "", //encodedResult
                 });
               })

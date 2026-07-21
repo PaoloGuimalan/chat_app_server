@@ -38,7 +38,11 @@ const {
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
-const { GetUsersWithConnectionIDs } = require("../../reusables/models/users");
+const {
+  GetUsersWithConnectionIDs,
+  GetSenderDetails,
+  GetEntityHandles,
+} = require("../../reusables/models/users");
 const conversation = require("../../schema/messages/conversation");
 const makeid = require("../../reusables/hooks/makeID");
 
@@ -527,6 +531,8 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
   const username = req.params.username;
 
   try {
+    const actorDetails = await GetSenderDetails(entityID);
+    const actorHandle = actorDetails?.handle || username;
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const conversationID = decodedToken.conversationID;
     const memberstoadd = decodedToken.memberstoadd;
@@ -571,6 +577,15 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
+    // One query for every target's handle - the alternative is interpolating
+    // raw entity ids into text people read. Falls back to the id only when an
+    // entity resolves to neither a user nor a realm.
+    const targetHandles = await GetEntityHandles(
+      removeAlreadyJoined.map((mp) => mp.entityID),
+    );
+    const handleFor = (id) =>
+      targetHandles.get(String(id))?.handle || String(id);
+
     removeAlreadyJoined.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.entityID, entityID)
         .then(() => {
@@ -581,7 +596,11 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
                   conversationID,
                   entityID,
                   receivers,
-                  `${username} added ${mp.userID}`,
+                  // actorHandle, not `username`: entityID is the ACTING
+                  // entity, so adding members while switched to a page must
+                  // read as the page, not its owner. handleFor resolves the
+                  // target rather than printing its raw entity id.
+                  `${actorHandle} added ${handleFor(mp.entityID)}`,
                   conversationType,
                 );
               }

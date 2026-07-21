@@ -237,6 +237,35 @@ const NotificationMessageForConversations = async (
         MessagesTrigger(rcvs, { conversationID, entityID: sender }, false);
         ContactListTrigger(rcvs, `${entityID} added you on a group chat`);
       });
+
+      // Push the same system message to anyone without a live SSE connection,
+      // so being added to a conversation isn't something you only find out
+      // about on next launch.
+      //
+      // Both requires are deferred rather than top-level: models/realms.js
+      // requires THIS module (AddNewMemberToContacts), so a top-level import
+      // here would close a cycle and hand back a half-initialised export.
+      // Inside the function both modules are fully loaded.
+      const { GetRealmName } = require("./realms");
+      const { GetSenderDetails } = require("./users");
+      const push = require("../hooks/pushnotification");
+
+      const senderDetails = await GetSenderDetails(sender);
+      push.sendMessage({
+        receivers: receivers.filter((r) => String(r) !== String(sender)),
+        conversationId: conversationID,
+        conversationName: await GetRealmName(conversationID),
+        // These only ever describe group/channel conversations - a single
+        // chat has no "added you" event.
+        isGroup: true,
+        senderId: sender,
+        senderName: senderDetails?.display_name || "",
+        senderAvatarUrl: senderDetails?.profile || "",
+        // `content` is the details text passed in, i.e. exactly what the
+        // stored message says.
+        body: content,
+        messageId: messageID,
+      });
     })
     .catch((err) => {
       console.log(err);
@@ -404,6 +433,23 @@ const AddNewMemberToChannels = async (
       ...receiversfetch.users.map((mp) => mp.entityID),
     ];
 
+    // entityID is the ACTING entity, so adding members while switched to a
+    // page must read as the page. `username` is the human behind it and stays
+    // as the fallback. Deferred require: models/realms.js requires this
+    // module, so a top-level import would close a cycle.
+    const { GetSenderDetails, GetEntityHandles } = require("./users");
+    const actorDetails = await GetSenderDetails(entityID);
+    const actorHandle = actorDetails?.handle || username;
+
+    // Resolve every target's handle in one query rather than interpolating
+    // raw entity ids into text people read. Falls back to the id only when an
+    // entity resolves to neither a user nor a realm.
+    const targetHandles = await GetEntityHandles(
+      memberstoadd.map((mp) => mp.entityID),
+    );
+    const handleFor = (id) =>
+      targetHandles.get(String(id))?.handle || String(id);
+
     memberstoadd.map((mp) => {
       AddNewMemberToContacts(conversationID, mp.entityID, entityID)
         .then(() => {
@@ -415,8 +461,8 @@ const AddNewMemberToChannels = async (
                   entityID,
                   receivers,
                   entityID === mp.entityID
-                    ? `${mp.userID} joined`
-                    : `${username} added ${mp.entityID}`,
+                    ? `${handleFor(mp.entityID)} joined`
+                    : `${actorHandle} added ${handleFor(mp.entityID)}`,
                   type,
                 );
               })
