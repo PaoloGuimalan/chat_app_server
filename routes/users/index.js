@@ -31,6 +31,7 @@ const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 const Storage = require("../../reusables/hooks/storage");
 const multiparty = require("multiparty");
+const push = require("../../reusables/hooks/pushnotification");
 const fs = require("fs/promises");
 
 const firebaseAdminConfig = {
@@ -135,6 +136,7 @@ const {
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
   CreateEntity,
+  GetSenderDetails,
 } = require("../../reusables/models/users");
 const {
   isRealmMember,
@@ -1209,6 +1211,32 @@ router.post(
               sender,
             );
           }
+
+          const senderDetails = await GetSenderDetails(sender);
+
+          push.sendMessage({
+            // GetAllReceivers includes the sender, and their own other
+            // devices would otherwise be notified of their own message.
+            receivers: receivers.filter(
+              (r) => String(r) !== String(entity_id),
+            ),
+            conversationId: conversationID,
+            // Which chat this is, NOT who sent it (senderName carries that).
+            // A group is titled by the group; a single chat by the person.
+            // realmName is null for singles by construction above, so the two
+            // arms can't be swapped without the single case losing its title.
+            conversationName:
+              decodedToken.conversationType !== "single"
+                ? realmName
+                : senderDetails?.display_name || `@${username}`,
+            isGroup: decodedToken.conversationType !== "single",
+            senderId: entity_id,
+            senderName: senderDetails?.display_name || `@${username}`,
+            senderAvatarUrl: senderDetails?.profile || "",
+            body:
+              messageType === "text" ? sanitizedContent : "Sent an attachment",
+            messageId: messageID,
+          });
         })
         .catch((err) => {
           console.log(err);
@@ -2761,6 +2789,35 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
           bumpChatScore(conversationID, receivers, entity_id);
 
           res.send({ status: true, message: "OK" });
+
+          // Push AFTER res.send, so an FCM round trip can never delay the
+          // upload response - and after Promise.allSettled, so a batch of
+          // files produces one notification rather than one per file.
+          const senderDetails = await GetSenderDetails(entity_id);
+          const realmName =
+            conversationType === "single"
+              ? null
+              : await GetRealmName(conversationID);
+
+          push.sendMessage({
+            receivers: receivers.filter(
+              (r) => String(r) !== String(entity_id),
+            ),
+            conversationId: conversationID,
+            conversationName:
+              conversationType !== "single"
+                ? realmName
+                : senderDetails?.display_name || `@${req.params.username}`,
+            isGroup: conversationType !== "single",
+            senderId: entity_id,
+            senderName:
+              senderDetails?.display_name || `@${req.params.username}`,
+            senderAvatarUrl: senderDetails?.profile || "",
+            body:
+              attachedFiles.length > 1
+                ? `Sent ${attachedFiles.length} attachments`
+                : "Sent an attachment",
+          });
         } catch (ex) {
           console.log(ex);
           res

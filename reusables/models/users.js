@@ -147,6 +147,28 @@ const GetListOfContacts = async (userID) => {
     });
 };
 
+const GetSenderDetails = async (entity_id) => {
+  const { rows } = await pool.query(
+    `SELECT 'user' AS entity_type,
+            username AS handle,
+            TRIM(CONCAT(first_name, ' ', last_name)) AS display_name,
+            NULLIF(NULLIF(profile, 'none'), 'N/A') AS profile
+       FROM user_account
+      WHERE entity_id = $1
+      UNION ALL
+     SELECT 'realm' AS entity_type,
+            slug AS handle,
+            name AS display_name,
+            NULLIF(NULLIF(profile, 'none'), 'N/A') AS profile
+       FROM community_realm
+      WHERE entity_id = $1
+      LIMIT 1;`,
+    [entity_id],
+  );
+
+  return rows[0] || null;
+};
+
 const GetListOfContactsV2 = async (userID) => {
   const { rows } = await pool.query(
     `
@@ -310,4 +332,5 @@ module.exports = {
   GetUsersWithConnectionIDs,
   GetRankedUsersInConnections,
   CreateEntity,
+  GetSenderDetails,
 };

@@ -30,7 +30,9 @@ const {
 const {
   GetListOfContacts,
   GetRankedUsersInConnections,
+  GetSenderDetails,
 } = require("../../reusables/models/users");
+const push = require("../../reusables/hooks/pushnotification");
 const {
   SEND_TAG_POST_NOTIFICATION,
 } = require("../../reusables/vars/rabbitmqevents");
@@ -219,6 +221,21 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
 });
 
 const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
+  // entityID is the ACTING entity - the realm's entity when posting as a page
+  // - whereas `username` comes from req.params.username, which jwtchecker
+  // fills from the USER token and so always names the human behind the page.
+  // Using it directly made a page tag people under its owner's handle.
+  //
+  // GetSenderDetails resolves whichever the entity actually is, returning the
+  // username for a user and the slug for a realm. `username` stays only as a
+  // fallback for an entity that resolves to neither.
+  const senderDetails = await GetSenderDetails(entityID);
+  const handle = senderDetails?.handle || username;
+
+  // Built once and reused for the stored notification, the SSE broadcast and
+  // the push, so the three can't disagree about who did the tagging.
+  const details = `@${handle} tagged you on a post.`;
+
   tagged_users.map(async (mp) => {
     const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
     const notifParams = {
@@ -229,7 +246,7 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
       fromUserID: entityID,
       content: {
         headline: `You were tagged`,
-        details: `@${username} tagged you on a post.`,
+        details,
       },
       date: {
         date: dateGetter(),
@@ -244,11 +261,32 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
     newNotif
       .save()
       .then(async () => {
-        SendTagPostNotification(`@${username} tagged you on a post.`, mp);
+        SendTagPostNotification(details, mp);
       })
       .catch((err) => {
         console.log(err);
       });
+  });
+
+  // One push for the whole tagged set rather than one per person: the tagger
+  // and the post are the same for everyone, so the content is identical, and
+  // offlineTokensFor resolves every recipient's devices in a single query.
+  //
+  // Sent alongside the SSE fan-out above, not instead of it - push only
+  // reaches devices with no live SSE connection, so the two never overlap.
+  push.sendActivity({
+    receivers: tagged_users,
+    type: "tag_notification",
+    // Same headline/details the UserNotifications row carries, so the push
+    // and the in-app notification list can't drift apart.
+    title: "You were tagged",
+    body: details,
+    // A tag is about who tagged you, so the thumbnail is their avatar. The
+    // post's own image would arguably suit better, but only postID is in
+    // scope here and fetching it would cost an extra query on this path.
+    senderAvatarUrl: senderDetails?.profile || "",
+    // No route: mobile has no post screen yet, so this falls back to the
+    // notifications list - which is where the tag is actionable anyway.
   });
 };
 
