@@ -1433,37 +1433,16 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         .filter((flt) => flt.conversationType === "single")
         .map((mp) => mp.conversationID);
 
+      // GetUsersWithConnectionIDs now returns fully-resolved, entity-generic
+      // participant info per conversation (users AND realms/pages), so this
+      // list keeps user<->realm counterparts instead of dropping them.
       const usersWCns = await GetUsersWithConnectionIDs(directConversations);
-      const flattenedReceiversArray = usersWCns.map((mp) => mp.user_id).flat();
-      const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
       const usersByConversationID = {};
 
       for (const item of usersWCns) {
-        const { user_id, connection_ids } = item;
-
-        for (const connID of connection_ids) {
-          if (!usersByConversationID[connID]) {
-            usersByConversationID[connID] = [];
-          }
-          usersByConversationID[connID].push(user_id);
-        }
+        usersByConversationID[item.conversationID] = item.users;
       }
-
-      const { rows } = await pool.query(
-        `SELECT 
-              id AS _id,
-              username AS "userID",
-              json_build_object(
-                'firstName', first_name,
-                'middleName', middle_name,
-                'lastName', last_name
-              ) AS fullname,
-              COALESCE(profile, 'none') AS profile
-            FROM user_account
-            WHERE id = ANY($1);`,
-        [removeDuplicateReceivers],
-      );
 
       const { rows: group_rows } = await pool.query(
         `SELECT 
@@ -1514,7 +1493,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       );
 
       const finalResult = result.map((mp) => {
-        const involvedUserIDs = usersByConversationID[mp.conversationID] || [];
+        const involvedUsers = usersByConversationID[mp.conversationID] || [];
 
         const details = group_rows.filter(
           (flt) => flt.groupdetails.groupID === mp.conversationID,
@@ -1533,7 +1512,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         return {
           ...final_mp,
           content: final_mp.isDeleted ? "" : final_mp.content,
-          users: rows.filter((flt) => involvedUserIDs.includes(flt._id)), // mp.receivers.includes(flt._id)
+          users: involvedUsers,
         };
       });
 

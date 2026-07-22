@@ -13,7 +13,9 @@ const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
 const Conversations = require("../../schema/messages/conversation");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
-const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
+const {
+  requiresPermission,
+} = require("../../reusables/hooks/permissionChecker");
 const {
   GetMessageReceivers,
   AddNewMemberToAllMessages,
@@ -127,51 +129,52 @@ router.post(
   jwtchecker,
   requiresPermission("messages.react"),
   async (req, res) => {
-  const token = req.body.token;
-  const userID = req.params.userID;
-  const id = req.params.id;
-  const entity_id = req.params.entity_id;
+    const token = req.body.token;
+    const userID = req.params.userID;
+    const id = req.params.id;
+    const entity_id = req.params.entity_id;
 
-  try {
-    const decodedToken = jwt.verify(token, JWT_SECRET);
+    try {
+      const decodedToken = jwt.verify(token, JWT_SECRET);
 
-    await isRealmMember(decodedToken.conversationID, entity_id);
+      await isRealmMember(decodedToken.conversationID, entity_id);
 
-    UserMessage.updateOne(
-      {
-        conversationID: decodedToken.conversationID,
-        messageID: decodedToken.messageID,
-      },
-      { $push: { reactions: decodedToken.newreaction } },
-    )
-      .then(async (result) => {
-        const messageReceivers = await GetAllReceivers(
-          decodedToken.conversationID,
-        );
-
-        messageReceivers.users.map((user) => {
-          MessagesTrigger(
-            user.entityID,
-            {
-              conversationID: decodedToken.conversationID,
-              entityID: entity_id,
-            },
-            false,
+      UserMessage.updateOne(
+        {
+          conversationID: decodedToken.conversationID,
+          messageID: decodedToken.messageID,
+        },
+        { $push: { reactions: decodedToken.newreaction } },
+      )
+        .then(async (result) => {
+          const messageReceivers = await GetAllReceivers(
+            decodedToken.conversationID,
           );
-        });
 
-        res.send({ status: true, message: "OK" });
-      })
-      .catch((err) => {
-        res.send({ status: false, message: err.message });
-      });
-  } catch (ex) {
-    console.log(ex);
-    res
-      .status(400)
-      .send({ status: false, message: ex.message || ex.toString() });
-  }
-});
+          messageReceivers.users.map((user) => {
+            MessagesTrigger(
+              user.entityID,
+              {
+                conversationID: decodedToken.conversationID,
+                entityID: entity_id,
+              },
+              false,
+            );
+          });
+
+          res.send({ status: true, message: "OK" });
+        })
+        .catch((err) => {
+          res.send({ status: false, message: err.message });
+        });
+    } catch (ex) {
+      console.log(ex);
+      res
+        .status(400)
+        .send({ status: false, message: ex.message || ex.toString() });
+    }
+  },
+);
 
 async function getRealmWithUsers(realmId, entityID) {
   const query = `
@@ -444,7 +447,10 @@ router.get(
           await Promise.all(
             receivers.users.map(async (mp) => {
               const upsertedChatHistory = await ChatHistory.findOneAndUpdate(
-                { conversationID: resolvedConversationID, entityID: mp.entityID },
+                {
+                  conversationID: resolvedConversationID,
+                  entityID: mp.entityID,
+                },
                 {
                   $setOnInsert: {
                     conversationID: resolvedConversationID,
@@ -484,9 +490,10 @@ router.get(
       }
     } catch (err) {
       console.log(err);
-      res
-        .status(err.message ? 403 : 500)
-        .send({ status: false, message: err.message || "Invalid Group/Channel" });
+      res.status(err.message ? 403 : 500).send({
+        status: false,
+        message: err.message || "Invalid Group/Channel",
+      });
     }
   },
 );
@@ -834,40 +841,17 @@ router.get("/archives", jwtchecker, async (req, res) => {
           .filter((flt) => flt.conversationType === "single")
           .map((mp) => mp.conversationID);
 
+        // GetUsersWithConnectionIDs now returns fully-resolved, entity-generic
+        // participant info per conversation (users AND realms/pages), so a
+        // user<->realm archived thread keeps its counterpart instead of it
+        // getting dropped by a user_account-only lookup.
         const usersWCns = await GetUsersWithConnectionIDs(directConversations);
-        const flattenedReceiversArray = usersWCns
-          .map((mp) => mp.entity_id)
-          .flat();
-        const removeDuplicateReceivers = [...new Set(flattenedReceiversArray)];
 
         const usersByConversationID = {};
 
         for (const item of usersWCns) {
-          const { entity_id, connection_ids } = item;
-
-          for (const connID of connection_ids) {
-            if (!usersByConversationID[connID]) {
-              usersByConversationID[connID] = [];
-            }
-            usersByConversationID[connID].push(entity_id);
-          }
+          usersByConversationID[item.conversationID] = item.users;
         }
-
-        const { rows } = await pool.query(
-          `SELECT 
-                id AS _id,
-                entity_id AS "entityID",
-                username AS "userID",
-                json_build_object(
-                  'firstName', first_name,
-                  'middleName', middle_name,
-                  'lastName', last_name
-                ) AS fullname,
-                COALESCE(profile, 'none') AS profile
-              FROM user_account
-              WHERE entity_id = ANY($1);`,
-          [removeDuplicateReceivers],
-        );
 
         const { rows: group_rows } = await pool.query(
           `SELECT 
@@ -920,8 +904,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
         );
 
         const finalResult = result.map((mp) => {
-          const involvedUserIDs =
-            usersByConversationID[mp.conversationID] || [];
+          const involvedUsers = usersByConversationID[mp.conversationID] || [];
 
           const details = group_rows.filter(
             (flt) => flt.groupdetails.groupID === mp.conversationID,
@@ -940,7 +923,7 @@ router.get("/archives", jwtchecker, async (req, res) => {
           return {
             ...final_mp,
             content: final_mp.isDeleted ? "" : final_mp.content,
-            users: rows.filter((flt) => involvedUserIDs.includes(flt.entityID)), // mp.receivers.includes(flt._id)
+            users: involvedUsers,
           };
         });
 
@@ -1372,76 +1355,77 @@ router.post(
   jwtchecker,
   requiresPermission("conversations.create"),
   async (req, res) => {
-  const userID = req.params.userID;
-  const entity_id = req.params.entity_id;
+    const userID = req.params.userID;
+    const entity_id = req.params.entity_id;
 
-  try {
-    const otherEntityID = req.body.otherEntityID;
+    try {
+      const otherEntityID = req.body.otherEntityID;
 
-    // Safety check to ensure both keys are present before querying database collections
-    if (!entity_id || !otherEntityID) {
-      return res.status(400).json({
-        status: false,
-        message: "Missing entity identifiers for conversation creation.",
+      // Safety check to ensure both keys are present before querying database collections
+      if (!entity_id || !otherEntityID) {
+        return res.status(400).json({
+          status: false,
+          message: "Missing entity identifiers for conversation creation.",
+        });
+      }
+
+      // Do not let a user open a private chat room with themselves
+      if (entity_id === otherEntityID) {
+        return res.status(400).json({
+          status: false,
+          message: "Cannot initialize a direct conversation with yourself.",
+        });
+      }
+
+      const initialParticipants = [entity_id, otherEntityID];
+
+      // 1. Race Condition Check: Must contain exactly only those two participant IDs
+      // $all checks for presence of both elements, $size enforces strict direct chat boundaries
+      const existingConversation = await Conversations.findOne({
+        participant_ids: {
+          $all: initialParticipants,
+          $size: 2,
+        },
+        conversationType: "single",
       });
-    }
 
-    // Do not let a user open a private chat room with themselves
-    if (entity_id === otherEntityID) {
-      return res.status(400).json({
-        status: false,
-        message: "Cannot initialize a direct conversation with yourself.",
+      if (existingConversation) {
+        // If a private room already exists, return its ID safely to prevent duplication
+        return res.status(200).json({
+          status: true,
+          message: "Conversation already initialized",
+          conversationID: existingConversation.conversationID,
+          isNew: false,
+        });
+      }
+
+      const newConversationID = await checkExistingConversationID(makeid(20));
+
+      // 2. Fallback execution: Create a clean initialization layout
+      const newConversation = await Conversations.create({
+        conversationID: newConversationID,
+        participant_ids: initialParticipants,
+        conversationType: "single",
+        last_message: null, // Kept null so it stays hidden from inbox listing aggregation maps
+        created_at: new Date(),
+        updated_at: new Date(),
       });
-    }
 
-    const initialParticipants = [entity_id, otherEntityID];
-
-    // 1. Race Condition Check: Must contain exactly only those two participant IDs
-    // $all checks for presence of both elements, $size enforces strict direct chat boundaries
-    const existingConversation = await Conversations.findOne({
-      participant_ids: {
-        $all: initialParticipants,
-        $size: 2,
-      },
-      conversationType: "single",
-    });
-
-    if (existingConversation) {
-      // If a private room already exists, return its ID safely to prevent duplication
-      return res.status(200).json({
+      return res.status(201).json({
         status: true,
-        message: "Conversation already initialized",
-        conversationID: existingConversation.conversationID,
-        isNew: false,
+        message: "Conversation successfully initialized",
+        conversationID: newConversation.conversationID,
+        isNew: true,
+      });
+    } catch (err) {
+      console.log(err);
+      res.send({
+        status: false,
+        message: "Error initializing conversation",
       });
     }
-
-    const newConversationID = await checkExistingConversationID(makeid(20));
-
-    // 2. Fallback execution: Create a clean initialization layout
-    const newConversation = await Conversations.create({
-      conversationID: newConversationID,
-      participant_ids: initialParticipants,
-      conversationType: "single",
-      last_message: null, // Kept null so it stays hidden from inbox listing aggregation maps
-      created_at: new Date(),
-      updated_at: new Date(),
-    });
-
-    return res.status(201).json({
-      status: true,
-      message: "Conversation successfully initialized",
-      conversationID: newConversation.conversationID,
-      isNew: true,
-    });
-  } catch (err) {
-    console.log(err);
-    res.send({
-      status: false,
-      message: "Error initializing conversation",
-    });
-  }
-});
+  },
+);
 
 router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
@@ -1622,9 +1606,10 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
     });
   } catch (err) {
     console.log(err);
-    res
-      .status(400)
-      .send({ status: false, message: err.message || "Error generating conversations list" });
+    res.status(400).send({
+      status: false,
+      message: err.message || "Error generating conversations list",
+    });
   }
 });
 

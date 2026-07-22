@@ -1,4 +1,5 @@
 const UserContacts = require("../../schema/users/contacts");
+const Conversation = require("../../schema/messages/conversation");
 const pool = require("../../reusables/database/postgres");
 const crypto = require("crypto");
 
@@ -301,30 +302,83 @@ const GetUsersFromConnections = async (connectionIDs) => {
   return rows.map((r) => r.user_id);
 };
 
+// Batched GetAllReceivers: resolves the participants of MANY conversations at
+// once, keyed per conversation. Mirrors GetAllReceivers' entity-generic
+// resolution - anchor on entity_entity and LEFT JOIN both user_account and
+// community_realm so a user<->realm (page) counterpart resolves instead of
+// being dropped by a user_account-only lookup - and its participant sources:
+//   1. user_connection      - conversations backed by a connection.
+//   2. participant_ids (Mongo) - conversations not connected yet, or where a
+//      participant only lives on the conversation doc.
+// GetAllReceivers falls back between these for a single id; here they are
+// UNION-ed (then deduped) so a batch resolves completely in one round-trip.
+// Returns [{ conversationID, users: [{ _id, entityID, userID, fullname,
+// profile }] }].
 const GetUsersWithConnectionIDs = async (connectionIDs) => {
+  // Pull participant_ids straight from the Mongo conversation docs and flatten
+  // into parallel (conversationID, entity_id) arrays for the SQL UNNEST below.
+  const conversationDocs = connectionIDs.length
+    ? await Conversation.find(
+        { conversationID: { $in: connectionIDs } },
+        { conversationID: 1, participant_ids: 1 },
+      )
+    : [];
+
+  const participantConvIDs = [];
+  const participantEntityIDs = [];
+  for (const doc of conversationDocs) {
+    for (const pid of doc.participant_ids || []) {
+      participantConvIDs.push(String(doc.conversationID));
+      participantEntityIDs.push(String(pid));
+    }
+  }
+
   const { rows } = await pool.query(
     `
       SELECT
-        entity_id,
-        json_agg(DISTINCT connection_id) AS connection_ids
+        combined.conversation_id AS "conversationID",
+        jsonb_agg(
+          jsonb_build_object(
+            '_id', COALESCE(u.id, r.id),
+            'entityID', p.id,
+            'userID', COALESCE(u.username, r.slug),
+            'fullname', CASE
+              WHEN p.type = 'realm' THEN jsonb_build_object(
+                'firstName', r.name,
+                'middleName', '',
+                'lastName', ''
+              )
+              ELSE jsonb_build_object(
+                'firstName', u.first_name,
+                'middleName', u.middle_name,
+                'lastName', u.last_name
+              )
+            END,
+            'profile', COALESCE(u.profile, r.profile, 'none')
+          )
+        ) AS users
       FROM (
-        SELECT
-          action_by_id AS entity_id,
-          connection_id
+        SELECT action_by_id AS entity_id, connection_id AS conversation_id
         FROM user_connection
         WHERE connection_id = ANY($1::TEXT[])
 
-        UNION ALL
+        UNION
 
-        SELECT
-          involved_entity_id AS entity_id,
-          connection_id
+        SELECT involved_entity_id AS entity_id, connection_id AS conversation_id
         FROM user_connection
         WHERE connection_id = ANY($1::TEXT[])
+
+        UNION
+
+        SELECT t.entity_id, t.conversation_id
+        FROM UNNEST($2::TEXT[], $3::TEXT[]) AS t(conversation_id, entity_id)
       ) AS combined
-      GROUP BY entity_id;
+      JOIN entity_entity p ON p.id = combined.entity_id
+      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+      GROUP BY combined.conversation_id;
     `,
-    [connectionIDs],
+    [connectionIDs, participantConvIDs, participantEntityIDs],
   );
 
   return rows;
