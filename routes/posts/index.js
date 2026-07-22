@@ -676,43 +676,35 @@ router.post(
         decodeToken.tagging.isTagged &&
         decodeToken.tagging.users.length > 0
       ) {
-        // Assume decodeToken.tagging.users contains usernames (or any identifier)
-        const taggedUsernames = decodeToken.tagging.users;
+        // tagging.users holds entity ids - a user OR a realm/page (newsfeed_
+        // posttag.entity_id FKs the generic entity table, so both are valid).
+        // Validate against entity_entity so a stale/bogus id can't FK-violate
+        // and roll the whole post back, and so we insert each tag exactly once.
+        const taggedEntityIds = decodeToken.tagging.users;
 
-        // Query user IDs for all tagged usernames
-        const userQuery = `
-          SELECT id, username, entity_id AS "entityID"
-          FROM user_account
-          WHERE entity_id = ANY($1)
-        `;
+        const { rows: entityRows } = await client.query(
+          `SELECT id FROM entity_entity WHERE id = ANY($1)`,
+          [taggedEntityIds],
+        );
 
-        const { rows: userRows } = await client.query(userQuery, [
-          taggedUsernames,
-        ]);
+        if (entityRows.length > 0) {
+          const tagValues = [];
+          const tagRowsSQL = entityRows
+            .map((entity, i) => {
+              const postTagId = generateUUID();
+              tagValues.push(postTagId, postID, entity.id);
+              const baseIndex = i * 3;
+              return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
+            })
+            .join(", ");
 
-        // Map of username -> real user id
-        const usernameToId = new Map(userRows.map((u) => [u.id, u.entityID]));
+          const insertTagQuery = `
+            INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
+            VALUES ${tagRowsSQL};
+          `;
 
-        // Prepare tagValues and tagRowsSQL with real user ids
-        const tagValues = [];
-        const tagRowsSQL = userRows
-          .map((user, i) => {
-            const postTagId = generateUUID();
-            const entityID = usernameToId.get(user.id);
-            if (!entityID)
-              throw new Error(`Tagged user "${user.username}" not found`);
-            tagValues.push(postTagId, postID, entityID);
-            const baseIndex = i * 3;
-            return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
-          })
-          .join(", ");
-
-        const insertTagQuery = `
-          INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
-          VALUES ${tagRowsSQL};
-        `;
-
-        await client.query(insertTagQuery, tagValues);
+          await client.query(insertTagQuery, tagValues);
+        }
       }
 
       const insertPreviewCountsQuery = `
