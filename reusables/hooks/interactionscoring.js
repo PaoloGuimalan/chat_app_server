@@ -35,7 +35,7 @@ const interactionScoreBump = async (
     // 1. Find and Update Postgres Connections
     const { rows } = await pool.query(
       `
-      SELECT * FROM user_connection
+      SELECT * FROM entity_connection
       WHERE (action_by_id = $1 AND involved_entity_id = $2)
          OR (action_by_id = $2 AND involved_entity_id = $1);
     `,
@@ -49,7 +49,7 @@ const interactionScoreBump = async (
     if (uniqueConnectionIDs.length > 0) {
       const updateRes = await pool.query(
         `
-            UPDATE user_connection
+            UPDATE entity_connection
             SET 
                 interaction_score = interaction_score + $1,
                 last_interaction_at = $2
@@ -98,8 +98,8 @@ const followerInteractionScoreBump = async (
 
     const { rows } = await pool.query(
       `
-      SELECT * FROM community_realmfollow
-      WHERE follower_id = $1 AND realm_id = $2;
+      SELECT * FROM entity_follow
+      WHERE follower_id = $1 AND followee_id = $2;
     `,
       [actorID, receiverID],
     );
@@ -109,11 +109,11 @@ const followerInteractionScoreBump = async (
     if (followIDs.length > 0) {
       const updateRes = await pool.query(
         `
-            UPDATE community_realmfollow
+            UPDATE entity_follow
             SET 
                 interaction_score = interaction_score + $1,
                 last_interaction_at = $2
-            WHERE follower_id = $3 AND realm_id = $4;
+            WHERE follower_id = $3 AND followee_id = $4;
             `,
         [change, now, actorID, receiverID],
       );

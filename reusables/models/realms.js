@@ -35,13 +35,13 @@ const isRealmMember = async (realm_id, entity_id) => {
   }
 
   // Not a realm - this is a single/DM conversation. Some are backed by a
-  // user_connection row (the normal "add contact" flow), but not all -
+  // entity_connection row (the normal "add contact" flow), but not all -
   // some conversations only ever exist as a Mongo Conversations doc with
   // participant_ids and were never a Connection, so either can prove
   // entity_id is actually a party to it.
   const [connectionRows, mongoConversation] = await Promise.all([
     pool.query(
-      `SELECT 1 FROM user_connection WHERE connection_id = $1 AND (action_by_id = $2 OR involved_entity_id = $2) LIMIT 1`,
+      `SELECT 1 FROM entity_connection WHERE connection_id = $1 AND (action_by_id = $2 OR involved_entity_id = $2) LIMIT 1`,
       [realm_id, entity_id],
     ),
     Conversations.findOne({

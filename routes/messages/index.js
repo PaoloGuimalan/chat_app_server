@@ -251,7 +251,7 @@ router.get(
         // Was previously missing - any authenticated account could load any
         // single/DM conversation's full details just by knowing its id, not
         // just their own. isRealmMember also covers single conversations
-        // (checks user_connection and, for connection-less conversations,
+        // (checks entity_connection and, for connection-less conversations,
         // the Mongo Conversations doc's participant_ids).
         await isRealmMember(conversationID, entity_id);
 
@@ -262,7 +262,7 @@ router.get(
         });
 
         const { rows } = await pool.query(
-          "SELECT uc.*, ua.* FROM user_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
+          "SELECT uc.*, ua.* FROM entity_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
           [conversationID],
         );
 

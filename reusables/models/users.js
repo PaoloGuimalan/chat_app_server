@@ -210,7 +210,7 @@ const GetListOfContactsV2 = async (userID) => {
     SELECT DISTINCT
       c.connection_id,
       c.action_date
-    FROM user_connection c
+    FROM entity_connection c
     JOIN user_account ab ON c.action_by_id = ab.id
     JOIN user_account iu ON c.involved_user_id = iu.id
     WHERE
@@ -236,7 +236,7 @@ const GetRankedUsersInConnections = async (entityID, limit = 500) => {
       c.involved_entity_id,
       c.interaction_score,
       c.last_interaction_at
-    FROM user_connection c
+    FROM entity_connection c
     JOIN user_account ab ON c.action_by_id = ab.entity_id
     JOIN user_account iu ON c.involved_entity_id = iu.entity_id
     WHERE
@@ -286,13 +286,13 @@ const GetUsersFromConnections = async (connectionIDs) => {
       SELECT DISTINCT user_id
       FROM (
         SELECT action_by_id AS user_id
-        FROM user_connection
+        FROM entity_connection
         WHERE connection_id = ANY($1)
 
         UNION
 
         SELECT involved_user_id AS user_id
-        FROM user_connection
+        FROM entity_connection
         WHERE connection_id = ANY($1)
       ) AS combined_users;
     `,
@@ -307,7 +307,7 @@ const GetUsersFromConnections = async (connectionIDs) => {
 // resolution - anchor on entity_entity and LEFT JOIN both user_account and
 // community_realm so a user<->realm (page) counterpart resolves instead of
 // being dropped by a user_account-only lookup - and its participant sources:
-//   1. user_connection      - conversations backed by a connection.
+//   1. entity_connection      - conversations backed by a connection.
 //   2. participant_ids (Mongo) - conversations not connected yet, or where a
 //      participant only lives on the conversation doc.
 // GetAllReceivers falls back between these for a single id; here they are
@@ -359,13 +359,13 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
         ) AS users
       FROM (
         SELECT action_by_id AS entity_id, connection_id AS conversation_id
-        FROM user_connection
+        FROM entity_connection
         WHERE connection_id = ANY($1::TEXT[])
 
         UNION
 
         SELECT involved_entity_id AS entity_id, connection_id AS conversation_id
-        FROM user_connection
+        FROM entity_connection
         WHERE connection_id = ANY($1::TEXT[])
 
         UNION

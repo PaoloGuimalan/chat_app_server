@@ -344,7 +344,7 @@ const GetAllReceivers = async (contactID) => {
        p.id AS entity_id,
        COALESCE(u.id, r.id) AS id,
        COALESCE(u.username, r.slug) AS username
-     FROM user_connection uc
+     FROM entity_connection uc
      JOIN entity_entity p ON p.id = uc.involved_entity_id
      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'

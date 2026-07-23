@@ -1564,7 +1564,7 @@ router.get(
 
     try {
       // isRealmMember covers both realm-backed (group/channel) conversations
-      // and single/DM conversations (via user_connection, or the Mongo
+      // and single/DM conversations (via entity_connection, or the Mongo
       // Conversations doc's participant_ids for connection-less
       // conversations) - was previously missing entirely for the single
       // case, letting any authenticated account load any conversationID's
@@ -2985,7 +2985,7 @@ const getContactsForSession = async (entity_id) => {
     SELECT DISTINCT ON (c.connection_id) c.*,
     a1.entity_id AS action_by_id,
     a2.entity_id AS involved_entity_id
-    FROM user_connection c
+    FROM entity_connection c
     -- Fix: Join using the account's related entity_id field instead of the account primary key
     JOIN user_account a1 ON c.action_by_id = a1.entity_id
     JOIN user_account a2 ON c.involved_entity_id = a2.entity_id
