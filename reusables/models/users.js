@@ -229,6 +229,40 @@ const GetListOfContactsV2 = async (userID) => {
   return rows.map((mp) => mp.connection_id);
 };
 
+/**
+ * Entity ids that FOLLOW `entityID` - i.e. the newsfeed buckets a new post by
+ * this entity should fan out into.
+ *
+ * The feed is fan-out-on-write keyed on the follow graph (Django mirror:
+ * entity/services/follows.py get_follower_ids). Following is a superset of
+ * connecting - sending a contact request and accepting one both auto-follow -
+ * so connections still receive posts, by way of the follow that connecting
+ * created.
+ *
+ * Deliberately joins nothing: entity_follow.follower_id IS the bucket key, and
+ * both sides are entities, so this works for pages as well as people. The
+ * connection-based version it replaced JOINed user_account on BOTH sides,
+ * which silently excluded every realm - a page's post reached nobody, and a
+ * page following someone received nothing.
+ *
+ * Ordered by interaction score so a capped fan-out reaches the most engaged
+ * followers first.
+ */
+const GetFollowerIDs = async (entityID, limit = 500) => {
+  const { rows } = await pool.query(
+    `
+    SELECT follower_id
+    FROM entity_follow
+    WHERE followee_id = $1
+    ORDER BY interaction_score DESC, last_interaction_at DESC
+    LIMIT $2;
+    `,
+    [entityID, limit],
+  );
+
+  return rows.map((row) => row.follower_id).filter((id) => id !== entityID);
+};
+
 const GetRankedUsersInConnections = async (entityID, limit = 500) => {
   const query = `
     SELECT DISTINCT ON (c.connection_id)
@@ -419,6 +453,7 @@ module.exports = {
   GetUsersFromConnections,
   GetUsersWithConnectionIDs,
   GetRankedUsersInConnections,
+  GetFollowerIDs,
   CreateEntity,
   GetSenderDetails,
   GetEntityHandles,

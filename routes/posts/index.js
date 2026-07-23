@@ -29,7 +29,7 @@ const {
 } = require("../../reusables/hooks/firebaseupload");
 const {
   GetListOfContacts,
-  GetRankedUsersInConnections,
+  GetFollowerIDs,
   GetSenderDetails,
 } = require("../../reusables/models/users");
 const push = require("../../reusables/hooks/pushnotification");
@@ -779,7 +779,12 @@ router.post(
 
       await client.query("COMMIT");
 
-      const fanoutCandidates = await GetRankedUsersInConnections(entityID);
+      // Fan out to the author's FOLLOWERS, not their connections. The feed is
+      // keyed on the follow graph now; connecting auto-follows both ways, so
+      // connections still receive this via the follow it created. Also fixes
+      // pages: the connection-based query JOINed user_account on both sides,
+      // so a page's post previously fanned out to nobody.
+      const fanoutCandidates = await GetFollowerIDs(entityID);
 
       bulkFanoutToCache(
         fanoutCandidates,
