@@ -1880,8 +1880,13 @@ router.post(
         entityID: alr,
       }));
 
+      // Entity-generic: a page can be a group member too. The old
+      // user_account-only lookup dropped every realm before it reached the
+      // community_member insert. (Same fix as createRealmReusable below.)
       const { rows } = await client.query(
-        `SELECT entity_id from user_account WHERE entity_id = ANY($1)`,
+        `SELECT p.id AS entity_id
+           FROM entity_entity p
+          WHERE p.id = ANY($1)`,
         [userReceivers.map((mp) => mp.entityID)],
       );
 
@@ -2011,8 +2016,24 @@ const createRealmReusable = async (
 
     const allReceivers = userReceivers.map((mp) => mp.entityID);
 
+    // Members are ENTITIES - a page can be a member of a group/server/channel
+    // just as a person can (community_member.entity_id FKs entity_entity).
+    // The previous user_account-only lookup silently dropped every realm in
+    // userReceivers, so a page picked in the create modal simply never got a
+    // community_member row. Anchoring on entity_entity and left-joining both
+    // detail tables also gives a usable handle for either kind.
     const { rows } = await client.query(
-      `SELECT id, username, entity_id from user_account WHERE entity_id = ANY($1)`,
+      `SELECT
+         p.id AS entity_id,
+         COALESCE(u.id, r.id) AS id,
+         -- realm_id as the last resort: slug is nullable, and a slugless
+         -- realm creating a group would otherwise put NULL in the system
+         -- message ("NULL created the group chat").
+         COALESCE(u.username, r.slug, r.realm_id) AS username
+       FROM entity_entity p
+       LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+       LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+       WHERE p.id = ANY($1)`,
       [allReceivers],
     );
 
@@ -2080,10 +2101,20 @@ const createRealmReusable = async (
     await client.query("COMMIT");
 
     if (type !== "server" && type !== "voice" && type !== "page") {
+      // Optional-chained: this used to index [0] unguarded, so it threw
+      // whenever the creator wasn't in `rows` - which was ALWAYS the case
+      // when creating while acting as a page, since the old lookup only
+      // returned user_account rows. The entity-generic query above now
+      // resolves a realm creator too (slug as the handle), but the fallback
+      // keeps realm creation from dying on a system message if the creator
+      // somehow isn't among the receivers.
+      const creatorHandle =
+        rows.filter((mp) => mp.entity_id === entityID)[0]?.username ?? "";
+
       sendMessageInitForGC(
         contactID,
         entityID,
-        rows.filter((mp) => mp.entity_id === entityID)[0].username,
+        creatorHandle,
         allReceivers,
         `created the ${type === "group" ? "group chat" : type}`,
         type,

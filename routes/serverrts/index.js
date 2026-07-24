@@ -432,24 +432,40 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         LEFT JOIN user_account ppua ON pcr.created_by_id = ppua.entity_id
         WHERE pcr.parent_id = cr.realm_id
       ), '[]'::jsonb),
+      -- Members are ENTITIES: a page can be a member of a server/channel.
+      -- This used to INNER JOIN user_account, which dropped every realm
+      -- member outright - so pages never appeared in the members list or in
+      -- the create-channel picker. Anchored on entity_entity, with a realm's
+      -- name/slug mapped onto the same user-shaped keys the clients already
+      -- read (middleName 'N/A' is the sentinel they skip when composing a
+      -- full name).
       'usersWithInfo', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
-          '_id', cmu.id,
-          'entityID', cmu.entity_id,
-          'userID', cmu.username,
-          'fullname', jsonb_build_object(
-            'firstName', cmu.first_name,
-            'middleName', cmu.middle_name,
-            'lastName', cmu.last_name
-          ),
+          '_id', COALESCE(cmu.id, cmr.id),
+          'entityID', p.id,
+          'userID', COALESCE(cmu.username, cmr.slug, cmr.realm_id),
+          'fullname', CASE
+            WHEN p.type = 'realm' THEN jsonb_build_object(
+              'firstName', cmr.name,
+              'middleName', 'N/A',
+              'lastName', ''
+            )
+            ELSE jsonb_build_object(
+              'firstName', cmu.first_name,
+              'middleName', cmu.middle_name,
+              'lastName', cmu.last_name
+            )
+          END,
           'profile',
             CASE
-              WHEN cmu.profile = 'N/A' THEN 'none'
-              ELSE cmu.profile
+              WHEN COALESCE(cmu.profile, cmr.profile) IN ('N/A', 'none') THEN 'none'
+              ELSE COALESCE(cmu.profile, cmr.profile, 'none')
             END
         ))
         FROM community_member cm
-        JOIN user_account cmu ON cm.entity_id = cmu.entity_id
+        JOIN entity_entity p ON p.id = cm.entity_id
+        LEFT JOIN user_account cmu ON cmu.entity_id = p.id AND p.type = 'user'
+        LEFT JOIN community_realm cmr ON cmr.entity_id = p.id AND p.type = 'realm'
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb)
     )

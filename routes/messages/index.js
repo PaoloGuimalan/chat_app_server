@@ -209,26 +209,42 @@ async function getRealmWithUsers(realmId, entityID) {
             AND cm_member.realm_id = cr.realm_id
         )
       ),
+      -- Members are ENTITIES: a page can be a member of a group/channel.
+      -- The FILTER used to be (WHERE ua.id IS NOT NULL), which dropped every
+      -- realm member because the user_account join is NULL for them - so
+      -- pages never showed in the conversation's member list. Now filtered on
+      -- the entity row instead, with a realm's name/slug mapped onto the same
+      -- user-shaped keys the clients read ('N/A' is the middle-name sentinel
+      -- they skip).
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
-          '_id', ua.id,
-          'entityID', ua.entity_id,
-          'userID', ua.username,
-          'fullname', jsonb_build_object(
-            'firstName', ua.first_name,
-            'middleName', ua.middle_name,
-            'lastName', ua.last_name
-          ),
-          'profile', ua.profile,
-          'isActivated', ua.is_active,
-          'isVerified', ua.is_verified,
+          '_id', COALESCE(ua.id, mr.id),
+          'entityID', p.id,
+          'userID', COALESCE(ua.username, mr.slug, mr.realm_id),
+          'fullname', CASE
+            WHEN p.type = 'realm' THEN jsonb_build_object(
+              'firstName', mr.name,
+              'middleName', 'N/A',
+              'lastName', ''
+            )
+            ELSE jsonb_build_object(
+              'firstName', ua.first_name,
+              'middleName', ua.middle_name,
+              'lastName', ua.last_name
+            )
+          END,
+          'profile', COALESCE(ua.profile, mr.profile, 'none'),
+          'isActivated', COALESCE(ua.is_active, mr.is_active, TRUE),
+          'isVerified', COALESCE(ua.is_verified, mr.is_verified, FALSE),
           '__v', 0
         )
-      ) FILTER (WHERE ua.id IS NOT NULL), '[]'::jsonb)
+      ) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb)
     ) AS realm_with_users
     FROM community_realm cr
     LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
-    LEFT JOIN user_account ua ON cm.entity_id = ua.entity_id
+    LEFT JOIN entity_entity p ON p.id = cm.entity_id
+    LEFT JOIN user_account ua ON ua.entity_id = p.id AND p.type = 'user'
+    LEFT JOIN community_realm mr ON mr.entity_id = p.id AND p.type = 'realm'
     WHERE cr.realm_id = $1
     GROUP BY cr.id;
   `;
@@ -261,8 +277,32 @@ router.get(
           entityID: entity_id,
         });
 
+        // Entity-generic: a connection's involved side can be a page, so this
+        // can no longer JOIN user_account. It used to, which meant a
+        // user<->realm or realm<->realm conversation returned ZERO rows here
+        // and fell through to the participant_ids fallback below - which then
+        // crashed on a null Mongo doc, since a connection-backed conversation
+        // has no Conversations document until a message is sent.
+        // Field shape mirrors that fallback exactly (realm name as
+        // first_name, empty middle/last) so both paths hydrate identically.
         const { rows } = await pool.query(
-          "SELECT uc.*, ua.* FROM entity_connection uc JOIN user_account ua ON ua.entity_id = uc.involved_entity_id WHERE uc.connection_id = $1;",
+          `SELECT uc.*,
+             p.id AS "entity_id",
+             p.id AS "entityID",
+             COALESCE(u.id, r.id) AS id,
+             COALESCE(u.username, r.slug, r.realm_id) AS "userID",
+             COALESCE(u.username, r.slug, r.realm_id) AS "username",
+             COALESCE(u.first_name, r.name) AS "first_name",
+             COALESCE(u.middle_name, '') AS "middle_name",
+             COALESCE(u.last_name, '') AS "last_name",
+             COALESCE(u.profile, r.profile, 'none') AS "profile",
+             COALESCE(u.is_active, r.is_active, TRUE) AS "isActivated",
+             COALESCE(u.is_verified, FALSE) AS "isVerified"
+           FROM entity_connection uc
+           JOIN entity_entity p ON p.id = uc.involved_entity_id
+           LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+           LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+           WHERE uc.connection_id = $1;`,
           [conversationID],
         );
 
@@ -307,6 +347,21 @@ router.get(
             conversationID: conversationID,
           });
 
+          // A connection-backed conversation has no Conversations document
+          // until its first message, so this is legitimately null - it used
+          // to be dereferenced unguarded ("Cannot read properties of null
+          // (reading 'participant_ids')"). With no connection row AND no
+          // conversation doc there is nothing to resolve, so 404 rather than
+          // hydrating an empty shell the client can't render.
+          const participantIds = conversation?.participant_ids ?? [];
+
+          if (participantIds.length === 0) {
+            return res.status(404).send({
+              status: false,
+              message: "Conversation not found",
+            });
+          }
+
           const { rows: receiversFromChatHistory } = await pool.query(
             `SELECT 
               p.id AS "entity_id",
@@ -328,7 +383,7 @@ router.get(
             LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
             WHERE p.id = ANY($1)`,
-            [conversation.participant_ids],
+            [participantIds],
           );
 
           finalrows = receiversFromChatHistory.map((mp) => ({
