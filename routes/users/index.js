@@ -760,6 +760,239 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
     });
 });
 
+// ---------------------------------------------------------------------------
+// Notifications v2 - sectioned endpoints for the redesigned Notifications
+// page (Activity / Connections / System columns). NEW routes only: the live
+// mobile app pins /getNotifications and /readnotifications, so those stay
+// exactly as-is above.
+//
+// Section membership is decided by the notification `type`:
+//   - connections: contact/relationship lifecycle
+//   - system:      platform announcements (no generator writes these yet -
+//                  the column intentionally renders empty until one exists)
+//   - activity:    EVERYTHING else ($nin) - the default bucket, so any new
+//                  type added later surfaces in Activity instead of vanishing.
+const NOTIF_CONNECTION_TYPES = [
+  "contact_request",
+  "info_contact_accept",
+  "info_contact_decline",
+  // Written by the Django follow endpoint (community/views.py
+  // FollowRealmView.post) on each NEW follow edge.
+  "follow",
+];
+const NOTIF_SYSTEM_TYPES = ["system"];
+
+const notificationSectionMatch = (entity_id, section) => {
+  if (section === "connections") {
+    return { toUserID: entity_id, type: { $in: NOTIF_CONNECTION_TYPES } };
+  }
+  if (section === "system") {
+    return { toUserID: entity_id, type: { $in: NOTIF_SYSTEM_TYPES } };
+  }
+  return {
+    toUserID: entity_id,
+    type: { $nin: [...NOTIF_CONNECTION_TYPES, ...NOTIF_SYSTEM_TYPES] },
+  };
+};
+
+// Same $facet shape as v1 getNotifications above, plus an unread facet so
+// the section headers can render their badges without a second query.
+const fetchNotificationSection = async (match, page, range) => {
+  const result_raw = await UserNotifications.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        metadata: [{ $count: "total" }],
+        unread: [{ $match: { isRead: false } }, { $count: "total" }],
+        data: [
+          { $sort: { _id: -1 } },
+          { $skip: (parseInt(page) - 1) * parseInt(range) },
+          { $limit: parseInt(range) },
+        ],
+      },
+    },
+    {
+      $project: {
+        data: 1,
+        total: { $arrayElemAt: ["$metadata.total", 0] },
+        unread: { $arrayElemAt: ["$unread.total", 0] },
+      },
+    },
+  ]);
+
+  const items = result_raw[0].data;
+  const total = result_raw[0].total || 0;
+  const unread = result_raw[0].unread || 0;
+  const next = total - range * page > 0;
+  return { items, total, unread, next };
+};
+
+// Resolve senders through entity_entity so PAGE-authored notifications get a
+// display identity too (v1 joins user_account only and hands back null for
+// realms). Same COALESCE join shape as GetAllReceivers in
+// reusables/models/messages.js.
+const enrichNotificationSenders = async (itemsPerSection) => {
+  const allItems = itemsPerSection.flat();
+  const uniqueIDs = [
+    ...new Set(allItems.map((mp) => mp.fromUserID).filter(Boolean)),
+  ];
+  if (uniqueIDs.length === 0) return new Map();
+
+  const { rows } = await pool.query(
+    `SELECT
+       e.id AS entity_id,
+       e.type,
+       COALESCE(u.username, r.slug) AS handle,
+       COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), r.name) AS display_name,
+       COALESCE(u.profile, r.profile) AS profile,
+       COALESCE(u.is_badged, r.is_verified, false) AS is_verified
+     FROM entity_entity e
+     LEFT JOIN user_account u ON u.entity_id = e.id AND e.type = 'user'
+     LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'
+     WHERE e.id = ANY($1);`,
+    [uniqueIDs],
+  );
+
+  const senderMap = new Map();
+  rows.forEach((row) => {
+    senderMap.set(String(row.entity_id), {
+      entity_id: row.entity_id,
+      type: row.type,
+      display_name: row.display_name,
+      handle: row.handle,
+      profile:
+        row.profile && row.profile !== "none" && row.profile !== "N/A"
+          ? row.profile
+          : null,
+      is_verified: !!row.is_verified,
+    });
+  });
+  return senderMap;
+};
+
+const attachNotificationSenders = (items, senderMap) =>
+  items.map((mp) => ({
+    ...mp,
+    fromUser: senderMap.get(String(mp.fromUserID)) || null,
+  }));
+
+// Page-init: all three section previews (+ totals and unread counts) in one
+// round-trip. The per-section routes below drive the infinite scrolls.
+router.get("/v2/notifications/overview", jwtchecker, async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const previewRange = parseInt(req.headers["range"]) || 8;
+
+  try {
+    const [activity, connections, system] = await Promise.all([
+      fetchNotificationSection(
+        notificationSectionMatch(entity_id, "activity"),
+        1,
+        previewRange,
+      ),
+      fetchNotificationSection(
+        notificationSectionMatch(entity_id, "connections"),
+        1,
+        previewRange,
+      ),
+      fetchNotificationSection(
+        notificationSectionMatch(entity_id, "system"),
+        1,
+        previewRange,
+      ),
+    ]);
+
+    const senderMap = await enrichNotificationSenders([
+      activity.items,
+      connections.items,
+      system.items,
+    ]);
+
+    const encodedResult = jwt.sign(
+      {
+        activity: {
+          items: attachNotificationSenders(activity.items, senderMap),
+          total: activity.total,
+          unread: activity.unread,
+          next: activity.next,
+        },
+        connections: {
+          items: attachNotificationSenders(connections.items, senderMap),
+          total: connections.total,
+          unread: connections.unread,
+          next: connections.next,
+        },
+        system: {
+          items: attachNotificationSenders(system.items, senderMap),
+          total: system.total,
+          unread: system.unread,
+          next: system.next,
+        },
+      },
+      JWT_SECRET,
+      {
+        expiresIn: 60 * 60 * 24 * 7,
+      },
+    );
+
+    res.send({ status: true, result: encodedResult });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error retrieving notifications overview",
+    });
+  }
+});
+
+const notificationSectionRoute = (section) => async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const page = parseInt(req.headers["page"]) || 1;
+  const range = parseInt(req.headers["range"]) || 20;
+
+  try {
+    const data = await fetchNotificationSection(
+      notificationSectionMatch(entity_id, section),
+      page,
+      range,
+    );
+    const senderMap = await enrichNotificationSenders([data.items]);
+
+    const encodedResult = jwt.sign(
+      {
+        items: attachNotificationSenders(data.items, senderMap),
+        total: data.total,
+        unread: data.unread,
+        next: data.next,
+      },
+      JWT_SECRET,
+      {
+        expiresIn: 60 * 60 * 24 * 7,
+      },
+    );
+
+    res.send({ status: true, result: encodedResult });
+  } catch (err) {
+    console.log(err);
+    res.send({ status: false, message: "Error retrieving notifications" });
+  }
+};
+
+router.get(
+  "/v2/notifications/activity",
+  jwtchecker,
+  notificationSectionRoute("activity"),
+);
+router.get(
+  "/v2/notifications/connections",
+  jwtchecker,
+  notificationSectionRoute("connections"),
+);
+router.get(
+  "/v2/notifications/system",
+  jwtchecker,
+  notificationSectionRoute("system"),
+);
+
 const updateNotifStatus = async (
   type,
   referenceID,
@@ -1222,9 +1455,7 @@ router.post(
           push.sendMessage({
             // GetAllReceivers includes the sender, and their own other
             // devices would otherwise be notified of their own message.
-            receivers: receivers.filter(
-              (r) => String(r) !== String(entity_id),
-            ),
+            receivers: receivers.filter((r) => String(r) !== String(entity_id)),
             conversationId: conversationID,
             // Which chat this is, NOT who sent it (senderName carries that).
             // A group is titled by the group; a single chat by the person.
@@ -2838,9 +3069,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
               : await GetRealmName(conversationID);
 
           push.sendMessage({
-            receivers: receivers.filter(
-              (r) => String(r) !== String(entity_id),
-            ),
+            receivers: receivers.filter((r) => String(r) !== String(entity_id)),
             conversationId: conversationID,
             conversationName:
               conversationType !== "single"
@@ -3331,3 +3560,4 @@ router.post("/endcall", jwtchecker, async (req, res) => {
 router.get("/sselogout", jwtchecker, (req, res) => {});
 
 module.exports = router;
+
