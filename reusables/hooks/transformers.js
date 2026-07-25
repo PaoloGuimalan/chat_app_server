@@ -229,12 +229,13 @@ function transformServersData(serversArray, preview) {
 
 function sanitizeForStorage(content) {
   if (!content) return "";
-  return content
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  // return content
+  //   .replace(/&/g, "&amp;")
+  //   .replace(/</g, "&lt;")
+  //   .replace(/>/g, "&gt;")
+  //   .replace(/"/g, "&quot;")
+  //   .replace(/'/g, "&#039;");
+  return content.replace(/<\/?[^>]+(>|$)/g, "");
 }
 
 function extractMentionUsernames(text = "") {
