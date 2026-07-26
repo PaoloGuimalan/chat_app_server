@@ -1668,4 +1668,108 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Group chat shortcuts - the redesigned Contacts page's group rail. NEW
+// route; /m/conversations is pinned by the live mobile app and the Messages
+// screen, so it stays exactly as-is.
+//
+// These are SHORTCUTS INTO CONVERSATIONS, not a realm directory: only group
+// chats the acting entity actually participates in land here. Everything
+// else is excluded - single (DMs), channel (which is how a server
+// conversation is persisted; see normalizeConversationType in
+// reusables/models/messages.js), conference, voice and page.
+router.get("/v2/group-shortcuts", jwtchecker, async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const page = parseInt(req.headers["page"] || 1);
+  const range = parseInt(req.headers["range"] || 20);
+
+  try {
+    // Newest activity first. Conversations with no messages yet are skipped
+    // - a shortcut into an empty thread is noise.
+    const result_raw = await Conversations.aggregate([
+      {
+        $match: {
+          participant_ids: { $in: [entity_id] },
+          conversationType: "group",
+          last_message: { $ne: null, $exists: true },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          conversationID: 1,
+          messageDate: "$last_message.messageDate",
+        },
+      },
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [
+            { $sort: { messageDate: -1 } },
+            { $skip: (page - 1) * range },
+            { $limit: range },
+          ],
+        },
+      },
+      {
+        $project: {
+          data: 1,
+          total: { $ifNull: [{ $arrayElemAt: ["$metadata.total", 0] }, 0] },
+        },
+      },
+    ]);
+
+    const conversations = result_raw[0]?.data || [];
+    const total = result_raw[0]?.total || 0;
+    const next = total - range * page > 0;
+
+    // A group's conversationID IS its realm_id, so one query resolves every
+    // tile's identity.
+    let items = [];
+    if (conversations.length > 0) {
+      const { rows } = await pool.query(
+        `SELECT realm_id, id, name, slug, profile, is_verified
+         FROM community_realm
+         WHERE realm_id = ANY($1) AND is_active = TRUE;`,
+        [conversations.map((mp) => mp.conversationID)],
+      );
+
+      const realmByID = new Map(rows.map((row) => [String(row.realm_id), row]));
+      const cleanProfile = (profile) =>
+        profile && profile !== "none" && profile !== "N/A" ? profile : null;
+
+      items = conversations
+        .map((conversation) => {
+          const realm = realmByID.get(String(conversation.conversationID));
+          if (!realm) return null;
+          return {
+            kind: "group",
+            // Opens /messages/<id>.
+            target_id: realm.realm_id,
+            realm_id: realm.realm_id,
+            id: String(realm.id),
+            display_name: realm.name || realm.slug || "",
+            handle: realm.slug || "",
+            profile: cleanProfile(realm.profile),
+            is_verified: !!realm.is_verified,
+            last_activity: conversation.messageDate,
+          };
+        })
+        .filter(Boolean);
+    }
+
+    const encodedResult = jwt.sign({ items, total, next }, JWT_SECRET, {
+      expiresIn: 60 * 60 * 24 * 7,
+    });
+
+    res.send({ status: true, result: encodedResult });
+  } catch (err) {
+    console.log(err);
+    res.status(400).send({
+      status: false,
+      message: err.message || "Error generating group shortcuts",
+    });
+  }
+});
+
 module.exports = router;
