@@ -416,7 +416,14 @@ const sendNotification = async (params, actionlog) => {
   const sendToDetails = params.content.details;
   const sendFromUser = params.fromUserID;
   const type = params.type;
-  const newNotif = new UserNotifications(params);
+  // Decided here rather than at read time: a notice addressed to an audience
+  // ("all", "region:PH", ...) is a single shared document and is stored
+  // already-read, since no per-viewer read state can exist on it. See
+  // resolveNotificationIsRead.
+  const newNotif = new UserNotifications({
+    ...params,
+    isRead: resolveNotificationIsRead(params),
+  });
 
   newNotif
     .save()
@@ -782,12 +789,88 @@ const NOTIF_CONNECTION_TYPES = [
 ];
 const NOTIF_SYSTEM_TYPES = ["system"];
 
-const notificationSectionMatch = (entity_id, section) => {
+// For SYSTEM notifications, `toUserID` is an AUDIENCE SELECTOR rather than a
+// plain recipient id. A system notification is addressed to one of:
+//   <entity id>     - just this entity (the default, and how every other
+//                     notification type works)
+//   "all"           - broadcast, fetched by everyone
+//   "region:<code>" - everyone in a region (planned)
+//   <group tag>     - any future cohort
+//
+// Only the system section widens its match this way; activity and
+// connections stay strictly direct-addressed.
+const SYSTEM_AUDIENCE_ALL = "all";
+const SYSTEM_AUDIENCE_REGION_PREFIX = "region:";
+const SYSTEM_AUDIENCE_GROUP_PREFIX = "group:";
+
+/**
+ * Is this `toUserID` addressed at MANY recipients rather than one entity?
+ *
+ * Audience selectors are the reserved value "all" and anything carrying a
+ * grouping prefix ("region:PH", "group:beta", ...). Everything else is a
+ * plain entity id, i.e. one recipient. New grouping dimensions only need
+ * their prefix registered here and in buildSystemAudience().
+ */
+const isSystemAudienceSelector = (toUserID) => {
+  const tag = String(toUserID || "");
+  return (
+    tag === SYSTEM_AUDIENCE_ALL ||
+    tag.startsWith(SYSTEM_AUDIENCE_REGION_PREFIX) ||
+    tag.startsWith(SYSTEM_AUDIENCE_GROUP_PREFIX)
+  );
+};
+
+/**
+ * Read state for a notification AT CREATION TIME.
+ *
+ * A notice addressed to many people is one shared document, so it can never
+ * carry per-viewer read state - tracking every reader would mean appending
+ * each of them to the document forever. It is therefore stored already-read:
+ * it still shows up in everyone's System section, it just never badges and
+ * can never strand a permanent unread count that no read call could clear.
+ *
+ * A notice addressed to a single entity behaves exactly as every other
+ * notification: created unread, flipped by POST /u/readnotifications.
+ */
+const resolveNotificationIsRead = (params) => {
+  if (isSystemAudienceSelector(params.toUserID)) {
+    return true;
+  }
+  // Respect an explicit flag when the caller set one; default to unread.
+  return params.isRead === undefined ? false : params.isRead;
+};
+
+/**
+ * Every audience tag the given entity should receive system notices under.
+ *
+ * This is the single extension point for grouped targeting: adding a new
+ * dimension later (region, cohort, plan tier, ...) means pushing its tag
+ * here, and both the fetch and the read-state paths pick it up for free.
+ * `context` is intentionally open-ended and empty today - region resolution
+ * is not wired up yet.
+ */
+const buildSystemAudience = (entity_id, context = {}) => {
+  const tags = [entity_id, SYSTEM_AUDIENCE_ALL];
+
+  if (context.region) {
+    tags.push(`${SYSTEM_AUDIENCE_REGION_PREFIX}${context.region}`);
+  }
+  if (Array.isArray(context.groups)) {
+    tags.push(...context.groups.filter(Boolean));
+  }
+
+  return tags;
+};
+
+const notificationSectionMatch = (entity_id, section, audienceContext) => {
   if (section === "connections") {
     return { toUserID: entity_id, type: { $in: NOTIF_CONNECTION_TYPES } };
   }
   if (section === "system") {
-    return { toUserID: entity_id, type: { $in: NOTIF_SYSTEM_TYPES } };
+    return {
+      toUserID: { $in: buildSystemAudience(entity_id, audienceContext) },
+      type: { $in: NOTIF_SYSTEM_TYPES },
+    };
   }
   return {
     toUserID: entity_id,
@@ -797,6 +880,12 @@ const notificationSectionMatch = (entity_id, section) => {
 
 // Same $facet shape as v1 getNotifications above, plus an unread facet so
 // the section headers can render their badges without a second query.
+//
+// Read state needs no special handling here: it is decided once at creation
+// (see resolveNotificationIsRead). An audience-addressed notice is stored
+// already-read because its single document is shared by every recipient and
+// could never track per-viewer state; a directly-addressed one is stored
+// unread and /readnotifications flips it as usual.
 const fetchNotificationSection = async (match, page, range) => {
   const result_raw = await UserNotifications.aggregate([
     { $match: match },
@@ -992,6 +1081,12 @@ router.get(
   jwtchecker,
   notificationSectionRoute("system"),
 );
+
+// NOTE: marking read stays on the existing POST /u/readnotifications. It
+// matches toUserID: <entity>, so it only ever touches directly-addressed
+// notifications - which is correct here: broadcasts are shared documents and
+// must NOT have their single isRead flag flipped by one reader (see
+// fetchNotificationSection above, which surfaces them as read instead).
 
 const updateNotifStatus = async (
   type,
@@ -1916,22 +2011,39 @@ router.get(
 
         const removeDuplicateReactors = [...new Set(flattenedUsersInReactions)];
 
+        // Reactors are ENTITIES - a page can react while switched to it - so
+        // this resolves from entity_entity outward instead of user_account
+        // only, which returned nothing for realm reactors and left them
+        // nameless in the reactions list. A realm's name/slug is mapped onto
+        // the same user-shaped keys the clients already read ('N/A' is the
+        // middle-name sentinel they skip). Ids are cast to text because
+        // user_account.id is a uuid while community_realm.id is not.
         const { rows } = await pool.query(
-          `SELECT 
-              id AS _id,
-              entity_id AS "entityID",
-              username,
-              id AS "userID",
-              json_build_object(
-                'firstName', first_name,
-                'middleName', middle_name,
-                'lastName', last_name
-              ) AS fullname,
-              COALESCE(profile, 'none') AS profile,
-              is_active AS "isActivated",
-              is_verified AS "isVerified"
-            FROM user_account
-            WHERE entity_id = ANY($1);`,
+          `SELECT
+              COALESCE(ua.id::text, r.id::text) AS _id,
+              e.id AS "entityID",
+              e.type AS "entityType",
+              COALESCE(ua.username, r.slug) AS username,
+              COALESCE(ua.id::text, r.id::text) AS "userID",
+              CASE
+                WHEN e.type = 'realm' THEN json_build_object(
+                  'firstName', r.name,
+                  'middleName', 'N/A',
+                  'lastName', ''
+                )
+                ELSE json_build_object(
+                  'firstName', ua.first_name,
+                  'middleName', ua.middle_name,
+                  'lastName', ua.last_name
+                )
+              END AS fullname,
+              COALESCE(ua.profile, r.profile, 'none') AS profile,
+              COALESCE(ua.is_active, r.is_active, TRUE) AS "isActivated",
+              COALESCE(ua.is_verified, r.is_verified, FALSE) AS "isVerified"
+            FROM entity_entity e
+            LEFT JOIN user_account ua ON ua.entity_id = e.id AND e.type = 'user'
+            LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'
+            WHERE e.id = ANY($1);`,
           [removeDuplicateReactors],
         );
 
@@ -1941,15 +2053,14 @@ router.get(
 
           if (reactions) {
             if (reactions.length > 0) {
-              messageDocument.reactionsWithInfo = reactions.map((mp) => {
-                const returnedRow = rows.filter(
-                  (flt) => flt.entityID === mp.entityID,
-                );
-
-                if (returnedRow.length > 0) {
-                  return returnedRow[0];
-                }
-              });
+              // Drop unresolved reactors rather than leaving `undefined`
+              // holes in the array - clients were filtering those out on
+              // arrival, which is what the realm-reactor gap looked like.
+              messageDocument.reactionsWithInfo = reactions
+                .map((mp) =>
+                  rows.find((flt) => flt.entityID === mp.entityID),
+                )
+                .filter(Boolean);
             } else {
               messageDocument.reactionsWithInfo = [];
             }

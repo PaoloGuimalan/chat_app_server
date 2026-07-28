@@ -176,6 +176,61 @@ router.post(
   },
 );
 
+// Remove the acting entity's own reaction from a message. NEW route -
+// /m/addreaction above is pinned by the live mobile app and only ever pushes.
+//
+// The $pull is keyed on the entity id taken from the JWT, never from the
+// request body, so this can only ever remove YOUR OWN reaction - there is no
+// input that lets a caller pull someone else's. Reacting is entity-scoped
+// (a page reacts as itself), so switching context and removing takes away
+// the page's reaction, not the owner's.
+router.post(
+  "/v2/removereaction",
+  jwtchecker,
+  requiresPermission("messages.react"),
+  async (req, res) => {
+    const token = req.body.token;
+    const entity_id = req.params.entity_id;
+
+    try {
+      const decodedToken = jwt.verify(token, JWT_SECRET);
+
+      await isRealmMember(decodedToken.conversationID, entity_id);
+
+      await UserMessage.updateOne(
+        {
+          conversationID: decodedToken.conversationID,
+          messageID: decodedToken.messageID,
+        },
+        { $pull: { reactions: { entityID: entity_id } } },
+      );
+
+      // Same fan-out as adding, so every other participant's thread redraws
+      // without the removed reaction.
+      const messageReceivers = await GetAllReceivers(
+        decodedToken.conversationID,
+      );
+      messageReceivers.users.map((user) => {
+        MessagesTrigger(
+          user.entityID,
+          {
+            conversationID: decodedToken.conversationID,
+            entityID: entity_id,
+          },
+          false,
+        );
+      });
+
+      res.send({ status: true, message: "OK" });
+    } catch (ex) {
+      console.log(ex);
+      res
+        .status(400)
+        .send({ status: false, message: ex.message || ex.toString() });
+    }
+  },
+);
+
 async function getRealmWithUsers(realmId, entityID) {
   const query = `
     SELECT jsonb_build_object(
