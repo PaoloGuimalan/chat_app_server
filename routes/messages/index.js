@@ -176,16 +176,21 @@ router.post(
   },
 );
 
-// Remove the acting entity's own reaction from a message. NEW route -
-// /m/addreaction above is pinned by the live mobile app and only ever pushes.
+// Set the acting entity's reaction on a message - one route covering add,
+// change and remove. NEW route; /m/addreaction above is pinned by the live
+// mobile app and only ever pushes, which is why changing a reaction there
+// would leave two.
 //
-// The $pull is keyed on the entity id taken from the JWT, never from the
-// request body, so this can only ever remove YOUR OWN reaction - there is no
-// input that lets a caller pull someone else's. Reacting is entity-scoped
-// (a page reacts as itself), so switching context and removing takes away
-// the page's reaction, not the owner's.
+// `emoji: null` removes. Any emoji replaces whatever was there, because the
+// $pull always runs first - so a caller can never end up with two reactions
+// on one message, and no separate "change" round-trip is needed.
+//
+// The entity id comes from the JWT, never the request body, so this can only
+// ever touch YOUR OWN reaction. Reacting is entity-scoped (a page reacts as
+// itself), so doing this while switched changes the page's reaction, not the
+// owner's.
 router.post(
-  "/v2/removereaction",
+  "/v2/setreaction",
   jwtchecker,
   requiresPermission("messages.react"),
   async (req, res) => {
@@ -194,19 +199,35 @@ router.post(
 
     try {
       const decodedToken = jwt.verify(token, JWT_SECRET);
+      const emoji = decodedToken.emoji || null;
 
       await isRealmMember(decodedToken.conversationID, entity_id);
 
-      await UserMessage.updateOne(
-        {
-          conversationID: decodedToken.conversationID,
-          messageID: decodedToken.messageID,
-        },
-        { $pull: { reactions: { entityID: entity_id } } },
-      );
+      const filter = {
+        conversationID: decodedToken.conversationID,
+        messageID: decodedToken.messageID,
+      };
 
-      // Same fan-out as adding, so every other participant's thread redraws
-      // without the removed reaction.
+      // Always clear the existing one first: this is what makes "change"
+      // a replace rather than an append.
+      await UserMessage.updateOne(filter, {
+        $pull: { reactions: { entityID: entity_id } },
+      });
+
+      if (emoji) {
+        await UserMessage.updateOne(filter, {
+          $push: {
+            reactions: {
+              entityID: entity_id,
+              userID: decodedToken.userID,
+              emoji,
+            },
+          },
+        });
+      }
+
+      // Same fan-out as /m/addreaction, so every other participant's thread
+      // redraws with the new, changed or removed reaction.
       const messageReceivers = await GetAllReceivers(
         decodedToken.conversationID,
       );
