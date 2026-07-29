@@ -707,13 +707,24 @@ router.post(
         }
       }
 
-      const insertPreviewCountsQuery = `
-        INSERT INTO newsfeed_previewcount (preview_id, post_id, emoji_id, count)
-        SELECT uuid_generate_v4(), $1, emoji_id, 0
-        FROM newsfeed_emoji;
-      `;
-
-      await client.query(insertPreviewCountsQuery, [postID]);
+      // newsfeed_previewcount rows are NOT seeded here any more. This used to
+      // write one count=0 row per emoji for every new post, which made that
+      // table posts x emojis - almost entirely zeros - and grew the cost of
+      // creating a post with every emoji ever added.
+      //
+      // A missing row and a count=0 row are the same thing to every reader:
+      // the clients render preview.filter(count > 0), the totals sum
+      // identically, and the emoji picker reads newsfeed_emoji rather than
+      // this table. The Django reaction endpoints (user_service
+      // newsfeed/views.py PostReactionsView) create the row on first reaction
+      // via get_or_create, guarded by a unique constraint on
+      // (post_id, emoji_id) so two simultaneous first-reactions can't split
+      // the count. Nothing else in this service touches newsfeed_previewcount.
+      //
+      // newsfeed_postscore below is deliberately NOT lazy: an absent score row
+      // means ranking_score 0.0, which would bury a brand-new post at the
+      // bottom of every ranked feed with no way to recover - nobody sees it,
+      // so nobody interacts, so nothing ever creates the row.
 
       // POST SCORE TABLE SAVE
 
