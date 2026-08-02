@@ -129,8 +129,49 @@ const GetAllPostsCountInProfile = async (userID) => {
   });
 };
 
+const POST_PRIVACY_LEVELS = ["public", "connections", "private", "custom"];
+
+/**
+ * The audience a new post by `entityID` should carry.
+ *
+ * A private profile posts to its connections by default; everyone else
+ * defaults to public. Resolved SERVER-SIDE from user_account.is_private rather
+ * than trusting the signed payload: the privacy field is chosen by the client
+ * before the profile toggle is necessarily known to it, and an omitted or
+ * unrecognised value must never fall through to "public" for a private author.
+ *
+ * An EXPLICIT, valid choice from the author still wins - going private sets
+ * the default audience for what comes next, it does not forbid deliberately
+ * posting something publicly. Anything else (missing, null, garbage) takes the
+ * profile-derived default.
+ *
+ * Django mirror: newsfeed/services/post_visibility.py default_privacy_status_for().
+ */
+const ResolvePostPrivacyStatus = async (entityID, requestedStatus) => {
+  if (POST_PRIVACY_LEVELS.includes(requestedStatus)) {
+    return requestedStatus;
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT is_private
+    FROM user_account
+    WHERE entity_id = $1;
+    `,
+    [entityID],
+  );
+
+  // No row means the author is a realm, which has no profile privacy -
+  // Realm.is_private is invite-only group membership, a different concept.
+  const isPrivate = rows.length > 0 && rows[0].is_private === true;
+
+  return isPrivate ? "connections" : "public";
+};
+
 module.exports = {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
   updateRankingScore,
+  ResolvePostPrivacyStatus,
+  POST_PRIVACY_LEVELS,
 };

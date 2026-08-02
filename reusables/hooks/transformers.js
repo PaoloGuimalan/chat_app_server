@@ -74,6 +74,13 @@ function transformUser(input) {
     password: null,
     isActivated: !!input.is_active,
     isVerified: !!input.is_verified,
+    // Settings > Data & Privacy. Must be carried here because this object is
+    // what gets signed into the `usertoken` JWT, and AuthCheck rebuilds the
+    // whole client-side user from that token on every page load - not from
+    // Django's account payload. Omitting it made the toggle read undefined
+    // after any reload and render "Make profile private" for an already-
+    // private account.
+    isPrivate: !!input.is_private,
     isComplete: isComplete,
   };
 

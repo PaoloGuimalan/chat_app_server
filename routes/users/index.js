@@ -786,6 +786,13 @@ const NOTIF_CONNECTION_TYPES = [
   // Written by the Django follow endpoint (community/views.py
   // FollowRealmView.post) on each NEW follow edge.
   "follow",
+  // Same endpoint, but for a follow of a PRIVATE profile, which lands
+  // pending instead of established. Actionable: it carries
+  // referenceStatus=false and referenceID=<requester entity id>, and the
+  // client answers it with PUT /api/community/follow + an `action` header of
+  // approve/decline. Belongs in Connections, not Activity - it is the same
+  // relationship lifecycle as a contact request.
+  "follow_request",
 ];
 const NOTIF_SYSTEM_TYPES = ["system"];
 

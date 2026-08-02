@@ -21,6 +21,7 @@ const {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
   updateRankingScore,
+  ResolvePostPrivacyStatus,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
 const {
@@ -566,6 +567,15 @@ router.post(
       });
     }
 
+    // A private profile's posts default to connections-only. Resolved here,
+    // against user_account.is_private, rather than taken from the signed
+    // payload as-is - see ResolvePostPrivacyStatus for why an explicit choice
+    // still wins but a missing one must not default to public.
+    const resolvedPrivacyStatus = await ResolvePostPrivacyStatus(
+      entityID,
+      decodeToken.privacy?.status,
+    );
+
     // Prepare main post insert
     const postInsertQuery = `
       INSERT INTO newsfeed_post (
@@ -589,7 +599,7 @@ router.post(
       decodeToken.content.data,
       decodeToken.type.contentType,
       decodeToken.tagging.isTagged,
-      decodeToken.privacy.status,
+      resolvedPrivacyStatus,
       false,
     ];
 

@@ -247,13 +247,18 @@ const GetListOfContactsV2 = async (userID) => {
  *
  * Ordered by interaction score so a capped fan-out reaches the most engaged
  * followers first.
+ *
+ * status = TRUE excludes PENDING follow requests, which is what a follow of a
+ * private profile creates until its owner approves it. Fanning out to a
+ * pending follower would hand them the private posts the approval step exists
+ * to withhold. Mirrors the same filter in Django's get_follower_ids().
  */
 const GetFollowerIDs = async (entityID, limit = 500) => {
   const { rows } = await pool.query(
     `
     SELECT follower_id
     FROM entity_follow
-    WHERE followee_id = $1
+    WHERE followee_id = $1 AND status = TRUE
     ORDER BY interaction_score DESC, last_interaction_at DESC
     LIMIT $2;
     `,
