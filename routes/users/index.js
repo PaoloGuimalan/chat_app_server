@@ -1554,10 +1554,55 @@ router.post(
 
           const senderDetails = await GetSenderDetails(sender);
 
+          // GetAllReceivers includes the sender, and their own other devices
+          // would otherwise be notified of their own message.
+          const pushReceivers = receivers.filter(
+            (r) => String(r) !== String(entity_id),
+          );
+
+          // Anyone @mentioned gets the mention push INSTEAD of the plain
+          // message push, not as well as it - two tray entries for one message
+          // is noise, and the mention one is strictly more informative (it
+          // carries the message text too, so nothing is lost by the swap).
+          const mentionedPushReceivers = pushReceivers.filter((r) =>
+            mentionedReceiverSet.has(r),
+          );
+          const plainPushReceivers = pushReceivers.filter(
+            (r) => !mentionedReceiverSet.has(r),
+          );
+
+          if (mentionedPushReceivers.length > 0) {
+            const mentionPreview =
+              messageType === "text" && sanitizedContent
+                ? `${mentioner.username} mentioned you: ${sanitizedContent}`
+                : `${mentioner.username} mentioned you`;
+
+            // sendActivity, not sendMessage: this rides the quieter Activity
+            // channel, whose tone is notification_alert - the exact sound
+            // webapp plays for a mention (reusables/hooks/sse.ts's mentioner
+            // branch), and a channel whose description already names mentions.
+            // The app renders any non-"message" type generically from
+            // title/body/route, so this needs no mobile release
+            // (chatterloop_app/lib/core/notifications/push_payload.dart).
+            push.sendActivity({
+              receivers: mentionedPushReceivers,
+              type: "mention",
+              // Titled like the message push - the group for a group, the
+              // person for a single chat - so the two read consistently in
+              // the tray. webapp folds the realm into its sentence instead
+              // ("... mentioned you at X") because a toast has no title slot.
+              title:
+                decodedToken.conversationType !== "single"
+                  ? realmName
+                  : senderDetails?.display_name || `@${username}`,
+              body: mentionPreview,
+              route: `/conversation/${conversationID}`,
+              senderAvatarUrl: senderDetails?.profile || "",
+            });
+          }
+
           push.sendMessage({
-            // GetAllReceivers includes the sender, and their own other
-            // devices would otherwise be notified of their own message.
-            receivers: receivers.filter((r) => String(r) !== String(entity_id)),
+            receivers: plainPushReceivers,
             conversationId: conversationID,
             // Which chat this is, NOT who sent it (senderName carries that).
             // A group is titled by the group; a single chat by the person.
