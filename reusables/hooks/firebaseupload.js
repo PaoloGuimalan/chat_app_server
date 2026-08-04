@@ -12,6 +12,7 @@ const {
   FIREBASE_UNIVERSE_DOMAIN,
   FIREBASE_STORAGE_BUCKET,
 } = require("../vars/firebasevars");
+const { MAX_UPLOAD_FILE_SIZE_MB } = require("../vars/uploads");
 const { base64ToArrayBuffer } = require("./base64toFile");
 const firebase = require("firebase-admin");
 const fstorage = require("firebase-admin/storage");
@@ -70,11 +71,13 @@ const uploadFirebase = async (mp) => {
   const fileSizeBytes = finalBuffer.length;
   const fileSizeKB = Math.round(fileSizeBytes / 1024);
 
-  // Optional: Reject oversized files (5MB limit)
-  const MAX_SIZE_MB = 25;
-  if (fileSizeBytes > MAX_SIZE_MB * 1024 * 1024) {
+  // Same cap as the multipart routes - see reusables/vars/uploads.js. This is
+  // the legacy base64-in-JSON path, so what arrives here is ~33% larger on the
+  // wire than the file itself; the check is on the DECODED buffer, so it's the
+  // real file size either way.
+  if (fileSizeBytes > MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024) {
     throw new Error(
-      `File too large: ${fileSizeKB}KB exceeds ${MAX_SIZE_MB}MB limit`,
+      `File too large: ${fileSizeKB}KB exceeds ${MAX_UPLOAD_FILE_SIZE_MB}MB limit`,
     );
   }
 

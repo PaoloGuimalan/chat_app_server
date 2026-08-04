@@ -43,6 +43,7 @@ const pool = require("../../reusables/database/postgres");
 const { generateUUID } = require("../../reusables/hooks/transformers");
 
 const Storage = require("../../reusables/hooks/storage");
+const { MAX_UPLOAD_FILE_SIZE } = require("../../reusables/vars/uploads");
 const { query } = require("../../reusables/database/cassandra");
 const {
   interactionScoreBump,
@@ -291,8 +292,6 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
   });
 };
 
-const UPLOAD_MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB, matches the pre-existing client-side cap
-
 router.post("/upload", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
@@ -306,7 +305,7 @@ router.post("/upload", jwtchecker, async (req, res) => {
     // file types are intentionally allowed here since diary attachments
     // aren't restricted to image/video the way post media is client-side -
     // enforcement of that narrower rule stays client-side, as it was before).
-    new multiparty.Form({ maxFilesSize: UPLOAD_MAX_FILE_SIZE }).parse(
+    new multiparty.Form({ maxFilesSize: MAX_UPLOAD_FILE_SIZE }).parse(
       req,
       async (err, fields, files) => {
         if (err) {

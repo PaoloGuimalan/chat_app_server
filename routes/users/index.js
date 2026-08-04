@@ -30,6 +30,7 @@ const {
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 const Storage = require("../../reusables/hooks/storage");
+const { MAX_UPLOAD_FILE_SIZE } = require("../../reusables/vars/uploads");
 const multiparty = require("multiparty");
 const push = require("../../reusables/hooks/pushnotification");
 const fs = require("fs/promises");
@@ -3132,8 +3133,6 @@ const uploadMessageFromFile = async (
   }
 };
 
-const SENDFILES_MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB, matches the pre-existing client-side cap
-
 router.post("/sendFiles", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
@@ -3144,7 +3143,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
   );
 
   if (isMultipart) {
-    new multiparty.Form({ maxFilesSize: SENDFILES_MAX_FILE_SIZE }).parse(
+    new multiparty.Form({ maxFilesSize: MAX_UPLOAD_FILE_SIZE }).parse(
       req,
       async (err, fields, files) => {
         if (err) {
