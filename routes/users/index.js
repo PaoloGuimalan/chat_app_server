@@ -2110,9 +2110,7 @@ router.get(
               // holes in the array - clients were filtering those out on
               // arrival, which is what the realm-reactor gap looked like.
               messageDocument.reactionsWithInfo = reactions
-                .map((mp) =>
-                  rows.find((flt) => flt.entityID === mp.entityID),
-                )
+                .map((mp) => rows.find((flt) => flt.entityID === mp.entityID))
                 .filter(Boolean);
             } else {
               messageDocument.reactionsWithInfo = [];
@@ -2301,7 +2299,7 @@ router.post(
         params.push(new Date()); // date_joined or null as needed
 
         if (accountId === entity_id) {
-          params.push("admin"); // member role
+          params.push("owner"); // member role
         } else {
           params.push("member"); // member role
         }
@@ -3722,4 +3720,3 @@ router.post("/endcall", jwtchecker, async (req, res) => {
 router.get("/sselogout", jwtchecker, (req, res) => {});
 
 module.exports = router;
-
