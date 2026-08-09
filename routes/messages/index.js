@@ -682,20 +682,36 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     await isRealmMember(conversationID, entityID);
 
+    // Anchored on entity_entity with BOTH detail tables left-joined, the same
+    // pattern as /s/addnewmembertoserver and createRealmReusable.
+    //
+    // It used to select FROM user_account, which has no row for a page - so a
+    // page picked in the member picker was silently dropped and the request
+    // still reported success. Membership is entity-based
+    // (community_member.entity_id FKs entity_entity), so a page can be a member
+    // of a group or channel exactly as a person can.
+    //
+    // The alreadyMember EXISTS was also comparing cm.entity_id against
+    // ua.id - an ACCOUNT id against an ENTITY id, which never matches. So it
+    // was false for everyone, and re-adding an existing member fired a fresh
+    // "X added Y" system message every time (the insert itself was saved by ON
+    // CONFLICT DO NOTHING, which is why it went unnoticed).
     const { rows } = await pool.query(
       `
         SELECT
-          ua.id,
-          ua.entity_id AS "entityID",
-          ua.username AS "userID",
+          COALESCE(u.id, r.id) AS id,
+          p.id AS "entityID",
+          COALESCE(u.username, r.slug) AS "userID",
           EXISTS (
             SELECT 1
             FROM community_member cm
-            WHERE cm.entity_id = ua.id
+            WHERE cm.entity_id = p.id
               AND cm.realm_id = $2
           ) AS "alreadyMember"
-        FROM user_account ua
-        WHERE ua.entity_id = ANY($1);
+        FROM entity_entity p
+        LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
+        LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        WHERE p.id = ANY($1);
       `,
       [memberstoadd.map((mp) => mp.entityID), conversationID],
     );

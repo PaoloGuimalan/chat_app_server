@@ -11,7 +11,10 @@ const {
   SyncConversationParticipants,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
-const { GetSenderDetails } = require("../../reusables/models/users");
+const {
+  GetSenderDetails,
+  GetEntityHandles,
+} = require("../../reusables/models/users");
 const { publish } = require("../../reusables/redis/pubsub");
 const { hasPermission } = require("../../reusables/hooks/permissionChecker");
 const router = express.Router();
@@ -109,10 +112,16 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
     await isRealmMember(realm_id, entityID);
 
-    const { rows: users } = await pool.query(
-      `SELECT username FROM user_account WHERE entity_id = ANY($1::text[])`,
-      [account_ids],
-    );
+    // Handles for whoever is being removed, person OR page. This used to select
+    // FROM user_account, which has no row for a page - so removing a page
+    // produced an EMPTY list and therefore no system message at all, and a mixed
+    // batch named only the people in it.
+    const targetHandles = await GetEntityHandles(account_ids);
+    const users = account_ids.map((mp) => ({
+      // The raw id only when an entity resolves to neither kind - better than
+      // "undefined removed" in a message people read.
+      username: targetHandles.get(String(mp))?.handle || String(mp),
+    }));
 
     // Removing yourself (leaving) is always allowed. Removing anyone else
     // requires realm.member.remove, plus a target-role-aware rule: an admin
@@ -211,12 +220,27 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
       const channel_ids = channels.map((mp) => mp.realm_id);
 
+      // The channel's own type comes back with it. Without it the fan-out below
+      // had to guess, and it guessed "channel" for every row - including VOICE
+      // rooms, which then got a notif message written for them (stored as
+      // conversationType "channel", for a conversation that is neither).
       const { rows: joined_channels } = await pool.query(
-        `SELECT realm_id FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
+        `SELECT cm.realm_id, cr.type
+           FROM community_member cm
+           JOIN community_realm cr ON cr.realm_id = cm.realm_id
+          WHERE cm.entity_id = ANY($1::text[])
+            AND cm.realm_id = ANY($2::text[])`,
         [account_ids, channel_ids],
       );
 
-      const joined_channel_ids = joined_channels.map((mp) => mp.realm_id);
+      // De-duplicated: the query returns one row per (member, channel), so
+      // removing three people from one channel used to yield that channel three
+      // times - and the notification loop below is already per-member, so the
+      // messages multiplied.
+      const joined_channel_types = new Map(
+        joined_channels.map((mp) => [mp.realm_id, mp.type]),
+      );
+      const joined_channel_ids = [...joined_channel_types.keys()];
 
       if (joined_channel_ids.length > 0) {
         await pool.query(
@@ -232,12 +256,21 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
         users.map((mp) => {
           joined_channel_ids.map((mpp) => {
+            const channelType = joined_channel_types.get(mpp);
+            // A voice room has no chat history to write this into. This is
+            // where the fix belongs - the type comes from the channel row
+            // above, so the guard is reading the database rather than a
+            // hardcoded guess.
+            if (channelType === "voice") {
+              return;
+            }
+
             NotificationMessageForConversations(
               mpp,
               entityID,
               [],
               `${actorHandle} removed ${mp.username}`,
-              "channel",
+              channelType,
             );
           });
         });

@@ -604,29 +604,54 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
 
     const removeAlreadyJoined = rows.filter((flt) => !flt.alreadyMember);
 
-    AddNewMemberToChannels(
+    // Falsy entries dropped: a PAGE has no account id, and the clients build
+    // this list from one - so a page self-joining or being added sent [""]
+    // through, which then reached the SSE fan-out and the push targets as an
+    // empty receiver. The resolved entity ids are added because they are the
+    // ones that must be told either way, and they come from the database rather
+    // than from the request body.
+    const receivers = [
+      ...new Set([
+        ...(decodedToken.receivers || []).filter(Boolean),
+        ...removeAlreadyJoined.map((mp) => mp.entityID),
+      ]),
+    ];
+
+    // Awaited, all of it. These used to be fired and forgotten - the server-level
+    // call with no await at all, the per-channel ones inside a `.map(async)` with
+    // nothing collecting the promises - so the response went out before any
+    // membership row existed and a failure could only ever surface in the logs.
+    // That is also why a client refetching immediately after a successful add
+    // could get a list without the new member in it.
+    await AddNewMemberToChannels(
       entityID,
       username,
       {
         conversationID: serverID,
         memberstoadd: removeAlreadyJoined,
-        receivers: decodedToken.receivers,
+        receivers,
       },
       "server",
     );
 
-    mappedGroupID.map(async (mp) => {
-      await AddNewMemberToChannels(
-        entityID,
-        username,
-        {
-          conversationID: mp.groupID,
-          memberstoadd: removeAlreadyJoined,
-          receivers: decodedToken.receivers,
-        },
-        mp.type,
-      );
-    });
+    await Promise.all(
+      mappedGroupID.map((mp) =>
+        AddNewMemberToChannels(
+          entityID,
+          username,
+          {
+            conversationID: mp.groupID,
+            memberstoadd: removeAlreadyJoined,
+            receivers,
+          },
+          // The channel's REAL type, so a voice room is recognised as one and
+          // gets membership without a system message (AddNewMemberToChannels
+          // skips those, and NotificationMessageForConversations now refuses
+          // them outright).
+          mp.type,
+        ),
+      ),
+    );
 
     res.send({
       status: true,

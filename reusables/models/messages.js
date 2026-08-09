@@ -167,6 +167,22 @@ const NotificationMessageForConversations = async (
   details,
   convType,
 ) => {
+  // A voice room has no chat history to narrate, and a page's conversation is
+  // not a group anyone gets "added" to. Free assertion on what the caller
+  // passed - no lookup, since every caller already has the realm's type in hand
+  // - and it fails closed: a caller that knows it is dealing with a voice room
+  // cannot write into it by forgetting its own guard.
+  //
+  // It cannot catch a caller that passes the WRONG type, which is what happened
+  // here: the server remove path hardcoded "channel" for every channel it
+  // removed you from, voice rooms included, so a voice channel ended up with a
+  // notif document (and a conversation document) typed "channel". That is fixed
+  // where it belongs, at the call site, by selecting the channel's real type.
+  const assertedType = normalizeConversationType(convType);
+  if (assertedType === "voice" || assertedType === "page") {
+    return;
+  }
+
   const messageID = await checkExistingMessageID(makeid(30));
   const conversationID = convID;
   const sender = entityID;
@@ -185,7 +201,7 @@ const NotificationMessageForConversations = async (
   // };
   const isReply = false;
   const messageType = "notif";
-  const conversationType = normalizeConversationType(convType);
+  const conversationType = assertedType;
 
   const payload = {
     messageID: messageID,
