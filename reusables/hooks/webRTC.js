@@ -1,7 +1,11 @@
 require("dotenv").config();
 const os = require("os");
 const mediasoup = require("mediasoup");
-const { publish, removeParticipant } = require("../redis/pubsub");
+const {
+  publish,
+  removeParticipant,
+  touchParticipants,
+} = require("../redis/pubsub");
 const rs = require("../redis/roomState");
 const pipeManager = require("./pipeManager");
 
@@ -85,6 +89,115 @@ const nativeRooms = new Map(); // conversationID -> { router, transports, produc
 // Stale room cleanup — evict in-process state + Redis state after TTL
 const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
 const emptyRoomTimers = new Map();
+
+// ─── Room keepalive ──────────────────────────────────────────────────────────
+//
+// Every Redis key describing a room expires (ROOM_TTL_SEC / PARTICIPANTS_TTL_SEC),
+// and until now the only thing that pushed those expiries out was a WRITE:
+// touchRoom rides along on setMember / setMemberStatus / setProducerMeta. Those
+// fire on joins, mute and camera toggles, and new producers - none of which a
+// settled call is obliged to produce. Four people talking quietly for an hour
+// with nobody joining, leaving or touching a control would have had their
+// roster and presence records expire out from under them: the tiles would stay
+// (the media never stops) while the channel row dropped to nobody in the room,
+// and a later join would rebuild the roster from an empty hash.
+//
+// So liveness is asserted on a timer instead, off the one fact that actually
+// means the room is alive: this pod still holds its router in memory. That also
+// makes the TTLs do the job they were written for - a pod that DIES stops
+// refreshing, and everything it left behind expires within the hour.
+//
+// An emptied room keeps getting touched for the few minutes before
+// scheduleRoomCleanup evicts it, which is harmless: deleteRoom removes the keys
+// outright rather than waiting for them to expire.
+const ROOM_KEEPALIVE_MS = 5 * 60 * 1000;
+
+const roomKeepaliveTimer = setInterval(async () => {
+  for (const conversationID of nativeRooms.keys()) {
+    await rs
+      .touchRoom(conversationID)
+      .catch((err) => console.error("[roomState] touchRoom error:", err));
+    await touchParticipants(conversationID).catch((err) =>
+      console.error("[pubsub] touchParticipants error:", err),
+    );
+  }
+}, ROOM_KEEPALIVE_MS);
+
+// Never the reason the process stays up - this is bookkeeping for rooms that
+// only exist while the service is running anyway.
+roomKeepaliveTimer.unref?.();
+
+// ─── Dead-client detection ───────────────────────────────────────────────────
+//
+// A client that disappears without calling /leave-room — app force-stopped,
+// process crashed, battery died, phone in a tunnel — used to leave everything
+// behind: its roster entry (a stuck placeholder tile for everyone else), its
+// entry in the `call:participants` presence hash (the "N in this room" count on
+// a channel row), and its transports and producers on this pod. Nothing ever
+// noticed, because the only callers of leaveRoom were the two HTTP endpoints.
+//
+// mediasoup already knows. WebRtcTransport runs ICE consent checks
+// (iceConsentTimeout, default 30s) and emits `icestatechange` "disconnected"
+// when they lapse; the transports here only ever listened for "routerclose",
+// so the signal was thrown away. These handlers subscribe to what is already
+// firing rather than adding any new mechanism.
+//
+// NOT an immediate leave: "disconnected" also fires on an ordinary network
+// blip — a wifi-to-LTE handoff, a lift. Leaving on the first one would eject
+// people who were about to recover, and since leaveRoom closes their producers,
+// "recover" would mean a full rejoin. So a disconnect only ARMS a sweep, which
+// any reconnection cancels.
+const DISCONNECT_GRACE_MS = 20 * 1000;
+
+// "conversationID|clientId" -> Timeout
+const disconnectTimers = new Map();
+
+const disconnectKey = (conversationID, clientId) =>
+  `${conversationID}|${clientId}`;
+
+function cancelDisconnectSweep(conversationID, clientId) {
+  const key = disconnectKey(conversationID, clientId);
+  const handle = disconnectTimers.get(key);
+  if (!handle) return;
+  clearTimeout(handle);
+  disconnectTimers.delete(key);
+}
+
+/// Arms the grace timer for a client whose transport just went quiet.
+///
+/// First signal wins - a client has TWO transports (send and recv) and they
+/// usually fail together, so the second must not restart the clock.
+function scheduleDisconnectSweep(conversationID, entityID, clientId) {
+  if (!conversationID || !clientId) return;
+  const key = disconnectKey(conversationID, clientId);
+  if (disconnectTimers.has(key)) return;
+
+  const handle = setTimeout(async () => {
+    disconnectTimers.delete(key);
+
+    // Still a member? A clean leave, a rejoin under the same clientId, or an
+    // eviction in the meantime all mean there is nothing left to sweep. The
+    // check is against Redis rather than local state because the room may have
+    // moved pods while we waited.
+    const member = await rs
+      .getMember(conversationID, clientId)
+      .catch(() => null);
+    if (!member) return;
+
+    console.log(
+      `[WebRTC] Dead client swept after ${DISCONNECT_GRACE_MS}ms: ` +
+        `${clientId} in ${conversationID}`,
+    );
+    // The same teardown a deliberate leave performs - roster entry, presence
+    // record, producers, transports, and the participant-left broadcast that
+    // moves it off everyone else's screen.
+    await leaveRoom(conversationID, member.entityID || entityID, clientId).catch(
+      (err) => console.error("[WebRTC] Dead-client sweep failed:", err),
+    );
+  }, DISCONNECT_GRACE_MS);
+
+  disconnectTimers.set(key, handle);
+}
 
 // Give pipeManager access to routers and producers without circular imports
 pipeManager.setRouterResolver(async (conversationID) => {
@@ -214,6 +327,13 @@ function scheduleRoomCleanup(conversationID) {
 // Used by the reconnect flow so other participants don't see a leave/rejoin flash.
 
 async function evictClientSession(conversationID, clientId) {
+  // A reconnect under the same clientId is the client proving it is alive, so
+  // any armed sweep is stale. Critically it must be cancelled BEFORE the new
+  // session is built: otherwise the old session's timer fires 20s later,
+  // finds a member under this clientId (the NEW one), and evicts a live
+  // participant.
+  cancelDisconnectSweep(conversationID, clientId);
+
   const room = nativeRooms.get(conversationID);
   if (!room) return;
 
@@ -261,6 +381,13 @@ async function joinRoom(
   console.log(
     `[WebRTC] joinRoom called: conversationID=${conversationID}, entityID=${entityID}, clientId=${clientId}`,
   );
+
+  // Unconditionally, before anything else: a join under this clientId means it
+  // is alive. evictClientSession cancels too, but only on the reconnect path -
+  // and a timer that outlives its member (swept by something else, rejoined
+  // here) would otherwise fire 20s from now and evict the session we are about
+  // to build.
+  cancelDisconnectSweep(conversationID, clientId);
 
   const room = await getOrCreateNativeRoom(conversationID);
   console.log(`[WebRTC] joinRoom: room ready, router=${!!room.router}`);
@@ -406,6 +533,31 @@ async function createTransport(
 
   transport.on("routerclose", () => {
     room.transports.delete(transport.id);
+  });
+
+  // See DISCONNECT_GRACE_MS. ICE consent lapsing is the signal that the peer
+  // is gone; reaching "connected"/"completed" again is the signal that it was
+  // only a blip, and disarms the sweep.
+  transport.on("icestatechange", (iceState) => {
+    if (iceState === "disconnected") {
+      console.log(
+        `[WebRTC] ICE disconnected: client=${clientId} room=${conversationID}`,
+      );
+      scheduleDisconnectSweep(conversationID, entityID, clientId);
+    } else if (iceState === "connected" || iceState === "completed") {
+      cancelDisconnectSweep(conversationID, clientId);
+    }
+  });
+
+  // "failed" only, never "closed": closed is what OUR OWN teardown produces
+  // when leaveRoom closes this transport, and arming a sweep from it would
+  // schedule a pointless pass over a client that has already left.
+  transport.on("dtlsstatechange", (dtlsState) => {
+    if (dtlsState !== "failed") return;
+    console.log(
+      `[WebRTC] DTLS failed: client=${clientId} room=${conversationID}`,
+    );
+    scheduleDisconnectSweep(conversationID, entityID, clientId);
   });
 
   // Only native transport object stays in-process
@@ -723,6 +875,11 @@ async function closeProducer(conversationID, entityID, clientId, producerId) {
 // ─── leaveRoom ───────────────────────────────────────────────────────────────
 
 async function leaveRoom(conversationID, entityID, clientId) {
+  // Whatever brought us here, this client is being torn down now - a pending
+  // sweep for it has nothing left to do. Also covers the sweep calling us: the
+  // timer has already removed itself, and this is a harmless no-op.
+  cancelDisconnectSweep(conversationID, clientId);
+
   // Read the leaving member's data BEFORE deleting — needed for participant-left broadcast
   const leavingMember = await rs
     .getMember(conversationID, clientId)

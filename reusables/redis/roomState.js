@@ -240,6 +240,10 @@ async function deletePipes(conversationID) {
 
 module.exports = {
   init,
+  // Exported for the periodic room keepalive in webRTC.js - the writes below
+  // call it themselves, but they only fire on joins, status changes and new
+  // producers, which a settled call can go hours without.
+  touchRoom,
   setRoomPod,
   getRoomPod,
   deleteRoomPod,

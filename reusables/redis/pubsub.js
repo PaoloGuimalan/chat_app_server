@@ -127,12 +127,39 @@ async function publish_pub(channel, event, message) {
   }
 }
 
+// Matches roomState.js's ROOM_TTL_SEC. This hash is the presence record the
+// channel rows count ("N in this room"), and it used to be written with no
+// expiry at all - so anything that skipped removeParticipant left a phantom
+// occupant permanently. The dead-client sweep in webRTC.js covers a client
+// dying; this covers the case no client-side signal can, a POD dying, where
+// nothing runs to clean up after it.
+//
+// The TTL is a LEAK HORIZON, never a room lifetime. It is short only because
+// webRTC.js's room keepalive refreshes it every few minutes for as long as
+// this pod still holds the room's router - so a call running for eight hours
+// keeps its presence intact, and a pod that dies stops refreshing and lets the
+// residue expire within the hour. Setting it on write alone would have expired
+// the key under a settled call that simply had nobody join for an hour.
+const PARTICIPANTS_TTL_SEC = 60 * 60; // 1 hour since the last keepalive
+
 async function addParticipant(conversationID, participantData) {
   if (publisher) {
     const key = `call:participants:${conversationID}`;
     const { clientID } = participantData;
 
     await publisher.hSet(key, clientID, JSON.stringify(participantData));
+    await publisher.expire(key, PARTICIPANTS_TTL_SEC);
+  }
+}
+
+/// Pushes the expiry out for a room that is demonstrably still alive. See
+/// PARTICIPANTS_TTL_SEC - this is what makes that TTL safe.
+async function touchParticipants(conversationID) {
+  if (publisher) {
+    await publisher.expire(
+      `call:participants:${conversationID}`,
+      PARTICIPANTS_TTL_SEC,
+    );
   }
 }
 
@@ -211,6 +238,7 @@ module.exports = {
   listen_sub,
   publish_pub,
   addParticipant,
+  touchParticipants,
   removeParticipant,
   getAllParticipants,
   isUniqueNonce,
