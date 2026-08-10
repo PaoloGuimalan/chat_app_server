@@ -223,8 +223,24 @@ function transformServersData(serversArray, preview) {
       serverID: input.realm_id,
       serverName: input.name,
       profile: input.profile == "N/A" ? "" : input.profile,
-      members: preview ? [] : input.members.map((m) => ({ userID: m.userID })),
-      member_count: parseInt(input.member_count) ?? 0,
+      // Array.isArray, not a bare .map: `members` comes from a jsonb_agg, and
+      // that returns NULL rather than '[]' when nothing aggregates. The one
+      // query that could produce it has been fixed (see /initserverlist), but
+      // this function is shared, and a null from any future caller should
+      // render a server with no members listed - not take the whole request
+      // down with "Cannot read properties of null".
+      members:
+        preview || !Array.isArray(input.members)
+          ? []
+          : input.members.map((m) => ({ userID: m.userID })),
+      // ?? does not catch NaN - it only fires on null/undefined - so a row
+      // without a member_count column (every /initserverlist row: that query
+      // doesn't select one) produced parseInt(undefined) = NaN, which then
+      // serialized to null in the JSON. Number.isFinite is the check that
+      // actually holds.
+      member_count: Number.isFinite(parseInt(input.member_count, 10))
+        ? parseInt(input.member_count, 10)
+        : 0,
       is_joined: input.is_joined,
       createdBy: input.created_by_id,
       privacy: input.is_private,

@@ -32,12 +32,37 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 router.get("/publicservers", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
-  const account_id = req.params.id;
-  const id = req.params.id;
+  const entity_id = req.params.entity_id;
 
-  const { rows } = await pool.query(
-    `
-    SELECT 
+  try {
+    // Keyed on entity_id, not account_id.
+    //
+    // community_member.account_id is a LEGACY column: Django's Member model
+    // has its `account` FK commented out in favour of `entity`, and every
+    // INSERT INTO community_member in this service writes entity_id and omits
+    // account_id entirely (routes/users/index.js, reusables/models/messages.js).
+    // So every membership row created since the entity migration has
+    // account_id NULL, and this query was reading a column nothing fills.
+    //
+    // That made all three uses wrong, and silently:
+    //   COUNT(cm.account_id)  counts only NON-NULL values, so member_count
+    //                         was 0 for any server whose members all joined
+    //                         after the migration.
+    //   cm.account_id != $1   NULL != x is NULL, never true - so those rows
+    //                         were filtered out and the directory came back
+    //                         short, or empty.
+    //   cm2.account_id = $2   likewise never matched, so is_joined was false
+    //                         for servers you are in.
+    //
+    // A page could never satisfy any of them at all: an acting entity has no
+    // account_id by definition, which is the same acting-as-page failure as
+    // /initserverlist's, just silent instead of fatal.
+    //
+    // Both placeholders were being passed req.params.id - the same value
+    // twice - so they collapse to one.
+    const { rows } = await pool.query(
+      `
+    SELECT
         cr.id,
         cr.realm_id,
         cr.name,
@@ -47,24 +72,32 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
         cr.type,
         cr.cover_photo,
         cr.description,
-        COUNT(cm.account_id) AS member_count,
-        CASE 
+        COUNT(cm.entity_id) AS member_count,
+        CASE
             WHEN EXISTS (
-                SELECT 1 FROM community_member cm2 
-                WHERE cm2.realm_id = cr.realm_id AND cm2.account_id = $2
-            ) THEN true 
-            ELSE false 
+                SELECT 1 FROM community_member cm2
+                WHERE cm2.realm_id = cr.realm_id AND cm2.entity_id = $1
+            ) THEN true
+            ELSE false
         END AS is_joined
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
-    WHERE cm.account_id != $1
+    WHERE cm.entity_id != $1
         AND cr.type = 'server' AND cr.is_private = false
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [id, account_id],
-  );
+      [entity_id],
+    );
 
-  res.send({ status: true, result: transformServersData(rows, true) });
+    res.send({ status: true, result: transformServersData(rows, true) });
+  } catch (ex) {
+    // No handler here either - see /initserverlist below for why that turns a
+    // query error into a hung request rather than a response.
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
 });
 
 router.get("/initserverlist", jwtchecker, async (req, res) => {
@@ -72,7 +105,8 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
   const id = req.params.id;
   const entity_id = req.params.entity_id;
 
-  const { rows } = await pool.query(
+  try {
+    const { rows } = await pool.query(
     `
     SELECT 
         cr.id,
@@ -85,23 +119,48 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         cr.type,
         cr.cover_photo,
         cr.description,
-        (
-        SELECT jsonb_agg(jsonb_build_object('userID', ua.username))
+        -- Entity-generic, and never NULL. Two separate bugs lived here:
+        --
+        -- The INNER JOIN to user_account dropped every member that is a PAGE
+        -- (community_member.entity_id can be a person OR a realm - see
+        -- GetServerMembers, which had this same fix). And jsonb_agg over zero
+        -- surviving rows returns NULL, not '[]', so a server whose members are
+        -- all pages came back with members = null and transformServersData
+        -- threw on .map - which is what an account acting as a page hits the
+        -- moment it belongs to a server no person has joined.
+        --
+        -- Same shape as the sibling queries below, which already COALESCE.
+        COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'userID', COALESCE(ua.username, mr.slug, mr.realm_id)
+        ))
         FROM community_member cm2
-        JOIN user_account ua ON cm2.entity_id = ua.entity_id
+        LEFT JOIN user_account ua ON cm2.entity_id = ua.entity_id
+        LEFT JOIN community_realm mr ON cm2.entity_id = mr.entity_id
         WHERE cm2.realm_id = cr.realm_id
-        ) AS members
+        ), '[]'::jsonb) AS members
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.entity_id = $1
         AND cr.type = 'server'
     GROUP BY cr.id, cr.entity_id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
-    [entity_id],
-  );
+      [entity_id],
+    );
 
-  const encodedResult = createJWT(transformServersData(rows));
-  res.send({ status: true, result: encodedResult });
+    const encodedResult = createJWT(transformServersData(rows));
+    res.send({ status: true, result: encodedResult });
+  } catch (ex) {
+    // This route had no handler at all, which is why the failure above
+    // presented as a HANG rather than an error: Express 4 does not catch a
+    // rejected async handler, so the throw became an unhandled rejection and
+    // the request was left open until the client timed out. Same shape as the
+    // sibling routes in this file.
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
 });
 
 router.get(
