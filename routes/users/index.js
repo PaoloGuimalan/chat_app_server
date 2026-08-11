@@ -109,6 +109,10 @@ const {
 } = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
+  attachNotificationUx,
+  paramsFor,
+} = require("../../reusables/models/notificationactions");
+const {
   createJWT,
   jwtchecker,
   jwtssechecker,
@@ -739,13 +743,19 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
         [uniqueIDs],
       );
 
-      const finalNotification = result.map((mp) => ({
-        ...mp,
-        fromUser:
+      const finalNotification = result.map((mp) => {
+        const fromUser =
           rows.filter((flt) => flt.id === mp.fromUserID).length > 0
             ? rows.filter((flt) => flt.id === mp.fromUserID)[0]
-            : null,
-      }));
+            : null;
+        // Same redirects/actions as v2. Additive only - every existing field is
+        // untouched, so the pinned mobile client keeps reading what it always
+        // read and simply ignores the two new keys.
+        return {
+          ...attachNotificationUx(mp, paramsFor(mp, fromUser)),
+          fromUser,
+        };
+      });
 
       var encodedResult = jwt.sign(
         {
@@ -968,10 +978,17 @@ const enrichNotificationSenders = async (itemsPerSection) => {
 };
 
 const attachNotificationSenders = (items, senderMap) =>
-  items.map((mp) => ({
-    ...mp,
-    fromUser: senderMap.get(String(mp.fromUserID)) || null,
-  }));
+  items.map((mp) => {
+    const fromUser = senderMap.get(String(mp.fromUserID)) || null;
+    // The row's destination and buttons ride along with the sender, because
+    // this is the only point that has both the notification and the resolved
+    // identity a profile route needs. See notificationactions.js - stored
+    // values win, everything else is derived from `type`.
+    return {
+      ...attachNotificationUx(mp, paramsFor(mp, fromUser)),
+      fromUser,
+    };
+  });
 
 // Page-init: all three section previews (+ totals and unread counts) in one
 // round-trip. The per-section routes below drive the infinite scrolls.

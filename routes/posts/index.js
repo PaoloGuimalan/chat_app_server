@@ -243,6 +243,11 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
     const notifParams = {
       notificationID: awaitNotifID,
       referenceID: postID,
+      // Client-facing destination. Same id as referenceID here, but stated
+      // explicitly rather than left to be inferred - the two fields mean
+      // different things (backend id vs where the row goes) and only coincide
+      // for the post types this service writes.
+      target: { type: "post", supportingID: postID, anchor: null },
       referenceStatus: false,
       toUserID: mp,
       fromUserID: entityID,
@@ -513,6 +518,8 @@ router.post(
             const notifParams = {
               notificationID: awaitNotifID,
               referenceID: postID,
+              // See the tag notification above - stated rather than inferred.
+              target: { type: "post", supportingID: postID, anchor: null },
               referenceStatus: false,
               toUserID: post_user,
               fromUserID: entityID,
