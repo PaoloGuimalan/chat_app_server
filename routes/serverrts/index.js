@@ -712,6 +712,50 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
       ),
     );
 
+    // Realtime: the new members need this server in their rail, and everyone
+    // already in it needs the member list to move. Nothing else says so - a
+    // join writes membership rows and (for text channels) a system message
+    // into channels the joiner is only now able to read, so the people who
+    // matter here are precisely the ones no existing event reaches.
+    //
+    // Published after the AddNewMemberToChannels calls above are awaited, so a
+    // client refetching on this reads rows that exist. Failures are logged
+    // rather than thrown: the join itself has already succeeded, and a dropped
+    // notification is not a reason to tell the caller otherwise.
+    try {
+      const joinedEntityIds = removeAlreadyJoined.map((mp) => mp.entityID);
+
+      if (joinedEntityIds.length > 0) {
+        const { rows: currentMembers } = await pool.query(
+          `SELECT entity_id FROM community_member WHERE realm_id = $1;`,
+          [serverID],
+        );
+
+        const targets = [
+          ...new Set([
+            ...joinedEntityIds,
+            ...currentMembers.map((mp) => mp.entity_id),
+          ]),
+        ];
+
+        targets.forEach((rcp) => {
+          publish(`events_${rcp}`, "realm_membership_changed", {
+            status: true,
+            auth: true,
+            message: `Members joined realm ${serverID}`,
+            result: {
+              realm_id: serverID,
+              type: "server",
+              action: "joined",
+              entity_ids: joinedEntityIds,
+            },
+          });
+        });
+      }
+    } catch (publishErr) {
+      console.log("Failed to broadcast server join:", publishErr);
+    }
+
     res.send({
       status: true,
       message: "Server updated",

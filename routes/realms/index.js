@@ -328,6 +328,23 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           auth: true,
           realm_id,
         });
+
+        // The same fact in the shape the servers UI reads - `realm_id` on the
+        // frame body is what the conference clients look for, and everything
+        // else on this stream carries its payload under `result`. Sent
+        // alongside rather than instead of the conference event so the
+        // conference clients keep the frame they already parse.
+        publish(`events_${mp.entity_id}`, "realm_membership_changed", {
+          status: true,
+          auth: true,
+          message: `Members removed from realm ${realm_id}`,
+          result: {
+            realm_id,
+            type: realm.type,
+            action: "removed",
+            entity_ids: account_ids,
+          },
+        });
       });
     } catch (publishErr) {
       console.log("Failed to broadcast member removal:", publishErr);

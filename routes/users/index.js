@@ -2493,6 +2493,56 @@ const createRealmReusable = async (
 
     await client.query("COMMIT");
 
+    // Realtime fan-out for the two structural changes a client cannot learn any
+    // other way. Both are published AFTER the commit, so anything refetching on
+    // them reads settled rows.
+    //
+    // A CHANNEL announces itself to everyone who can see it - which for a
+    // public channel is every server member (createchannel passes
+    // GetServerMembers) and for a private one is exactly its invitees. A TEXT
+    // channel used to be announced only as a side effect of the system message
+    // below, which raises `messages_list`, and both clients happen to refetch
+    // their channel list on that. A VOICE room has no chat history to write a
+    // system message into, so nothing was ever published for it and the room
+    // only turned up on somebody else's next manual refresh.
+    //
+    // A SERVER announces itself as a membership change, which is what puts it
+    // in the creator's - and any invitee's - rail without them refetching.
+    try {
+      if (parentRealmID && (type === "channel" || type === "voice")) {
+        allReceivers.forEach((rcp) => {
+          publish(`events_${rcp}`, "server_channels_changed", {
+            status: true,
+            auth: true,
+            message: `Channel created in ${parentRealmID}`,
+            result: {
+              realm_id: parentRealmID,
+              channel_id: contactID,
+              type,
+            },
+          });
+        });
+      }
+
+      if (type === "server") {
+        allReceivers.forEach((rcp) => {
+          publish(`events_${rcp}`, "realm_membership_changed", {
+            status: true,
+            auth: true,
+            message: `Server ${contactID} created`,
+            result: {
+              realm_id: contactID,
+              type: "server",
+              action: "joined",
+              entity_ids: allReceivers,
+            },
+          });
+        });
+      }
+    } catch (publishErr) {
+      console.log("Failed to broadcast realm creation:", publishErr);
+    }
+
     if (type !== "server" && type !== "voice" && type !== "page") {
       // Optional-chained: this used to index [0] unguarded, so it threw
       // whenever the creator wasn't in `rows` - which was ALWAYS the case
