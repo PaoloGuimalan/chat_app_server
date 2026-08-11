@@ -58,10 +58,11 @@ const ROUTES = {
     ios: (p) => (p.handle ? `/user/${p.handle}` : null),
   },
   post: {
-    // Null until the webapp has a post permalink - it opens posts as a modal
-    // from search, so there is nothing to link to. A `?post_id=` global modal
-    // was the proposal; fill this in when it exists.
-    web: () => null,
+    // The webapp's post permalink (Home.tsx -> PostPage). It had none until
+    // now - posts opened as a modal from search, so nothing could link to one,
+    // which is why this used to be null and post-backed notifications were
+    // untappable on web.
+    web: (p) => (p.postId ? withHashAnchor(`/post/${p.postId}`, p.anchor) : null),
     android: (p) =>
       p.postId ? withQueryAnchor(`/post/${p.postId}`, p.anchor) : null,
     ios: (p) =>
