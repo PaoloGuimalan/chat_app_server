@@ -152,7 +152,16 @@ function formatConnectionData(rows) {
         },
         profile: row.profile,
         isActivated: row.is_active,
+        // The display BADGE (account is_badged / realm is_verified,
+        // normalised to is_verified by the query). This read has always been
+        // here, but until that alias existed the column was only exposed as
+        // "isVerified" (email verification), so row.is_verified was undefined
+        // and this field silently shipped as undefined on every row.
         isVerified: row.is_verified,
+        // Entity kind and, for a realm, its type - what lets a conversation
+        // header mark a PAGE as a page rather than guessing from the name.
+        entityType: row.entity_type,
+        realmType: row.realm_type,
       });
     }
   });

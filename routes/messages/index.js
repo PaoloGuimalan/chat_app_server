@@ -260,6 +260,10 @@ async function getRealmWithUsers(realmId, entityID) {
       'name', cr.name,
       'profile', cr.profile,
       'privacy', cr.is_private,
+      -- A realm's display badge. Reaches the clients as "is_verified" here
+      -- too, matching the conversation-list hydration - an account's
+      -- equivalent is is_badged.
+      'is_verified', COALESCE(cr.is_verified, FALSE),
       'type', cr.type,
       'parent_id', cr.parent_id,
       'starts_at', cr.starts_at,
@@ -311,7 +315,7 @@ async function getRealmWithUsers(realmId, entityID) {
           END,
           'profile', COALESCE(ua.profile, mr.profile, 'none'),
           'isActivated', COALESCE(ua.is_active, mr.is_active, TRUE),
-          'isVerified', COALESCE(ua.is_verified, mr.is_verified, FALSE),
+          'isVerified', COALESCE(ua.is_badged, mr.is_verified, FALSE),
           '__v', 0
         )
       ) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb)
@@ -373,7 +377,13 @@ router.get(
              COALESCE(u.last_name, '') AS "last_name",
              COALESCE(u.profile, r.profile, 'none') AS "profile",
              COALESCE(u.is_active, r.is_active, TRUE) AS "isActivated",
-             COALESCE(u.is_verified, FALSE) AS "isVerified"
+             COALESCE(u.is_verified, FALSE) AS "isVerified",
+             -- NOT the same thing as "isVerified" above, which is EMAIL
+             -- verification on the account. This is the display BADGE:
+             -- is_badged for an account, is_verified for a realm.
+             COALESCE(u.is_badged, r.is_verified, FALSE) AS "is_verified",
+             p.type AS "entity_type",
+             r.type AS "realm_type"
            FROM entity_connection uc
            JOIN entity_entity p ON p.id = uc.involved_entity_id
            LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
@@ -1366,12 +1376,20 @@ router.get("/conversations", jwtchecker, async (req, res) => {
 
     const { rows: realmRows } = await pool.query(
       `
-      SELECT 
+      SELECT
         realm_id as id,
         entity_id,
         slug AS username,
         name AS display_name,
-        COALESCE(profile, 'none') AS profile
+        COALESCE(profile, 'none') AS profile,
+        -- A realm's badge lives on is_verified; an account's lives on
+        -- is_badged. Both are normalised to "is_verified" on the wire so the
+        -- clients read ONE field regardless of what kind of entity this row
+        -- describes - same convention enrichNotificationSenders uses.
+        COALESCE(is_verified, FALSE) AS is_verified,
+        -- 'page' / 'server' / 'group' / ... Lets a client mark a page as a
+        -- page without a second lookup.
+        type AS realm_type
       FROM community_realm
       WHERE realm_id = ANY($1::TEXT[]);
     `,
@@ -1388,7 +1406,16 @@ router.get("/conversations", jwtchecker, async (req, res) => {
           FALSE AS privacy,
           -- Fallback mapping: uses concatenated user names or the realm name
           COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
-          COALESCE(u.profile, r.profile, 'none') AS profile
+          COALESCE(u.profile, r.profile, 'none') AS profile,
+          -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
+          -- that user_account.is_verified is EMAIL verification and a wholly
+          -- different thing - reading it here would badge every confirmed
+          -- address. Normalised to one wire field, as
+          -- enrichNotificationSenders already does.
+          COALESCE(u.is_badged, r.is_verified, FALSE) AS is_verified,
+          -- NULL for a user; 'page'/'server'/... when this counterpart is a
+          -- realm, so a single conversation with a PAGE can be marked as one.
+          r.type AS realm_type
         FROM entity_entity p
         LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
@@ -1622,7 +1649,12 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
         slug AS username,
         name AS display_name,
         is_private AS privacy,
-        COALESCE(profile, 'none') AS profile
+        COALESCE(profile, 'none') AS profile,
+        -- Same normalisation as the other realm hydration above: a realm's
+        -- badge is is_verified, an account's is is_badged, and both reach the
+        -- clients as "is_verified".
+        COALESCE(is_verified, FALSE) AS is_verified,
+        type AS realm_type
       FROM community_realm
       WHERE realm_id = ANY($1::TEXT[]);
     `,
@@ -1639,7 +1671,16 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
           FALSE AS privacy,
           -- Fallback mapping: uses concatenated user names or the realm name
           COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
-          COALESCE(u.profile, r.profile, 'none') AS profile
+          COALESCE(u.profile, r.profile, 'none') AS profile,
+          -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
+          -- that user_account.is_verified is EMAIL verification and a wholly
+          -- different thing - reading it here would badge every confirmed
+          -- address. Normalised to one wire field, as
+          -- enrichNotificationSenders already does.
+          COALESCE(u.is_badged, r.is_verified, FALSE) AS is_verified,
+          -- NULL for a user; 'page'/'server'/... when this counterpart is a
+          -- realm, so a single conversation with a PAGE can be marked as one.
+          r.type AS realm_type
         FROM entity_entity p
         LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
