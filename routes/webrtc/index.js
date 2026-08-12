@@ -370,7 +370,13 @@ router.post("/leave-room-keepalive", async (req, res) => {
     const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({
       users: [],
     }));
-    const parsedSavedRecipients = savedRecipients.users.map((mp) => mp.userID);
+    // entityID, not userID: SSE channels are `events_<entityID>`, so mapping
+    // to userID here published every departure into channels nobody listens
+    // on - a browser close cleaned the room but left the ghost on every other
+    // participant's roster. /leave-room below always had this right.
+    const parsedSavedRecipients = savedRecipients.users.map(
+      (mp) => mp.entityID,
+    );
     const recipients = req.body.recipients
       ? [...req.body.recipients, ...parsedSavedRecipients, entityID]
       : [...parsedSavedRecipients, entityID];

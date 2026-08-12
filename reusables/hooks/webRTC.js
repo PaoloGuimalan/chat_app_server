@@ -163,6 +163,46 @@ function cancelDisconnectSweep(conversationID, clientId) {
   disconnectTimers.delete(key);
 }
 
+/// Tells the whole conversation - not just the people currently in the room -
+/// that a client is gone.
+///
+/// leaveRoom broadcasts `participant-left`, but only to remaining ROOM members,
+/// which is what moves a tile off the call stage. The channel rows ("N in this
+/// room", the voice-channel roster) are fed by a different event entirely,
+/// `update_participants`, and until now the ONLY places that emitted it were
+/// the /leave-room and /leave-room-keepalive HTTP routes. A client that dies
+/// never calls either, so the sweep below cleaned Redis silently: the roster
+/// was correct the moment anyone rejoined and re-read it, and wrong for
+/// everyone already looking at it.
+///
+/// The recipient list mirrors the routes - every conversation member plus the
+/// departing entity itself, so a user watching from another tab also updates.
+async function announceParticipantRemoval(conversationID, entityID, clientId) {
+  // Deferred require: models/messages pulls in a large chunk of the model
+  // layer, and this is the only thing in here that needs it.
+  const { GetAllReceivers } = require("../models/messages");
+
+  const savedRecipients = await GetAllReceivers(conversationID).catch(() => ({
+    users: [],
+  }));
+  const recipients = [
+    ...new Set([
+      ...savedRecipients.users.map((mp) => mp.entityID).filter(Boolean),
+      entityID,
+    ]),
+  ];
+
+  await Promise.all(
+    recipients.map((mp) =>
+      publish(`events_${mp}`, "update_participants", {
+        status: true,
+        auth: true,
+        result: { clientId, action: "left" },
+      }).catch(() => {}),
+    ),
+  );
+}
+
 /// Arms the grace timer for a client whose transport just went quiet.
 ///
 /// First signal wins - a client has TWO transports (send and recv) and they
@@ -188,11 +228,24 @@ function scheduleDisconnectSweep(conversationID, entityID, clientId) {
       `[WebRTC] Dead client swept after ${DISCONNECT_GRACE_MS}ms: ` +
         `${clientId} in ${conversationID}`,
     );
+    const leavingEntityID = member.entityID || entityID;
+
     // The same teardown a deliberate leave performs - roster entry, presence
     // record, producers, transports, and the participant-left broadcast that
     // moves it off everyone else's screen.
-    await leaveRoom(conversationID, member.entityID || entityID, clientId).catch(
-      (err) => console.error("[WebRTC] Dead-client sweep failed:", err),
+    await leaveRoom(conversationID, leavingEntityID, clientId).catch((err) =>
+      console.error("[WebRTC] Dead-client sweep failed:", err),
+    );
+
+    // ...and the half of a deliberate leave that lives in the HTTP route,
+    // which a dead client never reaches. Without this the presence lists
+    // outside the call keep the ghost until something else rewrites them.
+    await announceParticipantRemoval(
+      conversationID,
+      leavingEntityID,
+      clientId,
+    ).catch((err) =>
+      console.error("[WebRTC] Dead-client sweep announce failed:", err),
     );
   }, DISCONNECT_GRACE_MS);
 
@@ -891,35 +944,44 @@ async function leaveRoom(conversationID, entityID, clientId) {
     .catch((err) => console.error("[roomState] deleteMember error:", err));
   await removeParticipant(conversationID, clientId);
 
-  const room = nativeRooms.get(conversationID);
-  if (!room) return;
-
-  // Close + remove this client's producers (native + Redis)
+  // Producer metadata lives in Redis, so it is cleared - and its ids reported
+  // to everyone else - whether or not THIS pod is the one holding the room.
+  // The native close below is best-effort on top of that.
   const ownedProducerIds = await rs
     .deleteAllProducerMetaForClient(conversationID, clientId)
     .catch(() => []);
 
-  for (const producerId of ownedProducerIds) {
-    const producer = room.producers.get(producerId);
-    if (producer) {
+  // Not a precondition for the broadcast, only for the native teardown. It
+  // used to guard everything below it, so a leave arriving after this pod had
+  // already evicted the room - exactly what a dead-client sweep can be - tore
+  // down Redis and then returned without telling anyone, leaving the departed
+  // client on every remaining participant's screen.
+  const room = nativeRooms.get(conversationID);
+
+  if (room) {
+    // Close + remove this client's producers (native)
+    for (const producerId of ownedProducerIds) {
+      const producer = room.producers.get(producerId);
+      if (producer) {
+        try {
+          producer.close();
+        } catch (_) {
+          /* no-op */
+        }
+        room.producers.delete(producerId);
+      }
+    }
+
+    // Close + remove this client's transports (native only — no Redis for transports)
+    for (const [transportId, entry] of room.transports.entries()) {
+      if (!entry || entry.clientId !== clientId) continue;
       try {
-        producer.close();
+        entry.transport.close();
       } catch (_) {
         /* no-op */
       }
-      room.producers.delete(producerId);
+      room.transports.delete(transportId);
     }
-  }
-
-  // Close + remove this client's transports (native only — no Redis for transports)
-  for (const [transportId, entry] of room.transports.entries()) {
-    if (!entry || entry.clientId !== clientId) continue;
-    try {
-      entry.transport.close();
-    } catch (_) {
-      /* no-op */
-    }
-    room.transports.delete(transportId);
   }
 
   // Notify remaining members
@@ -940,6 +1002,10 @@ async function leaveRoom(conversationID, entityID, clientId) {
       timestamp: Date.now(),
     });
   }
+
+  // Still gated on holding the room: scheduleRoomCleanup deletes the room's
+  // Redis keys outright, which is only ours to do when the router is ours.
+  if (!room) return;
 
   const memberCount = await rs.getMemberCount(conversationID).catch(() => 0);
   if (memberCount === 0) {
