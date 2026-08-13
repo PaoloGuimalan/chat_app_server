@@ -452,6 +452,33 @@ async function CreateEntity(type) {
   }
 }
 
+async function ConnectionCheck(viewerEntityId, targetEntityId) {
+  const query = `
+    SELECT
+      ec.*,
+      e_action.*,
+      e_involved.*
+    FROM entity_connection ec
+    JOIN entity_entity e_action
+      ON e_action.id = ec.action_by_id
+    JOIN entity_entity e_involved
+      ON e_involved.id = ec.involved_entity_id
+    WHERE
+      (
+        (ec.action_by_id = $1 AND ec.involved_entity_id = $2)
+        OR
+        (ec.action_by_id = $2 AND ec.involved_entity_id = $1)
+      )
+      AND ec.action_by_id <> ec.involved_entity_id
+    ORDER BY ec.action_date ASC
+  `;
+
+  const values = [viewerEntityId, targetEntityId];
+
+  const { rows } = await pool.query(query, values);
+  return rows.length > 0 ? rows[0] : null;
+}
+
 module.exports = {
   GetListOfContacts,
   GetListOfContactsV2,
@@ -462,4 +489,6 @@ module.exports = {
   CreateEntity,
   GetSenderDetails,
   GetEntityHandles,
+  ConnectionCheck,
 };
+

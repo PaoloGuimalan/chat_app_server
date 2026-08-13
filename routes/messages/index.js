@@ -44,6 +44,7 @@ const {
   GetUsersWithConnectionIDs,
   GetSenderDetails,
   GetEntityHandles,
+  ConnectionCheck,
 } = require("../../reusables/models/users");
 const conversation = require("../../schema/messages/conversation");
 const makeid = require("../../reusables/hooks/makeID");
@@ -1552,6 +1553,18 @@ router.post(
       }
 
       const initialParticipants = [entity_id, otherEntityID];
+
+      const check = await ConnectionCheck(entity_id, otherEntityID);
+
+      if (check) {
+        // If a private room already exists, return its ID safely to prevent duplication
+        return res.status(200).json({
+          status: true,
+          message: "Conversation already initialized",
+          conversationID: check.connection_id,
+          isNew: false,
+        });
+      }
 
       // 1. Race Condition Check: Must contain exactly only those two participant IDs
       // $all checks for presence of both elements, $size enforces strict direct chat boundaries
