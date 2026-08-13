@@ -53,8 +53,13 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
       const imageBuffer = await fs.readFile(image);
 
       const imageUpload = await Storage.upload(
-        `${makeid(10)}_${files.image[0].originalFilename}`,
+        entityID,
         imageBuffer,
+        `${makeid(10)}_${files.image[0].originalFilename}`,
+        {
+          referenceIDs: [id, realm_id, entityID],
+          action: media_type,
+        },
         `uploads/${realm_type}s/${realm_id}`,
       );
 
@@ -65,7 +70,7 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
                         SET profile = $1
                         WHERE realm_id = $2
                       `,
-            [imageUpload, realm_id],
+            [imageUpload.fileDetails.data, realm_id],
           );
         }
 
@@ -75,13 +80,13 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
                         SET cover_photo = $1
                         WHERE realm_id = $2
                       `,
-            [imageUpload, realm_id],
+            [imageUpload.fileDetails.data, realm_id],
           );
         }
         res.send({
           status: true,
           message: `Upload successful!`,
-          details: { media_type, url: imageUpload },
+          details: { media_type, url: imageUpload.fileDetails.data },
         });
       } else {
         throw new Error("Error occured during upload");

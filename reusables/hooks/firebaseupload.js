@@ -156,10 +156,7 @@ const saveFileRecordToDatabase = async (
     fileOrigin: fileOrigin,
     fileType: fileType,
     action: action,
-    dateUploaded: {
-      time: timeGetter(),
-      date: dateGetter(),
-    },
+    dateUploaded: dateGetter(),
   };
 
   const newFile = new UploadedFiles(payload);

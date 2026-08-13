@@ -5,6 +5,8 @@ const {
   ListObjectsV2Command,
 } = require("@aws-sdk/client-s3");
 const makeid = require("./makeID");
+const { saveFileRecordToDatabase } = require("./firebaseupload");
+const fileTypeMime = require("file-type-mime");
 
 class S3StorageProvider {
   constructor(config) {
@@ -39,7 +41,13 @@ class S3StorageProvider {
     }
   }
 
-  async upload(fileName, fileBuffer, folder = "uploads") {
+  async upload(referenceID, fileBuffer, fileName, details, folder = "uploads") {
+    const detectedType = fileTypeMime.parse(fileBuffer);
+
+    const mimeType = detectedType
+      ? detectedType.mime
+      : "application/octet-stream";
+
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: `${folder}/${fileName}`, // Auto-creates "folders"
@@ -48,10 +56,31 @@ class S3StorageProvider {
     });
     await this.client.send(command);
 
-    return `https://${this.bucket}.${this.cdnEndpoint}/${folder}/${fileName}`;
+    const fileUrl = `https://${this.bucket}.${this.cdnEndpoint}/${folder}/${fileName}`;
+
+    const uniqueReferenceIDs = [
+      ...new Set([...details.referenceIDs, referenceID]),
+    ];
+
+    const result = await saveFileRecordToDatabase(
+      uniqueReferenceIDs,
+      fileUrl,
+      details.action,
+      mimeType,
+      "digitalocean",
+      fileName,
+    );
+
+    return result;
   }
 
-  async uploadBase64(base64WithHeader, customName, folder = "uploads") {
+  async uploadBase64(
+    referenceID,
+    base64WithHeader,
+    customName,
+    details,
+    folder = "uploads",
+  ) {
     const matches = base64WithHeader.match(
       /^data:([^/]+)\/([^;]+);base64,(.+)$/,
     );
@@ -87,21 +116,39 @@ class S3StorageProvider {
 
     await this.client.send(command);
 
-    return `https://${this.bucket}.${this.cdnEndpoint}/${folder}/${fileName}`;
+    const fileUrl = `https://${this.bucket}.${this.cdnEndpoint}/${folder}/${fileName}`;
+
+    const uniqueReferenceIDs = [
+      ...new Set([...details.referenceIDs, referenceID]),
+    ];
+
+    const result = await saveFileRecordToDatabase(
+      uniqueReferenceIDs,
+      fileUrl,
+      details.action,
+      mimeType,
+      "digitalocean",
+      customName,
+    );
+
+    return result;
   }
 
-  async uploadMultipleBase64(filesArray, folder = "uploads") {
+  async uploadMultipleBase64(filesArray, details, folder = "uploads") {
     const uploadPromises = filesArray.map(async (file) => {
       // Perform the upload using the existing base64 string
-      const fileUrl = await this.uploadBase64(
+      const metadata = await this.uploadBase64(
+        file.referenceID,
         file.reference,
         file.name,
+        details,
         folder,
       );
 
       return {
         ...file,
-        reference: fileUrl,
+        ...metadata,
+        reference: metadata.fileDetails.data,
       };
     });
 

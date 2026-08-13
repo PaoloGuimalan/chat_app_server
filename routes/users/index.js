@@ -2904,13 +2904,23 @@ router.post("/createpage", jwtchecker, async (req, res) => {
       //   await uploadFirebaseMultiple(filereferences);
 
       const profileUpload = await Storage.upload(
-        `${makeID(10)}_${files.profile[0].originalFilename}`,
+        entityID,
         profileBuffer,
+        `${makeID(10)}_${files.profile[0].originalFilename}`,
+        {
+          referenceIDs: [entityID, id],
+          action: "profile",
+        },
         `uploads/pages/${pageID}`,
       );
       const coverPhotoUpload = await Storage.upload(
-        `${makeID(10)}_${files.cover_photo[0].originalFilename}`,
+        entityID,
         coverPhotoBuffer,
+        `${makeID(10)}_${files.cover_photo[0].originalFilename}`,
+        {
+          referenceIDs: [entityID, id],
+          action: "cover_photo",
+        },
         `uploads/pages/${pageID}`,
       );
 
@@ -2920,8 +2930,8 @@ router.post("/createpage", jwtchecker, async (req, res) => {
           null,
           pageID,
           pageName,
-          profileUpload,
-          coverPhotoUpload,
+          profileUpload.fileDetails.data,
+          coverPhotoUpload.fileDetails.data,
           pageDescription,
           entityID,
           userReceivers,
@@ -3033,8 +3043,13 @@ const uploadMessage = async (
 
     // const publicUrl = await uploadFirebase(mp);
     const publicUrl = await Storage.uploadBase64(
+      messageID,
       mp.reference,
       mp.name,
+      {
+        referenceIDs: [messageID, mp.conversationID],
+        action: "message",
+      },
       `uploads/messages/${conversationID}`,
     );
 
@@ -3052,14 +3067,14 @@ const uploadMessage = async (
       onComplete,
     );
 
-    await saveFileRecordToDatabase(
-      [messageID, mp.conversationID],
-      publicUrl,
-      "message",
-      mp.type,
-      "firebase",
-      mp.name,
-    );
+    // await saveFileRecordToDatabase(
+    //   [messageID, mp.conversationID],
+    //   publicUrl,
+    //   "message",
+    //   mp.type,
+    //   "firebase",
+    //   mp.name,
+    // );
   } catch (err) {
     console.log(err);
     onComplete(false);
@@ -3158,9 +3173,14 @@ const uploadMessageFromFile = async (
 
     const buffer = await fs.readFile(file.path);
     const mimeType = file.headers["content-type"] || "application/octet-stream";
-    const publicUrl = await Storage.upload(
-      `${makeID(10)}_${file.originalFilename}`,
+    const metadata = await Storage.upload(
+      messageID,
       buffer,
+      `${makeID(10)}_${file.originalFilename}`,
+      {
+        referenceIDs: [messageID, conversationID],
+        action: "message",
+      },
       `uploads/messages/${conversationID}`,
     );
 
@@ -3174,21 +3194,12 @@ const uploadMessageFromFile = async (
       pendingID,
       conversationID,
       receivers,
-      publicUrl,
+      metadata.fileDetails.data,
       isReply,
       replyingTo,
       messageType,
       conversationType,
       onComplete,
-    );
-
-    await saveFileRecordToDatabase(
-      [messageID, conversationID],
-      publicUrl,
-      "message",
-      messageType,
-      "firebase",
-      file.originalFilename,
     );
 
     fs.unlink(file.path).catch(() => {});
