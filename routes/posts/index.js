@@ -338,9 +338,12 @@ router.post("/upload", jwtchecker, async (req, res) => {
           const captions = fields.captions
             ? JSON.parse(fields.captions[0])
             : [];
-          const action = fields.action
-            ? JSON.parse(fields.action[0])
-            : "upload";
+          // Plain scalar, NOT JSON - unlike captions/referenceMediaTypes above,
+          // which are real arrays with one entry per file. The [0] is just
+          // multiparty handing every field back as an array, so JSON.parse-ing
+          // it threw a SyntaxError on any honest value ("post") and 400'd the
+          // whole upload. Absent means an older client: keep defaulting.
+          const action = fields.action?.[0] || "upload";
           const referenceMediaTypes = fields.referenceMediaTypes
             ? JSON.parse(fields.referenceMediaTypes[0])
             : [];
