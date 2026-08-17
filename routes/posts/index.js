@@ -23,6 +23,7 @@ const {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
   updateRankingScore,
+  createPostScore,
   ResolvePostPrivacyStatus,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
@@ -32,7 +33,6 @@ const {
 } = require("../../reusables/hooks/firebaseupload");
 const {
   GetListOfContacts,
-  GetFollowerIDs,
   GetSenderDetails,
 } = require("../../reusables/models/users");
 const push = require("../../reusables/hooks/pushnotification");
@@ -545,14 +545,9 @@ router.post(
                 });
             }
 
-            await pool.query(
-              `UPDATE newsfeed_postscore
-            SET shares_count = shares_count + 1
-            WHERE post_id = $1
-          `,
-              [mp.reference],
-            );
-
+            // shares_count is NOT incremented here any more: the worker's
+            // UpdateRankingScore moves the counter itself as part of
+            // recomputing the score, so doing both counts every share twice.
             updateRankingScore(mp.reference, "share", false);
           }
 
@@ -737,78 +732,32 @@ router.post(
         // so nobody interacts, so nothing ever creates the row.
 
         // POST SCORE TABLE SAVE
-
-        let content_t_m = 1.0;
-
-        if (filereferences.length > 0) {
-          filereferences.map((mp) => {
-            if (mp.referenceMediaType === "image") {
-              content_t_m += 6.5;
-            } else if (mp.referenceMediaType === "video") {
-              content_t_m += 8.5;
-            } else {
-              content_t_m += 2.0;
-            }
-          });
-        } else {
-          content_t_m += 4.0;
-        }
-
-        const final_content_score = content_t_m / (filereferences.length + 1);
-
-        const age_hours = currentTimestampInSeconds / (1000 * 60 * 60);
-        const affinity_score = 1.0;
-        const content_type_weight = final_content_score;
-        const recent_update_boost = 1.0;
-        const comments_count = 0;
-        const likes_count = 0;
-        const shares_count = 0;
-
-        const base_engagement = 1;
-
-        const weighted_engagement =
-          comments_count * 3 +
-          likes_count * 1 +
-          shares_count * 5 +
-          base_engagement;
-
-        const decay_factor = (age_hours + 1) ** 0.5;
-        const ranking_score =
-          (weighted_engagement / decay_factor) *
-          affinity_score *
-          content_type_weight *
-          recent_update_boost;
-
-        const insertPostScore = `
-        INSERT INTO newsfeed_postscore (affinity_score, content_type_weight, recent_update_boost, likes_count, comments_count, shares_count, ranking_score, post_id)
-        VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8);
-      `;
-
-        await client.query(insertPostScore, [
-          affinity_score,
-          content_type_weight,
-          recent_update_boost,
-          likes_count,
-          comments_count,
-          shares_count,
-          ranking_score,
-          postID,
-        ]);
+        //
+        // Published AFTER the commit below rather than inserted here: the
+        // handler reads newsfeed_postreference to weight the post by its media,
+        // and those rows are written in this same transaction - publishing
+        // before the commit scores the post as if it had no attachments.
+        //
+        // Note the scoring constants are now the worker's, which are the Django
+        // signal's (+1.2 image / +1.5 video, decay ^1.2, no base engagement) and
+        // NOT the ones this block used. Post scores will differ from before.
 
         // END: POST SCORE TABLE SAVE
 
         await client.query("COMMIT");
+
+        createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
 
         // Fan out to the author's FOLLOWERS, not their connections. The feed is
         // keyed on the follow graph now; connecting auto-follows both ways, so
         // connections still receive this via the follow it created. Also fixes
         // pages: the connection-based query JOINed user_account on both sides,
         // so a page's post previously fanned out to nobody.
-        const fanoutCandidates = await GetFollowerIDs(entityID);
-
+        // The follower query moved into the worker, which resolves it from
+        // current_entity_id - same filter, same ORDER BY, same 500 cap - so
+        // GetFollowerIDs is no longer called on this path.
         bulkFanoutToCache(
-          fanoutCandidates,
+          entityID,
           { id: postID, author_id: entityID },
           "fanout",
         );

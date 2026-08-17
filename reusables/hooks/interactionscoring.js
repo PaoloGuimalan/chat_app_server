@@ -1,21 +1,24 @@
-const { types } = require("cassandra-driver");
-const pool = require("../../reusables/database/postgres");
-const { connect } = require("../database/cassandra");
 const { bumpLock } = require("../redis/pubsub");
+const { publish, QUEUES } = require("../rabbitmq/workqueue");
 
-const INTERACTION_WEIGHTS = {
-  NEW_CONNECTION: 10.0,
-  SHARE: 7.0,
-  REPOST: 7.0,
-  CHAT: 3.0,
-  COMMENT: 4.0,
-  LIKE: 1.0,
-  VIEW: 0.1,
-  PROFILE_VISIT: 0.5,
-};
+// The weights themselves now live in the worker
+// (worker_service/internal/services/rabbitmq/handlers.go). Kept here only as
+// the vocabulary this service is allowed to send: an action the worker does not
+// know returns at its weight lookup having silently done nothing, so a typo
+// here is invisible rather than loud.
+const INTERACTION_ACTIONS = new Set([
+  "NEW_CONNECTION",
+  "SHARE",
+  "REPOST",
+  "CHAT",
+  "COMMENT",
+  "LIKE",
+  "VIEW",
+  "PROFILE_VISIT",
+]);
 
 /**
- * Updates interaction scores in Postgres and syncs the change to Cassandra feed cache.
+ * Hands an interaction bump to the worker, which owns the Postgres write.
  */
 const interactionScoreBump = async (
   actorID,
@@ -25,60 +28,49 @@ const interactionScoreBump = async (
 ) => {
   if (actorID === receiverID) return;
 
-  const weight = INTERACTION_WEIGHTS[action] || 0.0;
-  const change = isDecrease ? -weight : weight;
-  const now = new Date();
-
-  try {
-    await pool.query("BEGIN");
-
-    // 1. Find and Update Postgres Connections
-    const { rows } = await pool.query(
-      `
-      SELECT * FROM entity_connection
-      WHERE (action_by_id = $1 AND involved_entity_id = $2)
-         OR (action_by_id = $2 AND involved_entity_id = $1);
-    `,
-      [actorID, receiverID],
-    );
-
-    const uniqueConnectionIDs = [
-      ...new Set(rows.map((row) => row.connection_id)),
-    ];
-
-    if (uniqueConnectionIDs.length > 0) {
-      const updateRes = await pool.query(
-        `
-            UPDATE entity_connection
-            SET 
-                interaction_score = interaction_score + $1,
-                last_interaction_at = $2
-            WHERE connection_id = ANY($3)
-            RETURNING connection_id;
-            `,
-        [change, now, uniqueConnectionIDs],
-      );
-    }
-
-    await pool.query("COMMIT");
-  } catch (e) {
-    await pool.query("ROLLBACK");
-    throw e;
+  if (!INTERACTION_ACTIONS.has(action)) {
+    console.log(`[interactionScoreBump] unknown action ignored: ${action}`);
+    return;
   }
+
+  await publish(QUEUES.INTERACTION_SCORE_BUMP, {
+    actor_id: actorID,
+    receiver_id: receiverID,
+    action: action,
+    is_decrease: !!isDecrease,
+  });
 };
 
+/**
+ * Bump the actor against everyone else in a conversation.
+ *
+ * ONE message carrying the whole member list, not one per member: the handler
+ * resolves them in a single UPDATE, so a 40-person group chat costs one publish
+ * and one statement rather than 40 of each.
+ *
+ * The lock STAYS here. It is what makes this one bump per conversation per 30
+ * minutes rather than one per message, and the worker has no idea a
+ * conversation exists - publishing unguarded would bump on every message sent.
+ *
+ * The actor and duplicates are dropped handler-side, so callers can pass the
+ * participant list straight through.
+ */
 const bumpChatScore = async (conversationID, memberIDs, actorID) => {
   const lock_key = `chatterloop:bump_lock:${conversationID}:chat`;
 
-  // 1. Try to set the key in Redis ONLY if it doesn't exist (NX)
-  // with an expiry of 1800 seconds (30 mins)
+  // Sets the key in Redis only if absent (NX), expiring after 1800s (30 mins).
   const isLocked = await bumpLock(lock_key);
+  if (!isLocked) return;
 
-  if (isLocked) {
-    memberIDs.map(async (mp) => {
-      await interactionScoreBump(actorID, mp, "CHAT", false);
-    });
-  }
+  const members = (memberIDs || []).filter(Boolean);
+  if (members.length === 0) return;
+
+  await publish(QUEUES.BUMP_CHAT_SCORE, {
+    actor_id: actorID,
+    member_ids: members,
+    action: "CHAT",
+    is_decrease: false,
+  });
 };
 
 const followerInteractionScoreBump = async (
@@ -89,74 +81,39 @@ const followerInteractionScoreBump = async (
 ) => {
   if (!receiverID) return;
 
-  const weight = INTERACTION_WEIGHTS[action] || 0.0;
-  const change = isDecrease ? -weight : weight;
-  const now = new Date();
-
-  try {
-    await pool.query("BEGIN");
-
-    const { rows } = await pool.query(
-      `
-      SELECT * FROM entity_follow
-      WHERE follower_id = $1 AND followee_id = $2;
-    `,
-      [actorID, receiverID],
+  if (!INTERACTION_ACTIONS.has(action)) {
+    console.log(
+      `[followerInteractionScoreBump] unknown action ignored: ${action}`,
     );
-
-    const followIDs = [...new Set(rows.map((row) => row.follow_id))];
-
-    if (followIDs.length > 0) {
-      const updateRes = await pool.query(
-        `
-            UPDATE entity_follow
-            SET 
-                interaction_score = interaction_score + $1,
-                last_interaction_at = $2
-            WHERE follower_id = $3 AND followee_id = $4;
-            `,
-        [change, now, actorID, receiverID],
-      );
-    }
-
-    await pool.query("COMMIT");
-  } catch (e) {
-    await pool.query("ROLLBACK");
-    throw e;
+    return;
   }
+
+  await publish(QUEUES.FOLLOWER_INTERACTION_SCORE_BUMP, {
+    actor_id: actorID,
+    receiver_id: receiverID,
+    action: action,
+    is_decrease: !!isDecrease,
+  });
 };
 
-const bulkFanoutToCache = async (connectionsList, postData, type) => {
-  const client = await connect();
-
-  const queries = connectionsList.map((followerId) => ({
-    query: `
-      INSERT INTO chatterloop.newsfeed_index (
-        bucket, 
-        post_id, 
-        created_at, 
-        author_id,
-        type
-      ) VALUES (?, ?, ?, ?, ?)
-    `,
-    params: [
-      String(followerId),
-      String(postData.id),
-      new Date(),
-      String(postData.author_id),
-      type,
-    ],
-  }));
-
-  const chunkSize = 50;
-  for (let i = 0; i < queries.length; i += chunkSize) {
-    const batch = queries.slice(i, i + chunkSize);
-
-    await client.batch(batch, {
-      prepare: true,
-      logged: false,
-    });
-  }
+/**
+ * Fan a post out into its author's followers' timelines.
+ *
+ * The follower list is NO LONGER resolved here - the worker runs that query
+ * itself from `current_entity_id`, so GetFollowerIDs is not needed on this
+ * path. `currentEntityID` is whose followers receive the post, which is not
+ * always the post's author: a comment bump fans someone else's post into the
+ * COMMENTER's followers.
+ */
+const bulkFanoutToCache = async (currentEntityID, postData, type) => {
+  await publish(QUEUES.BULK_FANOUT_TO_CACHE, {
+    current_entity_id: String(currentEntityID),
+    post_data: {
+      id: String(postData.id),
+      author_id: String(postData.author_id),
+    },
+    type: type || "fanout",
+  });
 };
 
 module.exports = {
