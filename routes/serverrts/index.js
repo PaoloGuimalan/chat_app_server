@@ -893,4 +893,111 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
   }
 });
 
+// Ownership transfer: promote a member to owner and step the current owner
+// down to admin. Deliberately NOT part of /update-member-realm-role, which
+// refuses new_role === "owner" precisely because "set someone to owner" and
+// "hand over the realm" are different operations - the second one must also
+// demote whoever holds it now, or the realm ends up with two owners.
+//
+// realm.ownership.transfer is owner-exclusive in the seeded role matrix
+// (entity/migrations/0004_seed_permission_catalog.py), so hasPermission alone
+// enforces "only the owner may do this" - no extra actor-role check needed,
+// unlike the remove/re-role routes where admins hold the base permission too.
+router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
+  const entityID = req.params.entity_id;
+  const realm_id = req.body.realm_id;
+  const member_id = req.body.member_id;
+
+  try {
+    if (
+      !(await hasPermission(entityID, "realm.ownership.transfer", realm_id))
+    ) {
+      res.status(401).send({
+        status: false,
+        message: "Only the realm owner can transfer ownership",
+      });
+      return;
+    }
+
+    const { rows: targetRows } = await pool.query(
+      `SELECT entity_id, role FROM community_member WHERE member_id = $1 AND realm_id = $2`,
+      [member_id, realm_id],
+    );
+
+    if (targetRows.length === 0) {
+      res.status(400).send({
+        status: false,
+        message: "That member is not part of this realm",
+      });
+      return;
+    }
+
+    if (targetRows[0].role === "owner") {
+      res.status(400).send({
+        status: false,
+        message: "They already own this realm",
+      });
+      return;
+    }
+
+    // One statement rather than two updates in a transaction: getPool()
+    // hands back the POOL, not a pinned client, so BEGIN/COMMIT issued
+    // through it can land on different connections. A single UPDATE is
+    // atomic on its own and cannot leave the realm with two owners (or
+    // none) if the process dies mid-way.
+    //
+    // The actor has no row to demote when acting AS the realm itself - a
+    // realm's own entity is never a Member of its own realm - and the WHERE
+    // simply matches one row instead of two. That actor keeps owner tier
+    // regardless, which is correct: it IS the realm.
+    await pool.query(
+      `UPDATE community_member
+          SET role = CASE
+                       WHEN member_id = $1 THEN 'owner'
+                       WHEN entity_id = $2 THEN 'admin'
+                       ELSE role
+                     END
+        WHERE realm_id = $3
+          AND (member_id = $1 OR entity_id = $2)`,
+      [member_id, entityID, realm_id],
+    );
+
+    // Same broadcast the role update sends: roles changed, so every client
+    // holding a members list needs to refetch it.
+    try {
+      const { rows: realmMembers } = await pool.query(
+        `SELECT entity_id FROM community_member WHERE realm_id = $1;`,
+        [realm_id],
+      );
+
+      const changedPayload = {
+        status: true,
+        auth: true,
+        realm_id,
+      };
+
+      realmMembers.forEach((mp) => {
+        publish(
+          `events_${mp.entity_id}`,
+          "conference_members_changed",
+          changedPayload,
+        );
+      });
+    } catch (publishErr) {
+      console.log("Failed to broadcast member change:", publishErr);
+    }
+
+    res.send({
+      status: true,
+      message: "Ownership transferred",
+    });
+  } catch (err) {
+    console.log(err);
+    res.send({
+      status: false,
+      message: "Error occured",
+    });
+  }
+});
+
 module.exports = router;

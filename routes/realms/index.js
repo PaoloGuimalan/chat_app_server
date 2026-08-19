@@ -126,7 +126,19 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       // The raw id only when an entity resolves to neither kind - better than
       // "undefined removed" in a message people read.
       username: targetHandles.get(String(mp))?.handle || String(mp),
+      // Leaving IS removing yourself through this same route, so the only
+      // thing separating the two is whether the target is the actor.
+      isSelf: String(mp) === String(entityID),
     }));
+
+    // ...which is what this reads, so a self-removal doesn't announce itself
+    // as "paulo removed paulo". A mixed batch (an admin clearing out several
+    // people, one of whom is themselves) gets the right sentence per person,
+    // since it is decided per target rather than per request.
+    const membershipMessage = (target) =>
+      target.isSelf
+        ? `${target.username} left`
+        : `${actorHandle} removed ${target.username}`;
 
     // Removing yourself (leaving) is always allowed. Removing anyone else
     // requires realm.member.remove, plus a target-role-aware rule: an admin
@@ -274,7 +286,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
               mpp,
               entityID,
               [],
-              `${actorHandle} removed ${mp.username}`,
+              membershipMessage(mp),
               channelType,
             );
           });
@@ -299,7 +311,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
           realm_id,
           entityID,
           [],
-          `${actorHandle} removed ${mp.username}`,
+          membershipMessage(mp),
           realm.type,
         );
       });
