@@ -1,47 +1,27 @@
 require("dotenv").config();
-const firebase = require("firebase-admin");
 
-// Side-effect require: firebaseupload.js OWNS the default Firebase app.
-//
-// Two reasons this file must not create one itself. First, initializeApp
-// throws outright on a second call - "already exists and initializeApp was
-// invoked with an optional Credential" - so whichever module loads second
-// crashes the process, and load order depends on which route Node reaches
-// first. Second, and worse if it were only guarded: firebaseupload
-// initializes WITH storageBucket. An app created here would lack it, and
-// every upload would silently lose its default bucket.
-//
-// Requiring it makes the dependency one-directional and the order irrelevant:
-// firebaseupload is always the creator, this file is always a consumer.
-require("./firebaseupload");
-
-const UserSessions = require("../../schema/auth/sessions");
 const Conversation = require("../../schema/messages/conversation");
+const { publish, QUEUES } = require("../rabbitmq/workqueue");
 
 // Channel ids and sound names must match the mobile app exactly
 // (chatterloop_app/lib/core/notifications/notification_renderer.dart). The _v2
 // suffix is not cosmetic: a channel's sound and importance are locked at
 // creation, so giving the channels custom tones required new ids.
+//
+// Kept in step with the same constants in the worker
+// (worker_service/internal/services/rabbitmq/push.go).
 const CHANNEL_MESSAGES = "chatterloop_messages_v2";
 const CHANNEL_ACTIVITY = "chatterloop_activity_v2";
-const SOUND_MESSAGES = "message_alert";
-const SOUND_ACTIVITY = "notification_alert";
-
-// sendEachForMulticast caps at 500 tokens per call.
-const MAX_TOKENS_PER_SEND = 500;
-
-// Error codes that mean the token is dead rather than the send being wrong.
-const DEAD_TOKEN_CODES = new Set([
-  "messaging/registration-token-not-registered",
-  "messaging/invalid-registration-token",
-  "messaging/invalid-argument",
-]);
 
 /**
  * Reusable push sender for every kind of alert.
  *
- * Two payload shapes, matching what the mobile app expects
- * (chatterloop_app/lib/core/notifications/push_payload.dart):
+ * Sending now happens in the Go worker: it resolves which devices are offline,
+ * talks to FCM, and retires the tokens FCM rejects. Everything below is the
+ * PUBLISHER, and its job is only to describe the notification.
+ *
+ * Nothing about the two payload shapes changed, because the mobile app reads
+ * them (chatterloop_app/lib/core/notifications/push_payload.dart):
  *
  *   sendMessage()  -> type "message", rendered as a threaded conversation
  *                     notification (avatar, stacked messages, own section).
@@ -55,45 +35,12 @@ const DEAD_TOKEN_CODES = new Set([
  * `osRendered: true` to opt into the plain OS-rendered shape - useful as a
  * fallback if an OEM's battery management turns out to suppress the app's
  * background isolate.
+ *
+ * ADDING A NEW NOTIFICATION TYPE needs nothing here: call send() with a
+ * channel, a title/body and whatever `data` the client should route on. The
+ * worker never branches on type.
  */
 class PushNotification {
-  constructor() {
-    // Already guaranteed to exist by the require above.
-    this.app = firebase.app();
-  }
-
-  // ─── targeting ────────────────────────────────────────────────────────────
-
-  /**
-   * FCM tokens for the devices that will NOT receive this over SSE.
-   *
-   *   status === false -> no live SSE connection, so SSE can't deliver it
-   *   fcmToken != null -> still signed in there (logout and entity switch both
-   *                       null it, so a null token means "not a target")
-   *
-   * Devices with status true already get the event over SSE; pushing to them
-   * as well is what produces duplicate notifications.
-   */
-  async offlineTokensFor(entityIDs = []) {
-    const ids = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
-      .filter(Boolean)
-      .map(String);
-    if (!ids.length) return [];
-
-    const rows = await UserSessions.find(
-      {
-        entityID: { $in: ids },
-        status: false,
-        fcmToken: { $nin: [null, ""] },
-      },
-      { fcmToken: 1 },
-    ).lean();
-
-    // One physical device can hold session rows for several entities (personal
-    // plus each page it can act as), so dedupe or it gets notified twice.
-    return [...new Set(rows.map((r) => r.fcmToken))];
-  }
-
   /** Participant entity ids for a conversation, minus [excludeEntityID]. */
   async participantsOf(conversationID, excludeEntityID = null) {
     const convo = await Conversation.findOne(
@@ -106,99 +53,55 @@ class PushNotification {
       .filter((id) => String(id) !== String(excludeEntityID));
   }
 
-  /** Clears tokens FCM has told us are dead, so they stop being targets. */
-  async pruneTokens(tokens = []) {
-    if (!tokens.length) return;
-    await UserSessions.updateMany(
-      { fcmToken: { $in: tokens } },
-      { $set: { fcmToken: null } },
-    );
-  }
-
-  // ─── sending ──────────────────────────────────────────────────────────────
-
   /**
-   * Low-level send. Prefer sendMessage/sendActivity; this is the escape hatch
-   * for a shape they don't cover.
+   * Low-level publish. Prefer sendMessage/sendActivity; this is the escape
+   * hatch for a shape they don't cover, and the entry point for any future
+   * notification type.
    *
-   * Resolves either from [entityIDs] (looked up through offlineTokensFor) or
-   * from an explicit [tokens] list, which is mainly useful for testing.
+   * Targets either [entityIDs] - the worker resolves their offline devices -
+   * or an explicit [tokens] list, which skips resolution.
    */
   async send({
     entityIDs = null,
     tokens = null,
     data = {},
     channelId = CHANNEL_ACTIVITY,
-    sound = SOUND_ACTIVITY,
     osRendered = false,
     title = "",
     body = "",
     tag = null,
     imageUrl = null,
   }) {
-    try {
-      const targets = tokens || (await this.offlineTokensFor(entityIDs || []));
-      // sendEachForMulticast throws on an empty tokens array rather than
-      // returning an empty result, so this guard is required, not defensive.
-      if (!targets.length) return { successCount: 0, failureCount: 0 };
+    const receivers = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
+      .filter(Boolean)
+      .map(String);
 
-      const payload = {
-        // Every value must be a STRING and non-null: FCM rejects the whole
-        // message otherwise, not just the offending field. Empty values are
-        // dropped rather than sent as "".
-        data: Object.fromEntries(
-          Object.entries(data)
-            .filter(([, v]) => v !== null && v !== undefined && v !== "")
-            .map(([k, v]) => [k, String(v)]),
-        ),
-        android: {
-          // Normal priority gets batched by Doze and can arrive minutes late,
-          // which for a chat notification reads as "push is broken".
-          priority: "high",
-        },
-      };
-
-      if (osRendered) {
-        payload.notification = { title, body };
-        payload.android.notification = {
-          channelId,
-          sound,
-          // Successive pushes with the same tag replace one another instead of
-          // stacking - the one bit of per-conversation grouping available
-          // without the app doing the rendering.
-          ...(tag ? { tag: String(tag) } : {}),
-          ...(imageUrl ? { imageUrl: String(imageUrl) } : {}),
-        };
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-      const dead = [];
-
-      for (let i = 0; i < targets.length; i += MAX_TOKENS_PER_SEND) {
-        const chunk = targets.slice(i, i + MAX_TOKENS_PER_SEND);
-        const response = await firebase
-          .messaging()
-          .sendEachForMulticast({ ...payload, tokens: chunk });
-
-        successCount += response.successCount;
-        failureCount += response.failureCount;
-
-        response.responses.forEach((r, index) => {
-          if (!r.success && DEAD_TOKEN_CODES.has(r.error?.code)) {
-            dead.push(chunk[index]);
-          }
-        });
-      }
-
-      await this.pruneTokens(dead);
-      return { successCount, failureCount, pruned: dead.length };
-    } catch (err) {
-      // Never throw into a request path - a failed push must not fail the
-      // message that triggered it.
-      console.log("[push] send failed:", err.message);
-      return { successCount: 0, failureCount: 0, error: err.message };
+    // Nothing to address it to. Worth stopping here rather than publishing a
+    // job the worker can only discard.
+    if (receivers.length === 0 && (!tokens || tokens.length === 0)) {
+      return false;
     }
+
+    // Every value must be a STRING and non-null: FCM rejects the whole message
+    // otherwise, not just the offending field. Empty values are dropped rather
+    // than sent as "".
+    const stringData = Object.fromEntries(
+      Object.entries(data)
+        .filter(([, value]) => value !== null && value !== undefined && value !== "")
+        .map(([key, value]) => [key, String(value)]),
+    );
+
+    return publish(QUEUES.SEND_PUSH, {
+      entity_ids: receivers,
+      tokens: tokens || [],
+      channel: channelId,
+      title: title,
+      body: body,
+      tag: tag ? String(tag) : "",
+      image_url: imageUrl ? String(imageUrl) : "",
+      os_rendered: !!osRendered,
+      data: stringData,
+    });
   }
 
   /**
@@ -227,7 +130,6 @@ class PushNotification {
     return this.send({
       entityIDs: receivers,
       channelId: CHANNEL_MESSAGES,
-      sound: SOUND_MESSAGES,
       osRendered,
       tag: conversationId,
       // Only consulted when osRendered - the app builds its own text
@@ -245,8 +147,9 @@ class PushNotification {
         senderAvatarUrl,
         body: preview,
         // ms since epoch: the app shows this as the per-message timestamp
-        // inside a thread, so it must be the SENT time or a burst of queued
-        // pushes all read as "now".
+        // inside a thread. Stamped HERE rather than in the worker, so a
+        // backlog of queued pushes keeps each message's real sent time
+        // instead of all reading "now".
         sentAt: String(Date.now()),
         messageId,
       },
@@ -279,7 +182,6 @@ class PushNotification {
     return this.send({
       entityIDs: receivers,
       channelId: CHANNEL_ACTIVITY,
-      sound: SOUND_ACTIVITY,
       osRendered,
       title,
       body,
@@ -299,7 +201,6 @@ class PushNotification {
   }
 }
 
-// Single shared instance - the constructor resolves the Firebase app, and
-// there's no per-caller state worth duplicating.
+// Single shared instance - there's no per-caller state worth duplicating.
 module.exports = new PushNotification();
 module.exports.PushNotification = PushNotification;

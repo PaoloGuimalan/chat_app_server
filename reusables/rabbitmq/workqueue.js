@@ -57,6 +57,8 @@ const QUEUES = {
   BULK_FANOUT_TO_CACHE: "bulk_fanout_to_cache",
   BACKFILL_NEW_FRIEND_FEED: "backfill_new_friend_feed",
   REMOVE_FEED_ON_UNFRIEND: "remove_feed_on_unfriend",
+  // Generic: every push type shares this one queue, present and future.
+  SEND_PUSH: "send_push",
 };
 
 let channelPromise = null;
