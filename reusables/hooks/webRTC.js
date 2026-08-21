@@ -1,5 +1,6 @@
 require("dotenv").config();
 const os = require("os");
+const fs = require("fs");
 const mediasoup = require("mediasoup");
 const {
   publish,
@@ -12,8 +13,130 @@ const pipeManager = require("./pipeManager");
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 
 // ─── Worker pool ─────────────────────────────────────────────────────────────
-// One mediasoup Worker per CPU core. Workers are native C++ processes —
-// they cannot be serialized or shared across pods. They stay in-process only.
+// One mediasoup Worker per AVAILABLE CPU — not per host core. Workers are
+// native C++ processes; they cannot be serialized or shared across pods, and
+// they stay in-process only.
+//
+// os.cpus() reports the HOST's core count, which is not what a container is
+// allowed to use. With `cpus: '2'` in the compose limits on, say, a 16-core
+// host, the old code span up 16 workers on a 2-CPU budget: they thrash against
+// each other, and since each worker is its own process with its own memory,
+// they also push hard on the 1G memory limit. Read the cgroup quota instead,
+// which is what Docker actually enforces.
+
+// The RTC port window, which must match what the deployment actually publishes.
+// Browsers connect straight to these ports - there is no TURN in front of
+// mediasoup - so any worker whose slice falls outside the published range is
+// unreachable, and every room that lands on it fails to connect. Declaring the
+// window here with the same numbers used in the stack file keeps the two from
+// drifting apart.
+const PORT_BASE = Number(process.env.RTC_PORT_BASE) || 10000;
+
+/**
+ * CPUs this process may actually use, from the cgroup quota Docker enforces.
+ * Returns null when there is no quota (unlimited, or the files are absent
+ * outside a container) so the caller can fall back.
+ */
+function cgroupCpuQuota() {
+  // cgroup v2: a single file, "<quota> <period>" or "max <period>"
+  try {
+    const raw = fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim();
+    const [quota, period] = raw.split(/\s+/);
+    if (quota && quota !== "max" && Number(period) > 0) {
+      return Number(quota) / Number(period);
+    }
+    if (quota === "max") return null;
+  } catch {
+    // Not cgroup v2, or not in a container — try v1 below.
+  }
+
+  // cgroup v1: quota and period in separate files, -1 meaning unlimited
+  try {
+    const quota = Number(
+      fs.readFileSync("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "utf8").trim(),
+    );
+    const period = Number(
+      fs.readFileSync("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "utf8").trim(),
+    );
+    if (quota > 0 && period > 0) return quota / period;
+  } catch {
+    // Neither cgroup version readable — caller falls back to host cores.
+  }
+
+  return null;
+}
+
+/**
+ * How many workers to spawn, in order of preference:
+ *   1. MEDIASOUP_WORKERS, for when you want to pin it explicitly
+ *   2. the cgroup CPU quota, which is what the container is actually limited to
+ *   3. host core count, which is only correct when running outside a container
+ *
+ * Floored rather than rounded: oversubscribing CPU-bound media workers costs
+ * more than leaving a fraction of a core unused, and the env var is there when
+ * a fractional limit needs to be claimed deliberately.
+ */
+function resolveWorkerCount() {
+  const override = Number(process.env.MEDIASOUP_WORKERS);
+  if (Number.isFinite(override) && override > 0) {
+    return { count: Math.floor(override), source: "MEDIASOUP_WORKERS" };
+  }
+
+  const quota = cgroupCpuQuota();
+  if (quota) {
+    return { count: Math.max(1, Math.floor(quota)), source: "cgroup quota" };
+  }
+
+  return { count: Math.max(1, os.cpus().length), source: "host cores" };
+}
+
+const REQUESTED_WORKERS = resolveWorkerCount();
+
+/**
+ * Divides the published port window evenly between workers.
+ *
+ * RTC_PORT_MAX is the last port the deployment publishes. Leaving it unset
+ * keeps the historical behaviour of 100 ports per worker, which is only
+ * correct if the published range is wide enough to cover every worker.
+ *
+ * Note that worker count does not change total capacity - the window does.
+ * Concurrent participants are bounded by (window / 2), because each one holds
+ * a send and a recv transport. More workers spread the same ports, and the
+ * same capacity, across more cores.
+ */
+const PORT_MAX =
+  Number(process.env.RTC_PORT_MAX) ||
+  PORT_BASE + REQUESTED_WORKERS.count * 100 - 1;
+
+const PORT_WINDOW = Math.max(1, PORT_MAX - PORT_BASE + 1);
+
+// A worker with no ports is worse than one fewer worker, so the window is the
+// hard ceiling on how many we start. Without this, asking for more workers
+// than there are ports pushes the last workers past PORT_MAX and back into
+// unpublished territory - the exact failure this is meant to prevent.
+const WORKER_COUNT = {
+  count: Math.min(REQUESTED_WORKERS.count, PORT_WINDOW),
+  source: REQUESTED_WORKERS.count > PORT_WINDOW
+    ? `${REQUESTED_WORKERS.source}, capped by port window`
+    : REQUESTED_WORKERS.source,
+};
+
+const PORTS_PER_WORKER = Math.max(
+  1,
+  Math.floor(PORT_WINDOW / WORKER_COUNT.count),
+);
+
+// Each participant holds a send and a recv transport, so roughly two ports.
+// Below this the window runs out mid-call rather than failing at startup,
+// which is a far worse way to find out.
+if (PORTS_PER_WORKER < 8) {
+  console.warn(
+    `[WebRTC] Only ${PORTS_PER_WORKER} RTC port(s) per worker ` +
+      `(${PORT_BASE}-${PORT_MAX} split ${WORKER_COUNT.count} ways). ` +
+      `That is roughly ${Math.floor(PORTS_PER_WORKER / 2)} concurrent participants ` +
+      `per worker - widen RTC_PORT_MAX or lower MEDIASOUP_WORKERS.`,
+  );
+}
 
 let workers = [];
 let workerIndex = 0;
@@ -26,8 +149,8 @@ const workersReadyPromise = new Promise((resolve) => {
 async function spawnWorker(index) {
   const w = await mediasoup.createWorker({
     logLevel: "warn",
-    rtcMinPort: 10000 + index * 100,
-    rtcMaxPort: 10099 + index * 100,
+    rtcMinPort: PORT_BASE + index * PORTS_PER_WORKER,
+    rtcMaxPort: PORT_BASE + index * PORTS_PER_WORKER + (PORTS_PER_WORKER - 1),
   });
 
   w.on("died", async (error) => {
@@ -54,14 +177,21 @@ async function spawnWorker(index) {
 }
 
 (async () => {
-  const numCores = os.cpus().length;
-  for (let i = 0; i < numCores; i++) {
+  const { count, source } = WORKER_COUNT;
+  for (let i = 0; i < count; i++) {
     const w = await spawnWorker(i);
     workers.push(w);
   }
   workersReady = true;
   workersReadyResolve();
-  console.log(`[WebRTC] Initialized ${numCores} MediaSoup Worker(s)`);
+
+  const lastPort = PORT_BASE + count * PORTS_PER_WORKER - 1;
+  console.log(
+    `[WebRTC] Initialized ${count} MediaSoup Worker(s) from ${source} ` +
+      `(host reports ${os.cpus().length} cores) — ` +
+      `RTC ports ${PORT_BASE}-${lastPort}, ${PORTS_PER_WORKER} per worker. ` +
+      `These must all be published by the deployment.`,
+  );
 })();
 
 function getNextWorker() {
@@ -576,10 +706,16 @@ async function createTransport(
 ) {
   const room = await getOrCreateNativeRoom(conversationID);
 
+  // TCP is off because the deployment only publishes the RTC port range over
+  // UDP. Leaving it on advertised ICE candidates that no client could ever
+  // reach, so every connection spent time probing a dead path before settling
+  // on UDP anyway. If clients on UDP-blocked networks become a real problem,
+  // the answer is a TURN server on 443 - which also covers symmetric NAT -
+  // rather than publishing a second 800-port range here.
   const transport = await room.router.createWebRtcTransport({
     listenIps: [{ ip: "0.0.0.0", announcedIp: process.env.SERVER_PUBLIC_IP }],
     enableUdp: true,
-    enableTcp: true,
+    enableTcp: false,
     preferUdp: true,
     enableSrtp: false,
   });
