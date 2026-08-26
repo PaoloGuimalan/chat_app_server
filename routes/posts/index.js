@@ -24,6 +24,7 @@ const {
   GetAllPostsCountInProfile,
   updateRankingScore,
   createPostScore,
+  queueContentTagging,
   ResolvePostPrivacyStatus,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
@@ -761,6 +762,17 @@ router.post(
           { id: postID, author_id: entityID },
           "fanout",
         );
+
+        // Moderation and interest tagging. Skips silently when the moderation
+        // service is offline - its scour picks the post up later - so a post
+        // never waits on it and never fails because of it. Not awaited: the
+        // response should not carry the latency of a queue publish.
+        queueContentTagging({
+          postID,
+          entityID,
+          caption: decodeToken.content.data,
+          references: finaluploadedreferences,
+        });
 
         if (decodeToken.content.isShared) {
           // CASSANDRA LOG INSERT

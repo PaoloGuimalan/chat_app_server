@@ -230,6 +230,47 @@ async function bumpLock(key) {
   return false;
 }
 
+// The moderation service (chatterloop_services/moderation_service) writes this
+// key with a 30s TTL and refreshes it every 10s, so its presence means an
+// instance is alive RIGHT NOW rather than "was started at some point" - a hard
+// kill leaves no stale key behind, it just lapses.
+const MODERATION_PRESENCE_KEY = "chatterloop:moderation_service";
+
+/**
+ * Whether the moderation service is available to receive work.
+ *
+ * Gates the content_tagging publish: when this is false the caller publishes
+ * NOTHING and the moderation service's database scour picks the content up on
+ * its next start. That is the designed path, not a degraded one - which is why
+ * skipping is safe and why this never throws.
+ *
+ * FAILS CLOSED. An unreachable Redis, or a publisher that never connected,
+ * reads as offline. The tempting alternative - assume online, let the durable
+ * queue hold the message - is wrong here: those messages would sit in a queue
+ * with no consumer, and the scour would never revisit that content because
+ * from its side the work was already handed off. Skipping loses nothing;
+ * publishing into the void loses the content.
+ *
+ * Only EXISTS is checked, never the value. The value is diagnostic (instance,
+ * version, uptime); the moment this parsed it, adding a field there would
+ * become a cross-service change.
+ */
+async function isModerationServiceOnline() {
+  if (!publisher) {
+    return false;
+  }
+
+  try {
+    return (await publisher.exists(MODERATION_PRESENCE_KEY)) === 1;
+  } catch (err) {
+    console.log(
+      "[moderation] availability check failed, treating as offline:",
+      err.message || err,
+    );
+    return false;
+  }
+}
+
 module.exports = {
   connect_redis,
   listen,
@@ -243,5 +284,7 @@ module.exports = {
   getAllParticipants,
   isUniqueNonce,
   bumpLock,
+  isModerationServiceOnline,
+  MODERATION_PRESENCE_KEY,
   activeStreams
 };

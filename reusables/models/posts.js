@@ -1,7 +1,9 @@
+const { randomUUID } = require("crypto");
 const Posts = require("../../schema/posts/posts");
 const makeid = require("../hooks/makeID");
 const pool = require("../database/postgres");
 const { publish, QUEUES } = require("../rabbitmq/workqueue");
+const { isModerationServiceOnline } = require("../redis/pubsub");
 
 const checkPostIDExisting = async (currentID) => {
   const { rows } = await pool.query(
@@ -103,11 +105,76 @@ const ResolvePostPrivacyStatus = async (entityID, requestedStatus) => {
   return isPrivate ? "connections" : "public";
 };
 
+/**
+ * Hand a new post to the moderation service for moderation and tagging.
+ *
+ * GATED ON PRESENCE. The moderation service announces itself in Redis with a
+ * short TTL; when that key is absent this publishes NOTHING and the service's
+ * database scour picks the post up on its next start. That is the designed
+ * path, not a degraded one - which is why skipping is safe, and why nothing
+ * here throws.
+ *
+ * Called AFTER the transaction commits. The moderation service reads
+ * newsfeed_post and newsfeed_postreference, so publishing from inside the
+ * transaction is a race it would usually win - same reasoning as
+ * createPostScore above.
+ *
+ * Media items are sent even though the service records only text today. The
+ * contract is settled now so enabling media there is an internal change rather
+ * than a fourth service redeploy.
+ */
+const queueContentTagging = async ({ postID, entityID, caption, references }) => {
+  if (!(await isModerationServiceOnline())) {
+    return false;
+  }
+
+  const items = [];
+
+  if (caption && String(caption).trim()) {
+    items.push({
+      target_id: String(postID),
+      content_type: "text",
+      text: String(caption),
+    });
+  }
+
+  for (const reference of references || []) {
+    // content_type is resolved HERE, from the mime we already hold, so the
+    // moderation service never has to guess from a file extension.
+    const mime = reference.referenceMediaType || "";
+    const top = String(mime).split("/")[0];
+    const contentType = ["image", "video", "audio"].includes(top) ? top : "file";
+
+    items.push({
+      target_id: String(reference.referenceID),
+      content_type: contentType,
+      url: reference.reference,
+      mime,
+    });
+  }
+
+  if (items.length === 0) {
+    return false;
+  }
+
+  return publish(QUEUES.CONTENT_TAGGING, {
+    job_id: randomUUID(),
+    source_type: "post",
+    target_id: String(postID),
+    entity_id: String(entityID),
+    // Posts are moderated, not merely contextualised.
+    strict: true,
+    created_at: new Date().toISOString(),
+    items,
+  });
+};
+
 module.exports = {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
   updateRankingScore,
   createPostScore,
+  queueContentTagging,
   ResolvePostPrivacyStatus,
   POST_PRIVACY_LEVELS,
 };

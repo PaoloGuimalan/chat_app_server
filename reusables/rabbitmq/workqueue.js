@@ -59,6 +59,13 @@ const QUEUES = {
   REMOVE_FEED_ON_UNFRIEND: "remove_feed_on_unfriend",
   // Generic: every push type shares this one queue, present and future.
   SEND_PUSH: "send_push",
+  // Consumed by chatterloop_services/moderation_service, not the Go worker.
+  // ONE ingress queue for all content: the backend hands over the whole unit
+  // and the moderation pipeline decides internally which stages it needs. The
+  // per-media queues (image_captioning, video_conversion, ...) are that
+  // service's internal business, and publishing straight to them would make
+  // every future pipeline change a change to this file too.
+  CONTENT_TAGGING: "content_tagging",
 };
 
 let channelPromise = null;
