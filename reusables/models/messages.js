@@ -6,6 +6,11 @@ const dateGetter = require("../hooks/getDate");
 const timeGetter = require("../hooks/getTime");
 const makeid = require("../hooks/makeID");
 const { MessagesTrigger, ContactListTrigger } = require("../hooks/sse");
+const { randomUUID } = require("crypto");
+// Aliased: this file already imports a `publish` from redis/pubsub, which is
+// the SSE broadcast. This one is the RabbitMQ work handover.
+const { publish: publishJob, QUEUES } = require("../rabbitmq/workqueue");
+const { isModerationServiceOnline } = require("../redis/pubsub");
 const producer = require("../rabbitmq/producer");
 const {
   MESSAGES_TRIGGER_LOOPER,
@@ -507,7 +512,107 @@ const GetRealmsJoined = async (userID) => {
   return rows.map((r) => r.realm_id);
 };
 
+// Off unless explicitly enabled - see queueMessageTagging. Compared as a
+// string because env values always are: `process.env.X` is "false", which is
+// truthy, and reading this as a bare boolean is the usual way a kill switch
+// ends up permanently on.
+const MODERATE_MESSAGE_TEXT =
+  String(process.env.MODERATE_MESSAGE_TEXT || "").toLowerCase() === "true";
+
+/**
+ * Hand one message to the moderation service for CONTEXT ONLY.
+ *
+ * `strict: false` is the whole point. A direct message is private: it is
+ * analysed so the platform understands what its content is about, and it is
+ * NEVER moderated or reported. The moderation service enforces that twice -
+ * the flag is stored on the document, and its reporting path refuses message
+ * targets outright regardless of the flag.
+ *
+ * Skipped silently when the moderation service is offline; its scour picks the
+ * message up later. Never awaited and never throws: sending a message must not
+ * wait on, or fail because of, content analysis.
+ *
+ * System messages (messageType "notif") are not sent. Those are strings this
+ * server wrote, and analysing them means analysing ourselves.
+ *
+ * Message TEXT is OFF by default: chat lines are the highest volume content
+ * on the platform and the least informative - a line is already about
+ * whatever its conversation is about - so only UPLOADS in a conversation are
+ * analysed. Uploads are unaffected by the flag.
+ *
+ * MODERATE_MESSAGE_TEXT=true turns the live half back on. It has a partner in
+ * the moderation service (MESSAGE_TEXT_ENABLED), and the two are meant to be
+ * set together: this one alone queues text the service will process but never
+ * sweep for, and that one alone means text is only ever picked up by a scour.
+ * Left as two flags rather than one because they are separate deployments,
+ * and a service that inferred its own inputs from a publisher's env would be
+ * worse than one that states them.
+ */
+const queueMessageTagging = async ({
+  messageID,
+  conversationID,
+  sender,
+  content,
+  messageType,
+}) => {
+  if (!content || messageType === "notif") {
+    return false;
+  }
+
+  if (!(await isModerationServiceOnline())) {
+    return false;
+  }
+
+  const isUrl = /^https?:\/\//i.test(String(content));
+
+  // content holds either the text or a URL, and messageType mixes bare kinds
+  // ("text", "image") with real mimes ("video/mp4"). Together they are exact:
+  // a URL with a non-text type is an upload, a URL with type "text" is a link
+  // the user pasted, and anything else is the message text itself.
+  let item;
+  if (!isUrl) {
+    if (!MODERATE_MESSAGE_TEXT) {
+      return false;
+    }
+    item = {
+      target_id: String(messageID),
+      content_type: "text",
+      text: String(content),
+    };
+  } else if (String(messageType).toLowerCase() === "text") {
+    // A shared link. Not sent: resolving it needs the SSRF-guarded
+    // link-preview service, not a blind fetch by the moderation pipeline.
+    return false;
+  } else {
+    const top = String(messageType).split("/")[0].toLowerCase();
+    if (!["image", "video", "audio"].includes(top)) {
+      // An uploaded document or archive - no analysis path for it.
+      return false;
+    }
+    item = {
+      target_id: String(messageID),
+      content_type: top,
+      url: String(content),
+      mime: String(messageType),
+    };
+  }
+
+  return publishJob(QUEUES.CONTENT_TAGGING, {
+    job_id: randomUUID(),
+    source_type: "message",
+    target_id: String(messageID),
+    // The conversation too, so "everything in this conversation" is one query.
+    foreign_ids: [String(conversationID), String(messageID)],
+    entity_id: sender ? String(sender) : null,
+    // Context only. Never moderated, never reported.
+    strict: false,
+    created_at: new Date().toISOString(),
+    items: [item],
+  });
+};
+
 module.exports = {
+  queueMessageTagging,
   GetMessageReceivers,
   AddNewMemberToContacts,
   AddNewMemberToAllMessages,

@@ -106,6 +106,7 @@ const {
   SaveConversation,
   SyncConversationLastMessage,
   normalizeConversationType,
+  queueMessageTagging,
 } = require("../../reusables/models/messages");
 const { GetServerMembers } = require("../../reusables/models/server");
 const {
@@ -1514,6 +1515,16 @@ router.post(
       newMessage
         .save()
         .then(async () => {
+          // Context only - see queueMessageTagging. Never awaited: sending a
+          // message must not wait on content analysis.
+          queueMessageTagging({
+            messageID,
+            conversationID,
+            sender,
+            content: sanitizedContent,
+            messageType,
+          });
+
           await ChatHistory.updateMany(
             {
               conversationID: conversationID,
@@ -3126,6 +3137,15 @@ const saveFileMessage = async (
   await newMessage
     .save()
     .then(async () => {
+      // Context only - see queueMessageTagging.
+      queueMessageTagging({
+        messageID,
+        conversationID,
+        sender: entityID,
+        content,
+        messageType,
+      });
+
       await ChatHistory.updateMany(
         {
           conversationID: conversationID,
