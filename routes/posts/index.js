@@ -11,6 +11,7 @@ const {
 const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
+const { savePostHashtags } = require("../../reusables/hooks/hashtags");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const {
   requiresPermission,
@@ -731,6 +732,19 @@ router.post(
         // means ranking_score 0.0, which would bury a brand-new post at the
         // bottom of every ranked feed with no way to recover - nobody sees it,
         // so nobody interacts, so nothing ever creates the row.
+
+        // Hashtags in the caption become interests, linked to this post.
+        //
+        // Inside the transaction, unlike the moderation publish below: these
+        // are rows about the post, so they belong to the same commit and must
+        // vanish with it if it rolls back. Cheap enough to sit here - a regex
+        // and one upsert per distinct tag, no network call and no model.
+        //
+        // Links only. All SCORING (affinity, trending) stays with the
+        // moderation service's interest sink, which is its single writer and
+        // reaches this post either by the queue publish below or by its own
+        // scour - exactly once either way.
+        await savePostHashtags(client, postID, decodeToken.content.data);
 
         // POST SCORE TABLE SAVE
         //
