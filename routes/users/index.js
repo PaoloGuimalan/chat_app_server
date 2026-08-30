@@ -947,16 +947,26 @@ const enrichNotificationSenders = async (itemsPerSection) => {
   if (uniqueIDs.length === 0) return new Map();
 
   const { rows } = await pool.query(
+    // BOTS are the third entity kind, and the moderation bot is the first
+    // sender that is one. Without this join a bot notification came back with
+    // a null handle, a null display_name and a null profile - the row rendered
+    // nameless and avatarless, which is exactly what "Content removed" must
+    // not look like.
+    //
+    // is_verified is deliberately NOT forced true for bots. A system bot is
+    // not a verified human or page, and borrowing that badge would say
+    // something the badge does not mean.
     `SELECT
        e.id AS entity_id,
        e.type,
-       COALESCE(u.username, r.slug) AS handle,
-       COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), r.name) AS display_name,
-       COALESCE(u.profile, r.profile) AS profile,
+       COALESCE(u.username, r.slug, b.handle) AS handle,
+       COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), r.name, b.name) AS display_name,
+       COALESCE(u.profile, r.profile, b.profile) AS profile,
        COALESCE(u.is_badged, r.is_verified, false) AS is_verified
      FROM entity_entity e
      LEFT JOIN user_account u ON u.entity_id = e.id AND e.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'
+     LEFT JOIN bot_bot b ON b.entity_id = e.id AND e.type = 'bot'
      WHERE e.id = ANY($1);`,
     [uniqueIDs],
   );

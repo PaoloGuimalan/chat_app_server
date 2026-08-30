@@ -84,6 +84,17 @@ const ROUTES = {
     android: (p) => (p.serverId ? `/server/${p.serverId}` : null),
     ios: (p) => (p.serverId ? `/server/${p.serverId}` : null),
   },
+  // "Your content was removed, here is why."
+  //
+  // Points at the MODERATION record, never at the post. The post is
+  // soft-deleted by the time this notification exists, so /post/<id> would open
+  // a page that correctly refuses to render it - the moderation detail screen
+  // is the one surface that shows removed content to its owner.
+  moderation: {
+    web: (p) => (p.moderationId ? `/moderation/${p.moderationId}` : null),
+    android: (p) => (p.moderationId ? `/moderation/${p.moderationId}` : null),
+    ios: (p) => (p.moderationId ? `/moderation/${p.moderationId}` : null),
+  },
 };
 
 /// One redirect entry per platform. ALWAYS all three, route null where that
@@ -224,6 +235,9 @@ const REDIRECT_KIND_BY_TYPE = {
   // resolves reaction/comment -> post. Until then they render as plain rows.
   tag_notification: "post",
   shared_post_notification: "post",
+  // Written by moderation_service. Listed here as well as carrying a target,
+  // so a row survives the target being dropped by some future writer.
+  moderation_action: "moderation",
 };
 
 /// The destination kind for a notification.
@@ -283,6 +297,11 @@ const paramsFor = (notification, sender) => {
       return { slug: target.supportingID || null, anchor };
     case "server":
       return { serverId: target.supportingID || null, anchor };
+    case "moderation":
+      // No referenceID fallback: this type is written only by the moderation
+      // service, which always supplies a target, and referenceID happens to
+      // carry the same id only by coincidence of that writer's choice.
+      return { moderationId: target.supportingID || null, anchor };
     default:
       return {};
   }
