@@ -855,8 +855,13 @@ const resolveNotificationIsRead = (params) => {
   if (isSystemAudienceSelector(params.toUserID)) {
     return true;
   }
-  // Respect an explicit flag when the caller set one; default to unread.
-  return params.isRead === undefined ? false : params.isRead;
+  // Addressed to ONE entity, so it is personal - and a personal notice starts
+  // unread, full stop. Derived rather than taken from the caller: an
+  // `isRead: true` on a direct notification means the recipient is never told
+  // about something that concerns only them, which is a silent failure and
+  // exactly the kind a default gets wrong. Broadcasts are the only exception,
+  // and they are handled above.
+  return false;
 };
 
 /**

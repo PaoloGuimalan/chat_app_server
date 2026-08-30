@@ -235,9 +235,6 @@ const REDIRECT_KIND_BY_TYPE = {
   // resolves reaction/comment -> post. Until then they render as plain rows.
   tag_notification: "post",
   shared_post_notification: "post",
-  // Written by moderation_service. Listed here as well as carrying a target,
-  // so a row survives the target being dropped by some future writer.
-  moderation_action: "moderation",
 };
 
 /// The destination kind for a notification.
