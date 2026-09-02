@@ -370,14 +370,14 @@ router.get(
           `SELECT uc.*,
              p.id AS "entity_id",
              p.id AS "entityID",
-             COALESCE(u.id, r.id) AS id,
-             COALESCE(u.username, r.slug, r.realm_id) AS "userID",
-             COALESCE(u.username, r.slug, r.realm_id) AS "username",
-             COALESCE(u.first_name, r.name) AS "first_name",
+             COALESCE(u.id, r.id, b.id) AS id,
+             COALESCE(u.username, r.slug, b.handle, r.realm_id) AS "userID",
+             COALESCE(u.username, r.slug, b.handle, r.realm_id) AS "username",
+             COALESCE(u.first_name, r.name, b.name) AS "first_name",
              COALESCE(u.middle_name, '') AS "middle_name",
              COALESCE(u.last_name, '') AS "last_name",
-             COALESCE(u.profile, r.profile, 'none') AS "profile",
-             COALESCE(u.is_active, r.is_active, TRUE) AS "isActivated",
+             COALESCE(u.profile, r.profile, b.profile, 'none') AS "profile",
+             COALESCE(u.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
              COALESCE(u.is_verified, FALSE) AS "isVerified",
              -- NOT the same thing as "isVerified" above, which is EMAIL
              -- verification on the account. This is the display BADGE:
@@ -389,6 +389,7 @@ router.get(
            JOIN entity_entity p ON p.id = uc.involved_entity_id
            LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
            LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+           LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
            WHERE uc.connection_id = $1;`,
           [conversationID],
         );
@@ -455,20 +456,21 @@ router.get(
               -- entityID maps to the entity table ID column directly
               p.id AS "entityID",
               -- userID acts as the user_account username or community_realm slug
-              COALESCE(u.username, r.slug) AS "userID",
-              COALESCE(u.username, r.slug) AS "username",
+              COALESCE(u.username, r.slug, b.handle) AS "userID",
+              COALESCE(u.username, r.slug, b.handle) AS "username",
               -- first_name pulls the real first name, or falls back to the community_realm name
-              COALESCE(u.first_name, r.name) AS "first_name",
+              COALESCE(u.first_name, r.name, b.name) AS "first_name",
               -- middle_name and last_name are empty strings for realms
               COALESCE(u.middle_name, '') AS "middle_name",
               COALESCE(u.last_name, '') AS "last_name",
-              COALESCE(u.profile, r.profile, 'none') AS "profile",
+              COALESCE(u.profile, r.profile, b.profile, 'none') AS "profile",
               -- Maps activation and verification states across tables
-              COALESCE(u.is_active, r.is_active, TRUE) AS "isActivated",
+              COALESCE(u.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
               COALESCE(u.is_verified, FALSE) AS "isVerified"
             FROM entity_entity p
             LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+            LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
             WHERE p.id = ANY($1)`,
             [participantIds],
           );
@@ -693,14 +695,17 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
 
     await isRealmMember(conversationID, entityID);
 
-    // Anchored on entity_entity with BOTH detail tables left-joined, the same
+    // Anchored on entity_entity with ALL THREE detail tables left-joined, the same
     // pattern as /s/addnewmembertoserver and createRealmReusable.
     //
     // It used to select FROM user_account, which has no row for a page - so a
     // page picked in the member picker was silently dropped and the request
     // still reported success. Membership is entity-based
     // (community_member.entity_id FKs entity_entity), so a page can be a member
-    // of a group or channel exactly as a person can.
+    // of a group or channel exactly as a person can - and so can a BOT, which
+    // is the same omission one entity kind later: bot_bot has no row in either
+    // of the other two tables, so a bot picked in the member picker was
+    // dropped exactly as a page once was.
     //
     // The alreadyMember EXISTS was also comparing cm.entity_id against
     // ua.id - an ACCOUNT id against an ENTITY id, which never matches. So it
@@ -710,9 +715,9 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     const { rows } = await pool.query(
       `
         SELECT
-          COALESCE(u.id, r.id) AS id,
+          COALESCE(u.id, r.id, b.id) AS id,
           p.id AS "entityID",
-          COALESCE(u.username, r.slug) AS "userID",
+          COALESCE(u.username, r.slug, b.handle) AS "userID",
           EXISTS (
             SELECT 1
             FROM community_member cm
@@ -722,6 +727,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
         FROM entity_entity p
         LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
         WHERE p.id = ANY($1);
       `,
       [memberstoadd.map((mp) => mp.entityID), conversationID],
@@ -1402,12 +1408,12 @@ router.get("/conversations", jwtchecker, async (req, res) => {
         SELECT
           p.id AS entity_id,
           p.type AS type,
-          COALESCE(u.id, r.id) AS id,
-          COALESCE(u.username, r.slug) AS username,
+          COALESCE(u.id, r.id, b.id) AS id,
+          COALESCE(u.username, r.slug, b.handle) AS username,
           FALSE AS privacy,
           -- Fallback mapping: uses concatenated user names or the realm name
           COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
-          COALESCE(u.profile, r.profile, 'none') AS profile,
+          COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
           -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
           -- that user_account.is_verified is EMAIL verification and a wholly
           -- different thing - reading it here would badge every confirmed
@@ -1420,6 +1426,7 @@ router.get("/conversations", jwtchecker, async (req, res) => {
         FROM entity_entity p
         LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
         WHERE p.id = ANY($1::TEXT[]);
       `,
       [receiversEntity],
@@ -1679,12 +1686,12 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
         SELECT
           p.id AS entity_id,
           p.type AS type,
-          COALESCE(u.id, r.id) AS id,
-          COALESCE(u.username, r.slug) AS username,
+          COALESCE(u.id, r.id, b.id) AS id,
+          COALESCE(u.username, r.slug, b.handle) AS username,
           FALSE AS privacy,
           -- Fallback mapping: uses concatenated user names or the realm name
           COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
-          COALESCE(u.profile, r.profile, 'none') AS profile,
+          COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
           -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
           -- that user_account.is_verified is EMAIL verification and a wholly
           -- different thing - reading it here would badge every confirmed
@@ -1697,6 +1704,7 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
         FROM entity_entity p
         LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+        LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
         WHERE p.id = ANY($1::TEXT[]);
       `,
       [recipients],

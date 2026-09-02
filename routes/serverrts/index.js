@@ -229,24 +229,25 @@ router.get(
           // receivers can be personal accounts (bulk-add-by-admin) or a
           // switched-to realm/page entity (self-join) - user_account only
           // has rows for the former, so anchor on entity_entity and
-          // left-join both detail tables (same pattern as GetAllReceivers
+          // left-join all three detail tables (same pattern as GetAllReceivers
           // in reusables/models/messages.js) rather than filtering realm
           // entities out entirely.
           const { rows } = await pool.query(
             `
           SELECT
             p.id AS "entityID",
-            COALESCE(u.id, r.id) AS "_id",
-            COALESCE(u.username, r.slug) AS "userID",
+            COALESCE(u.id, r.id, b.id) AS "_id",
+            COALESCE(u.username, r.slug, b.handle) AS "userID",
             json_build_object(
-              'firstName', COALESCE(u.first_name, r.name),
+              'firstName', COALESCE(u.first_name, r.name, b.name),
               'middleName', COALESCE(u.middle_name, 'N/A'),
               'lastName', COALESCE(u.last_name, '')
             ) AS fullname,
-            COALESCE(u.profile, r.profile) AS profile
+            COALESCE(u.profile, r.profile, b.profile) AS profile
           FROM entity_entity p
           LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
           LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+          LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
           WHERE p.id = ANY($1)`,
             [receivers_list],
           );
@@ -257,19 +258,20 @@ router.get(
             `
             SELECT
                 p.id AS "entityID",
-                COALESCE(u.id, r.id) AS "_id",
-                COALESCE(u.username, r.slug) AS "userID",
+                COALESCE(u.id, r.id, b.id) AS "_id",
+                COALESCE(u.username, r.slug, b.handle) AS "userID",
                 json_build_object(
-                  'firstName', COALESCE(u.first_name, r.name),
+                  'firstName', COALESCE(u.first_name, r.name, b.name),
                   'middleName', COALESCE(u.middle_name, 'N/A'),
                   'lastName', COALESCE(u.last_name, '')
                 ) AS fullname,
-                COALESCE(u.profile, r.profile) AS profile
+                COALESCE(u.profile, r.profile, b.profile) AS profile
             FROM community_member cm
             JOIN community_realm cr ON cm.realm_id = cr.realm_id
             JOIN entity_entity p ON cm.entity_id = p.id
             LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+            LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
             WHERE cr.realm_id = $1 AND cr.parent_id = $2;`,
             [conversationID, parent_realm],
           );
@@ -640,7 +642,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
       `
           SELECT
             p.id AS "entityID",
-            COALESCE(u.username, r.slug) AS "userID",
+            COALESCE(u.username, r.slug, b.handle) AS "userID",
             EXISTS (
               SELECT 1
               FROM community_member cm
@@ -650,6 +652,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
           FROM entity_entity p
           LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
           LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+          LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
           WHERE p.id = ANY($1);
         `,
       [memberstoadd.map((mp) => mp.entityID), serverID],

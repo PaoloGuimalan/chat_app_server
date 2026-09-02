@@ -163,6 +163,17 @@ const GetSenderDetails = async (entity_id) => {
             NULLIF(NULLIF(profile, 'none'), 'N/A') AS profile
        FROM community_realm
       WHERE entity_id = $1
+      UNION ALL
+     -- A bot is the third concrete kind an Entity can back (bot/models.py in
+     -- the Django repo). Without this arm a bot's own message renders with a
+     -- null display name and falls back to a raw entity UUID - the exact
+     -- symptom the bot app was created to fix, reappearing on the send path.
+     SELECT 'bot' AS entity_type,
+            handle,
+            name AS display_name,
+            NULLIF(profile, 'none') AS profile
+       FROM bot_bot
+      WHERE entity_id = $1
       LIMIT 1;`,
     [entity_id],
   );
@@ -197,6 +208,13 @@ const GetEntityHandles = async (entity_ids = []) => {
             slug AS handle,
             name AS display_name
        FROM community_realm
+      WHERE entity_id = ANY($1::text[])
+      UNION ALL
+     SELECT entity_id,
+            'bot' AS entity_type,
+            handle,
+            name AS display_name
+       FROM bot_bot
       WHERE entity_id = ANY($1::text[]);`,
     [ids],
   );
@@ -343,7 +361,8 @@ const GetUsersFromConnections = async (connectionIDs) => {
 
 // Batched GetAllReceivers: resolves the participants of MANY conversations at
 // once, keyed per conversation. Mirrors GetAllReceivers' entity-generic
-// resolution - anchor on entity_entity and LEFT JOIN both user_account and
+// resolution - anchor on entity_entity and LEFT JOIN all three detail
+// tables (user_account, community_realm, bot_bot) rather than
 // community_realm so a user<->realm (page) counterpart resolves instead of
 // being dropped by a user_account-only lookup - and its participant sources:
 //   1. entity_connection      - conversations backed by a connection.
@@ -378,9 +397,9 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
         combined.conversation_id AS "conversationID",
         jsonb_agg(
           jsonb_build_object(
-            '_id', COALESCE(u.id, r.id),
+            '_id', COALESCE(u.id, r.id, b.id),
             'entityID', p.id,
-            'userID', COALESCE(u.username, r.slug),
+            'userID', COALESCE(u.username, r.slug, b.handle),
             'fullname', CASE
               WHEN p.type = 'realm' THEN jsonb_build_object(
                 'firstName', r.name,
@@ -393,7 +412,7 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
                 'lastName', u.last_name
               )
             END,
-            'profile', COALESCE(u.profile, r.profile, 'none')
+            'profile', COALESCE(u.profile, r.profile, b.profile, 'none')
           )
         ) AS users
       FROM (
@@ -415,6 +434,7 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
       JOIN entity_entity p ON p.id = combined.entity_id
       LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
       LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+      LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
       GROUP BY combined.conversation_id;
     `,
     [connectionIDs, participantConvIDs, participantEntityIDs],

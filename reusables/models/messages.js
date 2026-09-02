@@ -355,20 +355,28 @@ const SyncConversationParticipants = async (conversationID) => {
 };
 
 const GetAllReceivers = async (contactID) => {
+  // BOTS are the third entity kind and are resolved here like any other
+  // participant. This is the linchpin for bots in chat: `username` is what
+  // /sendMessage builds its mention map from, so without the bot_bot join a
+  // bot added to a group received messages but could never be @mentioned in
+  // one - its handle simply was not in the map to match against.
+  //
   // involved_entity_id/community_member.entity_id can be a personal account
   // or a switched-to realm/page entity - user_account only has rows for the
-  // former, so anchor on entity_entity and left-join both detail tables
+  // former (and neither has a row for a bot), so anchor on entity_entity
+  // and left-join all three detail tables
   // (same pattern as the chat-history fallback below) rather than filtering
   // realm entities out entirely.
   const { rows: rows_connections } = await pool.query(
     `SELECT
        p.id AS entity_id,
-       COALESCE(u.id, r.id) AS id,
-       COALESCE(u.username, r.slug) AS username
+       COALESCE(u.id, r.id, b.id) AS id,
+       COALESCE(u.username, r.slug, b.handle) AS username
      FROM entity_connection uc
      JOIN entity_entity p ON p.id = uc.involved_entity_id
      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
      WHERE uc.connection_id = $1;`,
     [contactID],
   );
@@ -386,12 +394,13 @@ const GetAllReceivers = async (contactID) => {
   const { rows: rows_members } = await pool.query(
     `SELECT
        p.id AS entity_id,
-       COALESCE(u.id, r.id) AS id,
-       COALESCE(u.username, r.slug) AS username
+       COALESCE(u.id, r.id, b.id) AS id,
+       COALESCE(u.username, r.slug, b.handle) AS username
      FROM community_member uc
      JOIN entity_entity p ON p.id = uc.entity_id
      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
      WHERE uc.realm_id = $1;`,
     [contactID],
   );
@@ -413,11 +422,12 @@ const GetAllReceivers = async (contactID) => {
   const { rows: receiversFromChatHistory } = await pool.query(
     `SELECT 
        p.id AS entity_id,
-       COALESCE(u.id, r.id) AS id,
-       COALESCE(u.username, r.slug) AS username
+       COALESCE(u.id, r.id, b.id) AS id,
+       COALESCE(u.username, r.slug, b.handle) AS username
      FROM entity_entity p
      LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+     LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
      WHERE p.id = ANY($1)`,
     [conversation.participant_ids ?? []],
   );

@@ -2461,14 +2461,15 @@ const createRealmReusable = async (
     const { rows } = await client.query(
       `SELECT
          p.id AS entity_id,
-         COALESCE(u.id, r.id) AS id,
+         COALESCE(u.id, r.id, b.id) AS id,
          -- realm_id as the last resort: slug is nullable, and a slugless
          -- realm creating a group would otherwise put NULL in the system
          -- message ("NULL created the group chat").
-         COALESCE(u.username, r.slug, r.realm_id) AS username
+         COALESCE(u.username, r.slug, b.handle, r.realm_id) AS username
        FROM entity_entity p
        LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
        LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
+       LEFT JOIN bot_bot b ON b.entity_id = p.id AND p.type = 'bot'
        WHERE p.id = ANY($1)`,
       [allReceivers],
     );
