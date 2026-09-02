@@ -1,1 +1,26 @@
-/node_modules
+# Reinstalled inside the image; copying the host's would defeat the cached
+# dependency layer and can carry host-built native binaries.
+node_modules
+
+# Secrets. The image must not carry these - compose and the deployment
+# environment supply them at runtime, which is why `COPY .env` stays commented
+# out in the Dockerfile.
+.env
+*.env
+!.env.example
+
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+.claude
+
+*.log
+npm-debug.log*
+coverage
+.DS_Store
+
+# NOT ignored, deliberately: secure-connect-chatterloop.zip is read at runtime
+# by reusables/database/cassandra.js (secureConnectBundle) and must ship in the
+# image.
