@@ -212,6 +212,14 @@ function formatToDesiredStructure(input) {
       profile: u.profile,
       isActivated: u.isActivated,
       isVerified: u.isVerified,
+      // This is a WHITELIST, so a field the query selects but this omits is
+      // silently dropped - which is what happened to both of these. The
+      // member lists rendered the verified badge (in the list above) but no
+      // page flag and no bot glyph, because the values never reached the
+      // client at all. Same payload feeds web's ConversationInfoModal, the
+      // composer's mention list, and mobile's conversation info screen.
+      entityType: u.entityType,
+      realmType: u.realmType,
     })),
     conversationfiles: [],
   };

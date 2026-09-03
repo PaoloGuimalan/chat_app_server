@@ -406,13 +406,28 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
                 'middleName', '',
                 'lastName', ''
               )
+              -- bot_bot was already joined for the id/handle/profile above,
+              -- but not for the NAME - so a bot fell to the ELSE, where every
+              -- u.* is null. The archives row then rendered a literal "null":
+              -- the clients build the middle name through a template literal,
+              -- which stringifies it. Same failure the member lists had.
+              WHEN p.type = 'bot' THEN jsonb_build_object(
+                'firstName', b.name,
+                'middleName', 'N/A',
+                'lastName', ''
+              )
               ELSE jsonb_build_object(
                 'firstName', u.first_name,
                 'middleName', u.middle_name,
                 'lastName', u.last_name
               )
             END,
-            'profile', COALESCE(u.profile, r.profile, b.profile, 'none')
+            'profile', COALESCE(u.profile, r.profile, b.profile, 'none'),
+            -- Lets the archives row mark a bot as one, the same as every
+            -- other list that shows a counterpart - and a page as a page,
+            -- which it also could not do.
+            'entityType', p.type,
+            'realmType', r.type
           )
         ) AS users
       FROM (
