@@ -427,7 +427,14 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
             -- other list that shows a counterpart - and a page as a page,
             -- which it also could not do.
             'entityType', p.type,
-            'realmType', r.type
+            'realmType', r.type,
+            -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. A
+            -- bot never carries one - it means a verified human or page - so
+            -- the COALESCE falls through to FALSE rather than reading a bot
+            -- column (there is none). This query never selected either
+            -- column before, so the archives row could not show a badge for
+            -- ANY counterpart, not just a bot or a page.
+            'isVerified', COALESCE(u.is_badged, r.is_verified, FALSE)
           )
         ) AS users
       FROM (
