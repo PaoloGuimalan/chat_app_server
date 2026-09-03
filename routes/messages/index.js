@@ -290,21 +290,35 @@ async function getRealmWithUsers(realmId, entityID) {
             AND cm_member.realm_id = cr.realm_id
         )
       ),
-      -- Members are ENTITIES: a page can be a member of a group/channel.
+      -- Members are ENTITIES: a page OR A BOT can be a member of a
+      -- group/channel.
+      --
       -- The FILTER used to be (WHERE ua.id IS NOT NULL), which dropped every
       -- realm member because the user_account join is NULL for them - so
       -- pages never showed in the conversation's member list. Now filtered on
       -- the entity row instead, with a realm's name/slug mapped onto the same
       -- user-shaped keys the clients read ('N/A' is the middle-name sentinel
       -- they skip).
+      --
+      -- THE BOT BRANCH IS NOT COSMETIC. Without the bot_bot join a bot member
+      -- fell through to the ELSE below, where ua is NULL - so firstName,
+      -- middleName and lastName all came back null. The clients render the
+      -- middle name through a template literal, which stringifies null, and
+      -- the member list showed a row reading literally "null". Same failure
+      -- the paragraph above describes for pages, third entity kind.
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
-          '_id', COALESCE(ua.id, mr.id),
+          '_id', COALESCE(ua.id, mr.id, mb.id),
           'entityID', p.id,
-          'userID', COALESCE(ua.username, mr.slug, mr.realm_id),
+          'userID', COALESCE(ua.username, mr.slug, mb.handle, mr.realm_id),
           'fullname', CASE
             WHEN p.type = 'realm' THEN jsonb_build_object(
               'firstName', mr.name,
+              'middleName', 'N/A',
+              'lastName', ''
+            )
+            WHEN p.type = 'bot' THEN jsonb_build_object(
+              'firstName', mb.name,
               'middleName', 'N/A',
               'lastName', ''
             )
@@ -314,9 +328,16 @@ async function getRealmWithUsers(realmId, entityID) {
               'lastName', ua.last_name
             )
           END,
-          'profile', COALESCE(ua.profile, mr.profile, 'none'),
-          'isActivated', COALESCE(ua.is_active, mr.is_active, TRUE),
+          'profile', COALESCE(ua.profile, mr.profile, mb.profile, 'none'),
+          'isActivated', COALESCE(ua.is_active, mr.is_active, mb.is_active, TRUE),
+          -- A bot never carries the badge: it means a verified human or page,
+          -- so the COALESCE falls through to FALSE rather than reading a bot
+          -- column (there is none).
           'isVerified', COALESCE(ua.is_badged, mr.is_verified, FALSE),
+          -- Lets a client route a member tap correctly - a bot has its own
+          -- profile screen, not the /:handle one.
+          'entityType', p.type,
+          'realmType', mr.type,
           '__v', 0
         )
       ) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb)
@@ -326,6 +347,7 @@ async function getRealmWithUsers(realmId, entityID) {
     LEFT JOIN entity_entity p ON p.id = cm.entity_id
     LEFT JOIN user_account ua ON ua.entity_id = p.id AND p.type = 'user'
     LEFT JOIN community_realm mr ON mr.entity_id = p.id AND p.type = 'realm'
+    LEFT JOIN bot_bot mb ON mb.entity_id = p.id AND p.type = 'bot'
     WHERE cr.realm_id = $1
     GROUP BY cr.id;
   `;
@@ -466,7 +488,19 @@ router.get(
               COALESCE(u.profile, r.profile, b.profile, 'none') AS "profile",
               -- Maps activation and verification states across tables
               COALESCE(u.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
-              COALESCE(u.is_verified, FALSE) AS "isVerified"
+              COALESCE(u.is_verified, FALSE) AS "isVerified",
+              -- NOT "isVerified" above, which is EMAIL verification on the
+              -- account. This is the display BADGE: is_badged for an account,
+              -- is_verified for a realm, never set for a bot.
+              COALESCE(u.is_badged, r.is_verified, FALSE) AS "is_verified",
+              -- The kind columns the connection-backed query above already
+              -- selects. This path is the one a conversation with a BOT takes
+              -- - a bot can't be a contact, so there is no entity_connection
+              -- row for it - and without these the counterpart arrived with no
+              -- entityType at all, so nothing downstream could tell it was a
+              -- bot. formatConnectionData reads both by name.
+              p.type AS "entity_type",
+              r.type AS "realm_type"
             FROM entity_entity p
             LEFT JOIN user_account u ON u.entity_id = p.id AND p.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = p.id AND p.type = 'realm'
@@ -1047,10 +1081,18 @@ router.get("/archives", jwtchecker, async (req, res) => {
                         'date', '',
                         'time', ''
                       ),
+                      -- Entity-generic, matching serverrts. The INNER JOIN
+                      -- this replaces dropped page and bot members from a
+                      -- parent server's roster without any error.
                       'members', (
-                        SELECT COALESCE(json_agg(json_build_object('userID', a.username)), '[]'::json)
+                        SELECT COALESCE(json_agg(json_build_object(
+                          'userID', COALESCE(a.username, amr.slug, ab.handle,
+                                             amr.realm_id)
+                        )), '[]'::json)
                         FROM community_member m
-                        JOIN user_account a ON m.entity_id = a.entity_id
+                        LEFT JOIN user_account a ON m.entity_id = a.entity_id
+                        LEFT JOIN community_realm amr ON m.entity_id = amr.entity_id
+                        LEFT JOIN bot_bot ab ON m.entity_id = ab.entity_id
                         WHERE m.realm_id = pr.realm_id
                       ),
                       'createdBy', parent_created_by.username,
@@ -1411,8 +1453,17 @@ router.get("/conversations", jwtchecker, async (req, res) => {
           COALESCE(u.id, r.id, b.id) AS id,
           COALESCE(u.username, r.slug, b.handle) AS username,
           FALSE AS privacy,
-          -- Fallback mapping: uses concatenated user names or the realm name
-          COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
+          -- Fallback mapping: concatenated user names, the realm name, or the
+          -- bot's. The bot arm was missing while bot_bot was already joined
+          -- for id/username/profile, so a DM with a bot arrived with a null
+          -- display_name - a nameless conversation header, and a crash in the
+          -- avatar's initials().
+          COALESCE(
+            NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+            r.name,
+            b.name,
+            b.handle
+          ) AS display_name,
           COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
           -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
           -- that user_account.is_verified is EMAIL verification and a wholly
@@ -1689,8 +1740,17 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
           COALESCE(u.id, r.id, b.id) AS id,
           COALESCE(u.username, r.slug, b.handle) AS username,
           FALSE AS privacy,
-          -- Fallback mapping: uses concatenated user names or the realm name
-          COALESCE(TRIM(u.first_name || ' ' || u.last_name), r.name) AS display_name,
+          -- Fallback mapping: concatenated user names, the realm name, or the
+          -- bot's. The bot arm was missing while bot_bot was already joined
+          -- for id/username/profile, so a DM with a bot arrived with a null
+          -- display_name - a nameless conversation header, and a crash in the
+          -- avatar's initials().
+          COALESCE(
+            NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+            r.name,
+            b.name,
+            b.handle
+          ) AS display_name,
           COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
           -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
           -- that user_account.is_verified is EMAIL verification and a wholly

@@ -70,7 +70,7 @@ const GetServerDetails = async (serverID) => {
 
 /**
  * Members of a realm/server. Entity-generic: community_member.entity_id can be
- * a person OR a page.
+ * a person, a page OR a bot.
  *
  * entityID is taken from community_member itself, never from the joined detail
  * table. It used to be `pua.entity_id`, which is NULL for a realm member under
@@ -79,18 +79,29 @@ const GetServerDetails = async (serverID) => {
  * either skipped it or inserted a null. A realm's name/slug now fill the same
  * display fields a user's names do, matching how the rest of the stack maps
  * realms onto user-shaped keys.
+ *
+ * BOTS ARE THE THIRD KIND, and they were missing here while POST
+ * /m/addnewmember has always been able to add one - it left-joins bot_bot and
+ * inserts an ordinary community_member row. So a bot could join a realm and
+ * then appear in its member list as exactly the row the paragraph above
+ * describes: null id, no name, no avatar. Same bug, third entity kind.
  */
 const GetServerMembers = async (serverID, withDetails) => {
   if (withDetails) {
     const { rows } = await pool.query(
       `SELECT
-       COALESCE(pua.id, pr.id) AS _id,
+       COALESCE(pua.id, pr.id, pb.id) AS _id,
        cr.entity_id AS "entityID",
-       COALESCE(pua.id, pr.id) AS "userID",
-       COALESCE(pua.username, pr.slug, pr.realm_id) AS username,
+       COALESCE(pua.id, pr.id, pb.id) AS "userID",
+       COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username,
        CASE
         WHEN pr.id IS NOT NULL THEN json_build_object(
          'firstName', pr.name,
+         'middleName', 'N/A',
+         'lastName', ''
+        )
+        WHEN pb.id IS NOT NULL THEN json_build_object(
+         'firstName', pb.name,
          'middleName', 'N/A',
          'lastName', ''
         )
@@ -100,12 +111,23 @@ const GetServerMembers = async (serverID, withDetails) => {
          'lastName', pua.last_name
         )
        END AS fullname,
-       COALESCE(pua.profile, pr.profile, 'none') AS profile,
-       COALESCE(pua.is_active, pr.is_active, TRUE) AS "isActivated",
-       COALESCE(pua.is_verified, pr.is_verified, FALSE) AS "isVerified"
+       COALESCE(pua.profile, pr.profile, pb.profile, 'none') AS profile,
+       COALESCE(pua.is_active, pr.is_active, pb.is_active, TRUE) AS "isActivated",
+       -- Bots never carry the badge: it means a verified human or page, and
+       -- lending it to a bot would say something it does not mean. FALSE is
+       -- the literal here rather than a pb column because bot_bot has none.
+       COALESCE(pua.is_verified, pr.is_verified, FALSE) AS "isVerified",
+       -- Lets a client tell the three apart without inferring it from which
+       -- display fields happen to be filled.
+       CASE
+        WHEN pb.id IS NOT NULL THEN 'bot'
+        WHEN pr.id IS NOT NULL THEN 'realm'
+        ELSE 'user'
+       END AS "entityType"
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        LEFT JOIN community_realm pr ON cr.entity_id = pr.entity_id
+       LEFT JOIN bot_bot pb ON cr.entity_id = pb.entity_id
        WHERE cr.realm_id = $1;`,
       [serverID],
     );
@@ -114,13 +136,14 @@ const GetServerMembers = async (serverID, withDetails) => {
   } else {
     const { rows } = await pool.query(
       `SELECT
-       COALESCE(pua.id, pr.id) AS _id,
+       COALESCE(pua.id, pr.id, pb.id) AS _id,
        cr.entity_id AS "entityID",
-       COALESCE(pua.id, pr.id) AS "userID",
-       COALESCE(pua.username, pr.slug, pr.realm_id) AS username
+       COALESCE(pua.id, pr.id, pb.id) AS "userID",
+       COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username
        FROM community_member cr
        LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        LEFT JOIN community_realm pr ON cr.entity_id = pr.entity_id
+       LEFT JOIN bot_bot pb ON cr.entity_id = pb.entity_id
        WHERE cr.realm_id = $1;`,
       [serverID],
     );

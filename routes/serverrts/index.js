@@ -107,7 +107,7 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-    `
+      `
     SELECT 
         cr.id,
         cr.entity_id,
@@ -132,11 +132,12 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
         -- Same shape as the sibling queries below, which already COALESCE.
         COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
-          'userID', COALESCE(ua.username, mr.slug, mr.realm_id)
+          'userID', COALESCE(ua.username, mr.slug, mb.handle, mr.realm_id)
         ))
         FROM community_member cm2
         LEFT JOIN user_account ua ON cm2.entity_id = ua.entity_id
         LEFT JOIN community_realm mr ON cm2.entity_id = mr.entity_id
+        LEFT JOIN bot_bot mb ON cm2.entity_id = mb.entity_id
         WHERE cm2.realm_id = cr.realm_id
         ), '[]'::jsonb) AS members
     FROM community_realm cr
@@ -334,12 +335,20 @@ router.get(
               'date', '',
               'time', ''
             ),
+            -- Entity-generic, matching the sibling query above. This was an
+            -- INNER JOIN to user_account, which dropped every member that is
+            -- not a person: a PAGE (community_member.entity_id can be a realm)
+            -- and now a BOT. The row simply vanished from the roster rather
+            -- than rendering wrong, which is why it went unnoticed.
             'members', COALESCE((
               SELECT jsonb_agg(jsonb_build_object(
-                'userID', cm_username.username
+                'userID', COALESCE(cm_ua.username, cm_mr.slug, cm_mb.handle,
+                                   cm_mr.realm_id)
               ))
               FROM community_member cm
-              JOIN user_account cm_username ON cm.entity_id = cm_username.entity_id
+              LEFT JOIN user_account cm_ua ON cm.entity_id = cm_ua.entity_id
+              LEFT JOIN community_realm cm_mr ON cm.entity_id = cm_mr.entity_id
+              LEFT JOIN bot_bot cm_mb ON cm.entity_id = cm_mb.entity_id
               WHERE cm.realm_id = pcr.realm_id
             ), '[]'::jsonb),
             'createdBy', pua.username,
@@ -415,9 +424,10 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     );
 
     if (row.length === 0) {
-      res
-        .status(401)
-        .send({ status: false, message: "You do not have access to this realm" });
+      res.status(401).send({
+        status: false,
+        message: "You do not have access to this realm",
+      });
       return;
     }
   }
@@ -440,12 +450,17 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         'date', '',
         'time', ''
       ),
+      -- Entity-generic; see the sibling query above. An INNER JOIN here
+      -- dropped page members and would drop bot members too.
       'members', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
-          'userID', cm_username.username
+          'userID', COALESCE(cm_ua.username, cm_mr.slug, cm_mb.handle,
+                              cm_mr.realm_id)
         ))
         FROM community_member cm
-        JOIN user_account cm_username ON cm.entity_id = cm_username.entity_id
+        LEFT JOIN user_account cm_ua ON cm.entity_id = cm_ua.entity_id
+        LEFT JOIN community_realm cm_mr ON cm.entity_id = cm_mr.entity_id
+        LEFT JOIN bot_bot cm_mb ON cm.entity_id = cm_mb.entity_id
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb),
       'createdBy', pua.username,
@@ -499,15 +514,20 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       -- the create-channel picker. Anchored on entity_entity, with a realm's
       -- name/slug mapped onto the same user-shaped keys the clients already
       -- read (middleName 'N/A' is the sentinel they skip when composing a
-      -- full name).
+      -- full name. Now also includes bots.
       'usersWithInfo', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
-          '_id', COALESCE(cmu.id, cmr.id),
+          '_id', COALESCE(cmu.id, cmr.id, cmb.id),
           'entityID', p.id,
-          'userID', COALESCE(cmu.username, cmr.slug, cmr.realm_id),
+          'userID', COALESCE(cmu.username, cmr.slug, cmr.realm_id, cmb.handle),
           'fullname', CASE
             WHEN p.type = 'realm' THEN jsonb_build_object(
               'firstName', cmr.name,
+              'middleName', 'N/A',
+              'lastName', ''
+            )
+            WHEN p.type = 'bot' THEN jsonb_build_object(
+              'firstName', cmb.name,
               'middleName', 'N/A',
               'lastName', ''
             )
@@ -519,20 +539,21 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           END,
           'profile',
             CASE
-              WHEN COALESCE(cmu.profile, cmr.profile) IN ('N/A', 'none') THEN 'none'
-              ELSE COALESCE(cmu.profile, cmr.profile, 'none')
+              WHEN COALESCE(cmu.profile, cmr.profile, cmb.profile) IN ('N/A', 'none') THEN 'none'
+              ELSE COALESCE(cmu.profile, cmr.profile, cmb.profile, 'none')
             END
         ))
         FROM community_member cm
         JOIN entity_entity p ON p.id = cm.entity_id
-        LEFT JOIN user_account cmu ON cmu.entity_id = p.id AND p.type = 'user'
+        LEFT JOIN user_account   cmu ON cmu.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm cmr ON cmr.entity_id = p.id AND p.type = 'realm'
+        LEFT JOIN bot_bot        cmb ON cmb.entity_id = p.id AND p.type = 'bot'
         WHERE cm.realm_id = cr.realm_id
       ), '[]'::jsonb)
     )
-   FROM community_realm cr
-   LEFT JOIN user_account pua ON cr.created_by_id = pua.entity_id
-   WHERE cr.realm_id = $2;`,
+  FROM community_realm cr
+  LEFT JOIN user_account pua ON cr.created_by_id = pua.entity_id
+  WHERE cr.realm_id = $2;`,
     [entityID, serverID],
   );
 
@@ -799,7 +820,9 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
   const new_role = req.body.new_role;
 
   try {
-    if (!(await hasPermission(entityID, "realm.member.role.update", realm_id))) {
+    if (
+      !(await hasPermission(entityID, "realm.member.role.update", realm_id))
+    ) {
       res.status(401).send({
         status: false,
         message: "You are not authorized to do this action",
@@ -843,7 +866,10 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
         `SELECT role FROM community_member WHERE member_id = $1 AND realm_id = $2`,
         [member_id, realm_id],
       );
-      if (targetRow.length > 0 && ["admin", "owner"].includes(targetRow[0].role)) {
+      if (
+        targetRow.length > 0 &&
+        ["admin", "owner"].includes(targetRow[0].role)
+      ) {
         res.status(401).send({
           status: false,
           message: "Only the realm owner can change an admin's role.",

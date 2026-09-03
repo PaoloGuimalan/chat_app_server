@@ -2116,14 +2116,24 @@ router.get(
         // user_account.id is a uuid while community_realm.id is not.
         const { rows } = await pool.query(
           `SELECT
-              COALESCE(ua.id::text, r.id::text) AS _id,
+              COALESCE(ua.id::text, r.id::text, b.id::text) AS _id,
               e.id AS "entityID",
               e.type AS "entityType",
-              COALESCE(ua.username, r.slug) AS username,
-              COALESCE(ua.id::text, r.id::text) AS "userID",
+              COALESCE(ua.username, r.slug, b.handle) AS username,
+              COALESCE(ua.id::text, r.id::text, b.id::text) AS "userID",
               CASE
                 WHEN e.type = 'realm' THEN json_build_object(
                   'firstName', r.name,
+                  'middleName', 'N/A',
+                  'lastName', ''
+                )
+                -- Without this a bot reactor falls to the ELSE, where ua is
+                -- NULL - so all three name parts come back null and the
+                -- clients render a literal "null" (they build the middle name
+                -- through a template literal, which stringifies it). Same
+                -- failure the group member list had.
+                WHEN e.type = 'bot' THEN json_build_object(
+                  'firstName', b.name,
                   'middleName', 'N/A',
                   'lastName', ''
                 )
@@ -2133,12 +2143,15 @@ router.get(
                   'lastName', ua.last_name
                 )
               END AS fullname,
-              COALESCE(ua.profile, r.profile, 'none') AS profile,
-              COALESCE(ua.is_active, r.is_active, TRUE) AS "isActivated",
+              COALESCE(ua.profile, r.profile, b.profile, 'none') AS profile,
+              COALESCE(ua.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
+              -- Falls through to FALSE for a bot: the badge means a verified
+              -- human or page, and bot_bot has no equivalent column.
               COALESCE(ua.is_verified, r.is_verified, FALSE) AS "isVerified"
             FROM entity_entity e
             LEFT JOIN user_account ua ON ua.entity_id = e.id AND e.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'
+            LEFT JOIN bot_bot b ON b.entity_id = e.id AND e.type = 'bot'
             WHERE e.id = ANY($1);`,
           [removeDuplicateReactors],
         );
