@@ -330,10 +330,9 @@ async function getRealmWithUsers(realmId, entityID) {
           END,
           'profile', COALESCE(ua.profile, mr.profile, mb.profile, 'none'),
           'isActivated', COALESCE(ua.is_active, mr.is_active, mb.is_active, TRUE),
-          -- A bot never carries the badge: it means a verified human or page,
-          -- so the COALESCE falls through to FALSE rather than reading a bot
-          -- column (there is none).
-          'isVerified', COALESCE(ua.is_badged, mr.is_verified, FALSE),
+          -- An ACCOUNT's badge is is_badged; a REALM's and a BOT's are both
+          -- is_verified.
+          'isVerified', COALESCE(ua.is_badged, mr.is_verified, mb.is_verified, FALSE),
           -- Lets a client route a member tap correctly - a bot has its own
           -- profile screen, not the /:handle one.
           'entityType', p.type,
@@ -403,8 +402,8 @@ router.get(
              COALESCE(u.is_verified, FALSE) AS "isVerified",
              -- NOT the same thing as "isVerified" above, which is EMAIL
              -- verification on the account. This is the display BADGE:
-             -- is_badged for an account, is_verified for a realm.
-             COALESCE(u.is_badged, r.is_verified, FALSE) AS "is_verified",
+             -- is_badged for an account, is_verified for a realm or a bot.
+             COALESCE(u.is_badged, r.is_verified, b.is_verified, FALSE) AS "is_verified",
              p.type AS "entity_type",
              r.type AS "realm_type"
            FROM entity_connection uc
@@ -491,8 +490,8 @@ router.get(
               COALESCE(u.is_verified, FALSE) AS "isVerified",
               -- NOT "isVerified" above, which is EMAIL verification on the
               -- account. This is the display BADGE: is_badged for an account,
-              -- is_verified for a realm, never set for a bot.
-              COALESCE(u.is_badged, r.is_verified, FALSE) AS "is_verified",
+              -- is_verified for a realm or a bot.
+              COALESCE(u.is_badged, r.is_verified, b.is_verified, FALSE) AS "is_verified",
               -- The kind columns the connection-backed query above already
               -- selects. This path is the one a conversation with a BOT takes
               -- - a bot can't be a contact, so there is no entity_connection
@@ -1465,12 +1464,12 @@ router.get("/conversations", jwtchecker, async (req, res) => {
             b.handle
           ) AS display_name,
           COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
-          -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
-          -- that user_account.is_verified is EMAIL verification and a wholly
-          -- different thing - reading it here would badge every confirmed
-          -- address. Normalised to one wire field, as
+          -- An ACCOUNT's badge is is_badged; a REALM's and a BOT's are both
+          -- is_verified. Note that user_account.is_verified is EMAIL
+          -- verification and a wholly different thing - reading it here would
+          -- badge every confirmed address. Normalised to one wire field, as
           -- enrichNotificationSenders already does.
-          COALESCE(u.is_badged, r.is_verified, FALSE) AS is_verified,
+          COALESCE(u.is_badged, r.is_verified, b.is_verified, FALSE) AS is_verified,
           -- NULL for a user; 'page'/'server'/... when this counterpart is a
           -- realm, so a single conversation with a PAGE can be marked as one.
           r.type AS realm_type
@@ -1752,12 +1751,12 @@ router.get("/conversation/:conversationID", jwtchecker, async (req, res) => {
             b.handle
           ) AS display_name,
           COALESCE(u.profile, r.profile, b.profile, 'none') AS profile,
-          -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. Note
-          -- that user_account.is_verified is EMAIL verification and a wholly
-          -- different thing - reading it here would badge every confirmed
-          -- address. Normalised to one wire field, as
+          -- An ACCOUNT's badge is is_badged; a REALM's and a BOT's are both
+          -- is_verified. Note that user_account.is_verified is EMAIL
+          -- verification and a wholly different thing - reading it here would
+          -- badge every confirmed address. Normalised to one wire field, as
           -- enrichNotificationSenders already does.
-          COALESCE(u.is_badged, r.is_verified, FALSE) AS is_verified,
+          COALESCE(u.is_badged, r.is_verified, b.is_verified, FALSE) AS is_verified,
           -- NULL for a user; 'page'/'server'/... when this counterpart is a
           -- realm, so a single conversation with a PAGE can be marked as one.
           r.type AS realm_type

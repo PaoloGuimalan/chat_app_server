@@ -542,11 +542,9 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
               WHEN COALESCE(cmu.profile, cmr.profile, cmb.profile) IN ('N/A', 'none') THEN 'none'
               ELSE COALESCE(cmu.profile, cmr.profile, cmb.profile, 'none')
             END,
-          -- An ACCOUNT's badge is is_badged; a REALM's is is_verified. A bot
-          -- never carries one - it means a verified human or page - so the
-          -- COALESCE falls through to FALSE rather than reading a bot column
-          -- (there is none). This list showed no badge at all before.
-          'isVerified', COALESCE(cmu.is_badged, cmr.is_verified, FALSE),
+          -- An ACCOUNT's badge is is_badged; a REALM's and a BOT's are both
+          -- is_verified. This list showed no badge at all before.
+          'isVerified', COALESCE(cmu.is_badged, cmr.is_verified, cmb.is_verified, FALSE),
           -- The kind, so the member rows and the create-channel picker can
           -- mark a page as a page and a bot as a bot instead of showing three
           -- different kinds of entity as identical people.

@@ -958,16 +958,13 @@ const enrichNotificationSenders = async (itemsPerSection) => {
     // nameless and avatarless, which is exactly what "Content removed" must
     // not look like.
     //
-    // is_verified is deliberately NOT forced true for bots. A system bot is
-    // not a verified human or page, and borrowing that badge would say
-    // something the badge does not mean.
     `SELECT
        e.id AS entity_id,
        e.type,
        COALESCE(u.username, r.slug, b.handle) AS handle,
        COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), r.name, b.name) AS display_name,
        COALESCE(u.profile, r.profile, b.profile) AS profile,
-       COALESCE(u.is_badged, r.is_verified, false) AS is_verified
+       COALESCE(u.is_badged, r.is_verified, b.is_verified, false) AS is_verified
      FROM entity_entity e
      LEFT JOIN user_account u ON u.entity_id = e.id AND e.type = 'user'
      LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'
@@ -2145,9 +2142,7 @@ router.get(
               END AS fullname,
               COALESCE(ua.profile, r.profile, b.profile, 'none') AS profile,
               COALESCE(ua.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
-              -- Falls through to FALSE for a bot: the badge means a verified
-              -- human or page, and bot_bot has no equivalent column.
-              COALESCE(ua.is_verified, r.is_verified, FALSE) AS "isVerified"
+              COALESCE(ua.is_verified, r.is_verified, b.is_verified, FALSE) AS "isVerified"
             FROM entity_entity e
             LEFT JOIN user_account ua ON ua.entity_id = e.id AND e.type = 'user'
             LEFT JOIN community_realm r ON r.entity_id = e.id AND e.type = 'realm'

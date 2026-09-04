@@ -113,10 +113,7 @@ const GetServerMembers = async (serverID, withDetails) => {
        END AS fullname,
        COALESCE(pua.profile, pr.profile, pb.profile, 'none') AS profile,
        COALESCE(pua.is_active, pr.is_active, pb.is_active, TRUE) AS "isActivated",
-       -- Bots never carry the badge: it means a verified human or page, and
-       -- lending it to a bot would say something it does not mean. FALSE is
-       -- the literal here rather than a pb column because bot_bot has none.
-       COALESCE(pua.is_verified, pr.is_verified, FALSE) AS "isVerified",
+       COALESCE(pua.is_verified, pr.is_verified, pb.is_verified, FALSE) AS "isVerified",
        -- Lets a client tell the three apart without inferring it from which
        -- display fields happen to be filled.
        CASE
