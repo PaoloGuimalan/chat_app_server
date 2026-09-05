@@ -4,15 +4,22 @@ const jwt = require("jsonwebtoken");
 const cassandra = require("cassandra-driver");
 const multiparty = require("multiparty");
 const fs = require("fs/promises");
+const sse = require("sse-express");
 const {
   sseNotificationsWaiters,
   SendTagPostNotification,
+  postActivityChannel,
+  BroadcastCommentTyping,
 } = require("../../reusables/hooks/sse");
 const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { savePostHashtags } = require("../../reusables/hooks/hashtags");
-const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
+const {
+  jwtchecker,
+  jwtssechecker,
+  createJWT,
+} = require("../../reusables/hooks/jwthelper");
 const {
   requiresPermission,
 } = require("../../reusables/hooks/permissionChecker");
@@ -27,6 +34,7 @@ const {
   createPostScore,
   queueContentTagging,
   ResolvePostPrivacyStatus,
+  CanEntityViewPost,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
 const {
@@ -42,7 +50,11 @@ const {
   SEND_TAG_POST_NOTIFICATION,
 } = require("../../reusables/vars/rabbitmqevents");
 const producer = require("../../reusables/rabbitmq/producer");
-const { publish } = require("../../reusables/redis/pubsub");
+const {
+  publish,
+  listen,
+  stop_listen,
+} = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { generateUUID } = require("../../reusables/hooks/transformers");
 
@@ -954,6 +966,125 @@ router.get("/feed", jwtchecker, async (req, res) => {
       res.send({ status: false, message: err.message });
       console.log(err);
     });
+});
+
+// --- Post activity stream --------------------------------------------------
+
+/**
+ * Live activity on ONE post: comments as they are written, and who is typing.
+ *
+ * Built exactly like /u/sseNotifications - sse-express + jwtssechecker, a
+ * Redis channel bridged to the response by listen()/stop_listen() - and
+ * differs in the one thing that matters: it is scoped to a POST rather than to
+ * the viewer's entity. The token is the same envelope with a `post_id` signed
+ * into it (jwthelper.js reads it back out).
+ *
+ * WHY A SECOND STREAM AND NOT ANOTHER EVENT ON THE FIRST. The notification
+ * stream fans out per recipient, so a comment would have to be published once
+ * per person reading the post - and nothing knows who those people are. A post
+ * channel has exactly one publish and however many readers happen to be there.
+ *
+ * WHO OPENS IT. Only the surfaces that show a post in full - the post modal
+ * and /post/:id. A feed renders many post cards at once and opening one of
+ * these per card would mean dozens of live connections for a single scroll,
+ * which is the reason this is not simply always-on inside the comment section.
+ *
+ * Carries NO session side effects, unlike the notification stream: that one
+ * flips the user's online status and tells their contacts, and doing that here
+ * would make opening a post look like signing in - and closing one, like
+ * signing out, while the notification stream is still open.
+ */
+router.get(
+  "/ssePostActivity/:token",
+  [sse, jwtssechecker],
+  async (req, res) => {
+    const entity_id = req.params.entity_id;
+    const postID = req.params.post_id;
+
+    if (!postID) {
+      res.sse("post_activity", {
+        status: false,
+        auth: true,
+        message: "No post to watch",
+      });
+      return;
+    }
+
+    // Subscribing is scoped by post id, so this is the only thing standing
+    // between a known id and a restricted post's comment traffic.
+    const allowed = await CanEntityViewPost(postID, entity_id);
+
+    if (!allowed) {
+      res.sse("post_activity", {
+        status: false,
+        auth: true,
+        message: "Post not available",
+      });
+      return;
+    }
+
+    const redis_event = postActivityChannel(postID);
+
+    listen(redis_event, res);
+
+    req.on("close", () => {
+      stop_listen(redis_event, res);
+    });
+  },
+);
+
+/**
+ * "I am typing a comment on this post."
+ *
+ * The comment-section twin of /m/istypingbroadcast, and the same shape of
+ * thing: a POST that publishes and stores nothing. It differs in who it
+ * reaches - the messenger names its recipients from the conversation's member
+ * list and publishes to each of them, whereas here the audience is whoever
+ * happens to have the post open, which only the post's own channel can
+ * address.
+ *
+ * Gated on being able to SEE the post, so this cannot be used to announce
+ * yourself into a discussion you have no access to.
+ *
+ * `parent_id` is optional and says which box is being typed in - absent for
+ * the post's main comment box, a top-level comment's id for that comment's
+ * reply box - so the indicator can appear where the reply will actually land.
+ *
+ * The client throttles re-broadcasts (one every 5s while typing) and receivers
+ * expire the indicator on their own after a few seconds - there is deliberately
+ * no "stopped typing" event to miss.
+ */
+router.post("/commenttypingbroadcast", jwtchecker, async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const postID = req.body.post_id;
+  const parentID = req.body.parent_id;
+
+  try {
+    if (!postID) {
+      throw new Error("No post to broadcast to");
+    }
+
+    const allowed = await CanEntityViewPost(postID, entity_id);
+
+    if (!allowed) {
+      return res
+        .status(404)
+        .send({ status: false, message: "Post not available" });
+    }
+
+    // Names the typer rather than saying "someone" - the indicator shows a
+    // handle, and a page typing as itself should read as the page.
+    const typer = await GetSenderDetails(entity_id);
+
+    BroadcastCommentTyping(postID, entity_id, typer, parentID);
+
+    res.send({ status: true, message: "OK" });
+  } catch (ex) {
+    console.log(ex);
+    res
+      .status(400)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
 });
 
 module.exports = router;

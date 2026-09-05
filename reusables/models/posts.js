@@ -169,6 +169,76 @@ const queueContentTagging = async ({ postID, entityID, caption, references }) =>
   });
 };
 
+/**
+ * Whether `entityID` is allowed to read `postID`.
+ *
+ * Gates the post-activity SSE stream (routes/posts/index.js), which is
+ * subscribed to by post id - so without this, holding any post's id would be
+ * enough to watch its comment traffic and see who is typing on it, regardless
+ * of the post's audience.
+ *
+ * Django mirror: newsfeed/services/post_visibility.py can_view_post(). The
+ * four audience levels are reproduced exactly. What is NOT reproduced is that
+ * function's entity_side_is_visible() predicate, which additionally drops a
+ * connection whose counterpart has been deactivated or is unverified.
+ * Deliberate: reproducing it here means restating a three-way user/realm/bot
+ * union that has already changed once, and the only thing the omission can do
+ * is let a deactivated connection keep a stream open. That stream carries ids
+ * and typing pings, never comment text - every read of the content itself
+ * still goes through Django's comments GET, which applies the full rule. So
+ * the narrower check bounds the blast radius rather than defining it.
+ *
+ * Fails CLOSED: an unknown post, a deleted one, or a query that throws all
+ * answer false. A stream that should have been allowed and was not is a
+ * missing live update; the reverse is a leak.
+ */
+const CanEntityViewPost = async (postID, entityID) => {
+  if (!postID || !entityID) return false;
+
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT 1
+      FROM newsfeed_post p
+      WHERE p.post_id = $1
+        AND p.deleted_at IS NULL
+        AND (
+          p.privacy_status = 'public'
+          OR p.entity_id = $2
+          OR (
+            p.privacy_status = 'connections'
+            AND EXISTS (
+              SELECT 1
+              FROM entity_connection c
+              WHERE c.status = TRUE
+                AND (
+                  (c.action_by_id = p.entity_id AND c.involved_entity_id = $2)
+                  OR (c.action_by_id = $2 AND c.involved_entity_id = p.entity_id)
+                )
+            )
+          )
+          OR (
+            p.privacy_status = 'custom'
+            AND EXISTS (
+              SELECT 1
+              FROM newsfeed_postprivacy pp
+              WHERE pp.post_id = p.post_id
+                AND pp.allowed_entity_id = $2
+            )
+          )
+        )
+      LIMIT 1;
+      `,
+      [String(postID), String(entityID)],
+    );
+
+    return rows.length > 0;
+  } catch (err) {
+    console.log("[post-activity] visibility check failed:", err.message || err);
+    return false;
+  }
+};
+
 module.exports = {
   checkPostIDExisting,
   GetAllPostsCountInProfile,
@@ -177,4 +247,5 @@ module.exports = {
   queueContentTagging,
   ResolvePostPrivacyStatus,
   POST_PRIVACY_LEVELS,
+  CanEntityViewPost,
 };

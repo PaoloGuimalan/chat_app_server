@@ -143,6 +143,13 @@ const jwtssechecker = (req, res, next) => {
             req.params.username = currentRow.username;
             req.params.deviceToken = deviceToken;
             req.params.entity_id = decode.entity;
+            // What this SSE stream is ABOUT, for the streams that are about
+            // something. The notification stream is scoped by the identity
+            // already resolved above and leaves this undefined; the
+            // post-activity stream (routes/posts/index.js) signs a post_id
+            // into the same envelope and reads it here rather than verifying
+            // the outer token a second time.
+            req.params.post_id = decodedToken.post_id;
             next();
           } else {
             res.sse(type, {
