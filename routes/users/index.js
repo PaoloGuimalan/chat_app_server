@@ -65,6 +65,10 @@ const UserGroups = require("../../schema/users/groups");
 const UserServers = require("../../schema/users/servers");
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserSessions = require("../../schema/auth/sessions");
+// Shared with the presence fan-out that developer_service triggers, so the
+// snapshot this file serves and the live pushes a client receives afterwards
+// can never disagree about who is in scope.
+const { getPresenceScope } = require("../../reusables/hooks/presence");
 
 const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
@@ -3522,39 +3526,6 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
   }
 });
 
-const getContactsForSession = async (entity_id) => {
-  const sql = `
-    SELECT DISTINCT ON (c.connection_id) c.*,
-    a1.entity_id AS action_by_id,
-    a2.entity_id AS involved_entity_id
-    FROM entity_connection c
-    -- Fix: Join using the account's related entity_id field instead of the account primary key
-    JOIN user_account a1 ON c.action_by_id = a1.entity_id
-    JOIN user_account a2 ON c.involved_entity_id = a2.entity_id
-    WHERE 
-      (a1.entity_id = $1 OR a2.entity_id = $1)
-      AND c.action_by_id <> c.involved_entity_id
-      AND a1.is_active = TRUE
-      AND a1.is_verified = TRUE
-      AND a2.is_active = TRUE
-      AND a2.is_verified = TRUE
-      AND c.status = TRUE
-    -- Note: DISTINCT ON requires an ORDER BY clause starting with the same expression
-    ORDER BY c.connection_id, c.action_date DESC;
-  `;
-
-  const { rows } = await pool.query(sql, [entity_id]);
-  const flattenedRows = rows.map((mp) => {
-    if (mp.action_by_id == entity_id) {
-      return mp.involved_entity_id;
-    } else {
-      return mp.action_by_id;
-    }
-  });
-
-  return flattenedRows;
-};
-
 const checkSessionID = async (currentID, deviceToken) => {
   return await UserSessions.find({
     sessionID: currentID,
@@ -3640,7 +3611,7 @@ router.get(
     const userID = req.params.userID;
     const entity_id = req.params.entity_id;
     const deviceToken = req.params.deviceToken;
-    const contacts = await getContactsForSession(entity_id);
+    const contacts = await getPresenceScope(entity_id);
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
     const redis_event = `events_${entity_id}`;
 
@@ -3713,7 +3684,7 @@ router.post("/logout", jwtchecker, async (req, res) => {
 router.get("/activecontacts", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const entity_id = req.params.entity_id;
-  const contacts = await getContactsForSession(entity_id);
+  const contacts = await getPresenceScope(entity_id);
 
   await UserSessions.aggregate([
     {
@@ -3730,7 +3701,25 @@ router.get("/activecontacts", jwtchecker, async (req, res) => {
     {
       $group: {
         _id: "$entityID",
-        hasTrue: { $max: "$sessionStatus" },
+        // `status`, NOT `sessionStatus`. The stored field is `status`
+        // (schema/auth/sessions.js) - `sessionStatus` is only the name it
+        // takes on the WIRE, assigned further down when the row is shaped for
+        // the client. Both this and the $filter below used to read the wire
+        // name against the stored document, where it does not exist: verified
+        // against production, 0 of 165 session documents carry a
+        // `sessionStatus` field and all 165 carry `status`.
+        //
+        // The effect was that hasTrue was always null, the $cond below never
+        // took its first branch, and this stage silently degraded into "take
+        // whichever session sorted first" - which the lastSeen sort made
+        // look right for one device and wrong for several. An entity online
+        // on an older session and freshly disconnected on a newer one read as
+        // OFFLINE, because the newer row won on sort alone.
+        //
+        // That case is not hypothetical now: a page is online whenever ANY
+        // admin is switched into it, so it is exactly the multi-session
+        // entity this stage exists to resolve.
+        hasTrue: { $max: "$status" },
         allSessions: { $push: "$$ROOT" },
       },
     },
@@ -3743,7 +3732,7 @@ router.get("/activecontacts", jwtchecker, async (req, res) => {
               $filter: {
                 input: "$allSessions",
                 as: "s",
-                cond: { $eq: ["$$s.sessionStatus", true] },
+                cond: { $eq: ["$$s.status", true] },
               },
             },
             "$allSessions",
