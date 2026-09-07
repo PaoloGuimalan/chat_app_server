@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3001;
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
+const APP_VERSION = process.env.APP_VERSION || "dev";
 const mysql = require("mysql");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
@@ -118,7 +119,7 @@ app.use("/webrtc", WebRTC);
 app.use("/realms", Realms);
 
 app.get("/", (req, res) => {
-  res.send("Welcome to Chatterloop V2 API!");
+  res.send(`Welcome to Chatterloop ${APP_VERSION} API!`);
 });
 
 // Start server only after all critical dependencies are ready
