@@ -1,0 +1,164 @@
+{
+  "_comment": [
+    "The canonical /command grammar, as cases rather than as a regex.",
+    "",
+    "The @mention grammar already exists three times - Node's transformers.js,",
+    "Django's comment_mentions.py and Go's mentions_parse.go - held together by",
+    "a drift test that reads the others off disk. Commands will duplicate the",
+    "same way the moment bots need to type them, since that send path is Go.",
+    "",
+    "A drifted mention notifies the wrong person. A drifted command runs, or",
+    "fails to run, something with an effect. So the agreement is pinned here as",
+    "INPUTS AND EXPECTED OUTPUTS, which every implementation can execute, rather",
+    "than as a pattern every implementation has to translate correctly.",
+    "",
+    "Any new implementation should read this file and run every case. Skip the",
+    "suite if the file is absent, the way the Go drift test skips when the",
+    "platform sources are not on disk - a missing corpus is a checkout problem,",
+    "not a failure."
+  ],
+
+  "matches": [
+    {
+      "why": "the simplest form",
+      "input": "/summarize",
+      "name": "summarize",
+      "target": null,
+      "args": ""
+    },
+    {
+      "why": "everything after the name is arguments, untouched but trimmed",
+      "input": "/summarize the last hour",
+      "name": "summarize",
+      "target": null,
+      "args": "the last hour"
+    },
+    {
+      "why": "a target narrows fan-out to one bot",
+      "input": "/summarize:neon",
+      "name": "summarize",
+      "target": "neon",
+      "args": ""
+    },
+    {
+      "why": "target and arguments together",
+      "input": "/summarize:neon the last hour",
+      "name": "summarize",
+      "target": "neon",
+      "args": "the last hour"
+    },
+    {
+      "why": "mobile keyboards capitalise the first letter, so case cannot matter",
+      "input": "/Summarize",
+      "name": "summarize",
+      "target": null,
+      "args": ""
+    },
+    {
+      "why": "the target is a handle, and handles resolve case-insensitively",
+      "input": "/SUMMARIZE:NEON",
+      "name": "summarize",
+      "target": "neon",
+      "args": ""
+    },
+    {
+      "why": "leading whitespace is a paste artefact, not a decision",
+      "input": "   /stop",
+      "name": "stop",
+      "target": null,
+      "args": ""
+    },
+    {
+      "why": "hyphens are in the name charset, matching the model validator",
+      "input": "/my-command",
+      "name": "my-command",
+      "target": null,
+      "args": ""
+    },
+    {
+      "why": "digits are too",
+      "input": "/top10",
+      "name": "top10",
+      "target": null,
+      "args": ""
+    },
+    {
+      "why": "internal spacing in arguments is the sender's, not ours to collapse",
+      "input": "/summarize   keep    the    gaps",
+      "name": "summarize",
+      "target": null,
+      "args": "keep    the    gaps"
+    },
+    {
+      "why": "a newline separates the name from its arguments like any space",
+      "input": "/summarize\nbe brief",
+      "name": "summarize",
+      "target": null,
+      "args": "be brief"
+    },
+    {
+      "why": "handles may contain dots, underscores and hyphens",
+      "input": "/wake:my_bot.v2-beta",
+      "name": "wake",
+      "target": "my_bot.v2-beta",
+      "args": ""
+    },
+    {
+      "why": "trailing whitespace is trimmed from arguments",
+      "input": "/summarize  padded   ",
+      "name": "summarize",
+      "target": null,
+      "args": "padded"
+    },
+    {
+      "why": "a name at the maximum length still parses",
+      "input": "/abcdefghijabcdefghijabcdefghijab",
+      "name": "abcdefghijabcdefghijabcdefghijab",
+      "target": null,
+      "args": ""
+    }
+  ],
+
+  "nonMatches": [
+    { "why": "nothing at all", "input": "" },
+    { "why": "ordinary text", "input": "hello there" },
+    {
+      "why": "NOT at the start - people talk ABOUT commands, and a message that merely contains one must not fire it",
+      "input": "use the /summarize command"
+    },
+    {
+      "why": "a doubled slash is the escape hatch for writing a command name without running it",
+      "input": "//summarize"
+    },
+    { "why": "a slash alone names nothing", "input": "/" },
+    { "why": "a slash and a space name nothing", "input": "/ summarize" },
+    {
+      "why": "the name must end at whitespace, a target, or the message - so trailing punctuation does not silently become part of it",
+      "input": "/summarize."
+    },
+    {
+      "why": "same reason, with a comma",
+      "input": "/summarize, please"
+    },
+    {
+      "why": "a colon with no target is a typo, not a command with an empty target",
+      "input": "/summarize:"
+    },
+    {
+      "why": "underscores are not in the NAME charset, though they are allowed in a target handle",
+      "input": "/my_command"
+    },
+    {
+      "why": "33 characters - one past the model's limit, so a name that could never exist does not parse",
+      "input": "/abcdefghijabcdefghijabcdefghijabc"
+    },
+    {
+      "why": "a path, not a command - the second slash is not in the name charset",
+      "input": "/api/v1/users"
+    },
+    {
+      "why": "a date, for the same reason",
+      "input": "/2026/09/17"
+    }
+  ]
+}

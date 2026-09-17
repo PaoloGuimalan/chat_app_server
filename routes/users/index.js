@@ -73,6 +73,8 @@ const { getPresenceScope } = require("../../reusables/hooks/presence");
 const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
+const { queueCommand } = require("../../reusables/hooks/queueCommand");
+const { parseCommand } = require("../../reusables/hooks/commandParser");
 const {
   base64ToArrayBuffer,
   dataURLtoFile,
@@ -1509,6 +1511,15 @@ router.post(
 
       const sanitizedContent = sanitizeForStorage(content);
 
+      // Parsed once, used twice: the realtime frame tells every bot a command
+      // was typed, and queueCommand runs the ones that are the platform's.
+      // Parsing in both places would be a second chance for them to disagree
+      // about what was said.
+      const typedCommand =
+        String(messageType).toLowerCase() === "text"
+          ? parseCommand(sanitizedContent)
+          : null;
+
       const payload = {
         messageID: messageID,
         conversationID: conversationID,
@@ -1539,6 +1550,25 @@ router.post(
             sender,
             content: sanitizedContent,
             messageType,
+          });
+
+          // A /command, if this message is one. Same contract: never awaited,
+          // never throws. Parsed before anything else is done, so an ordinary
+          // message costs one regex and no query.
+          //
+          // `receivers` is what decides reach - a bot answers a command only
+          // in conversations it belongs to - and it is already in hand here.
+          queueCommand({
+            command: typedCommand,
+            messageID,
+            conversationID,
+            conversationType,
+            sender,
+            senderHandle: mentionerDetails?.handle || username,
+            content: sanitizedContent,
+            messageType,
+            replyingTo,
+            participants: receivers,
           });
 
           await ChatHistory.updateMany(
@@ -1581,6 +1611,17 @@ router.post(
                 conversationID,
                 entityID: sender,
                 mentioner: isMentioned ? mentioner : null,
+                // A bot learns about a command the way it learns about a
+                // mention: from the frame. Name and target only - enough to
+                // decide whether it has this command, and not enough to act
+                // without reading the message, which it does anyway.
+                //
+                // Sent to EVERY recipient rather than only to bots that own
+                // the name: chatterloop does not know what an external bot
+                // answers to, and deciding is the bot's business.
+                command: typedCommand
+                  ? { name: typedCommand.name, target: typedCommand.target }
+                  : null,
               },
               false,
             );

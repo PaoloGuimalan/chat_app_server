@@ -66,6 +66,10 @@ const QUEUES = {
   // service's internal business, and publishing straight to them would make
   // every future pipeline change a change to this file too.
   CONTENT_TAGGING: "content_tagging",
+  // A /command somebody typed. The job carries the command's ID and the
+  // envelope, never the definition - webhook_request holds credentials in
+  // plain text, and a queue is not where those belong.
+  RUN_COMMAND: "run_command",
 };
 
 let channelPromise = null;
