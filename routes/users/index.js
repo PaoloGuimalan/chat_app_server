@@ -1552,25 +1552,6 @@ router.post(
             messageType,
           });
 
-          // A /command, if this message is one. Same contract: never awaited,
-          // never throws. Parsed before anything else is done, so an ordinary
-          // message costs one regex and no query.
-          //
-          // `receivers` is what decides reach - a bot answers a command only
-          // in conversations it belongs to - and it is already in hand here.
-          queueCommand({
-            command: typedCommand,
-            messageID,
-            conversationID,
-            conversationType,
-            sender,
-            senderHandle: mentionerDetails?.handle || username,
-            content: sanitizedContent,
-            messageType,
-            replyingTo,
-            participants: receivers,
-          });
-
           await ChatHistory.updateMany(
             {
               conversationID: conversationID,
@@ -1626,6 +1607,46 @@ router.post(
               false,
             );
           });
+          // A /command, if this message is one. Same contract as
+          // queueMessageTagging: never awaited, never throws.
+          //
+          // QUEUED LAST, AND THAT ORDER IS LOAD-BEARING
+          // -------------------------------------------
+          // worker_service answers a command by writing a message of its own,
+          // and it starts the moment this is published. Queued any earlier, it
+          // races the three writes above and loses in all three ways:
+          //
+          //   SaveConversation had not run, so the `conversations` document
+          //   was missing or stale - and that document is where the worker
+          //   reads the participants it announces the reply to. No
+          //   participants, no frames, so the reply arrived for nobody until
+          //   they refreshed.
+          //
+          //   SaveConversation would then OVERWRITE last_message with this
+          //   message, so the chat list showed the command as the latest thing
+          //   said even though the reply came after it.
+          //
+          //   MessagesTrigger had not run, so the answer was announced before
+          //   the question - the reply appeared above a message that was not
+          //   on screen yet.
+          //
+          // The message itself is saved well before this either way; it is the
+          // writes AROUND it that the worker depends on.
+          queueCommand({
+            command: typedCommand,
+            messageID,
+            conversationID,
+            conversationType,
+            sender,
+            senderHandle: mentionerDetails?.handle || username,
+            content: sanitizedContent,
+            messageType,
+            replyingTo,
+            // What decides reach - a bot answers a command only in
+            // conversations it belongs to.
+            participants: receivers,
+          });
+
           bumpChatScore(conversationID, receivers, entity_id);
 
           if (messageType === "text") {
