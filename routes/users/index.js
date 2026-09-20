@@ -2145,7 +2145,27 @@ router.get(
         },
       },
       {
+        // messageDate, NOT _id.
+        //
+        // An ObjectId is a 4-byte timestamp at ONE-SECOND resolution, then
+        // five random bytes fixed per PROCESS, then a counter. Two documents
+        // written in the same second by the same process order by the counter
+        // - fine. Written in the same second by DIFFERENT processes they order
+        // by those random bytes, which is arbitrary and, worse, stable:
+        // whichever process drew the lower value always sorts first.
+        //
+        // Node writes a message and worker_service writes a command's reply
+        // ~70ms later, so the two land in the same second nearly every time,
+        // and the reply rendered above the command. It looked intermittent
+        // only because a pair straddling a second boundary sorted correctly on
+        // the timestamp bytes.
+        //
+        // messageDate is millisecond-resolution and written by whoever created
+        // the message, so it orders across processes. _id stays as a tie-break
+        // so the sort is total and $skip/$limit paging cannot shift rows
+        // between pages.
         $sort: {
+          messageDate: -1,
           _id: -1,
         },
       },
