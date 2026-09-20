@@ -40,6 +40,7 @@ const {
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { listCommands } = require("../../reusables/hooks/commandResolver");
 const {
   GetUsersWithConnectionIDs,
   GetSenderDetails,
@@ -1981,6 +1982,68 @@ router.get("/v2/group-shortcuts", jwtchecker, async (req, res) => {
     res.status(400).send({
       status: false,
       message: err.message || "Error generating group shortcuts",
+    });
+  }
+});
+
+/**
+ * The command menu for one conversation.
+ *
+ * WHY THE SERVER BUILDS IT
+ * ------------------------
+ * Mention autocomplete is a client-side filter over members the client
+ * already has. A command menu cannot be: a command is a row the client has
+ * never seen, owned by a bot, with a description and a responder. So this is
+ * the one thing the client has to ask for - and asking per conversation is
+ * what keeps it correct.
+ *
+ * DERIVED FROM MEMBERSHIP, EVERY TIME
+ * -----------------------------------
+ * Built from the participants at the moment of the call, so a bot removed
+ * from the conversation takes its commands out of the menu and one added
+ * brings its own in. Nothing is cached and nothing needs invalidating.
+ *
+ * GUARDED LIKE EVERY OTHER CONVERSATION ROUTE
+ * -------------------------------------------
+ * `isRealmMember` first. Without it this would tell any authenticated account
+ * which bots are in any conversation and what they can be asked to do.
+ */
+router.get("/conversation/:conversationID/commands", jwtchecker, async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const conversationID = req.params.conversationID;
+
+  try {
+    await isRealmMember(conversationID, entity_id);
+
+    const receivers = await GetAllReceivers(conversationID);
+    let participants = (receivers?.users || [])
+      .map((member) => member.entityID)
+      .filter(Boolean);
+
+    // The same fallback /conversation/:conversationID uses: a conversation
+    // nobody has been written into chat_history for yet still has its
+    // participants on the Mongo document.
+    if (!participants.length) {
+      const conversation = await Conversations.findOne({
+        conversationID: conversationID,
+      }).lean();
+      participants = (conversation?.participant_ids || []).filter(Boolean);
+    }
+
+    const commands = await listCommands(participants);
+
+    return res.json({
+      status: true,
+      auth: true,
+      result: "",
+      commands: commands,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: false,
+      auth: true,
+      result: err.message || "Error listing commands",
+      commands: [],
     });
   }
 });

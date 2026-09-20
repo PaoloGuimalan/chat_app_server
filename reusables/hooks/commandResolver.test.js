@@ -102,3 +102,91 @@ test("only active commands on active bots resolve", () => {
 test("the target narrows by handle and is optional", () => {
   assert.match(RESOLVE_SQL, /\$3::text IS NULL OR lower\(b\.handle\) = \$3/);
 });
+
+// --- the conversation menu -------------------------------------------------
+
+const { publicCommandList, LIST_SQL } = require("./commandResolver");
+
+const menuRow = (name, handle, isSystem = false) => ({
+  name,
+  description: `does ${name}`,
+  responds: "system",
+  bot_handle: handle,
+  bot_name: handle === "system" ? "System" : handle,
+  bot_is_system: isSystem,
+});
+
+test("a unique name inserts bare", () => {
+  const [entry] = publicCommandList([menuRow("members", "system", true)]);
+
+  assert.strictEqual(entry.insert, "/members");
+  assert.strictEqual(entry.is_system, true);
+  assert.strictEqual(entry.bot_name, "System");
+});
+
+test("a name two bots share inserts targeted", () => {
+  // Combining the bots' lists is what creates this collision, so the menu is
+  // exactly where it has to be resolved: a client inserting the bare
+  // "/summarize" here would run BOTH bots.
+  const entries = publicCommandList([
+    menuRow("summarize", "neon"),
+    menuRow("summarize", "xenon"),
+  ]);
+
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.insert),
+    ["/summarize:neon", "/summarize:xenon"],
+  );
+});
+
+test("one bot's name stays bare even when another bot is present", () => {
+  const entries = publicCommandList([
+    menuRow("summarize", "neon"),
+    menuRow("transcribe", "xenon"),
+  ]);
+
+  assert.deepStrictEqual(
+    entries.map((entry) => entry.insert),
+    ["/summarize", "/transcribe"],
+  );
+});
+
+test("ambiguity is judged per conversation, not globally", () => {
+  // Only one owner of the name is in this room, so it inserts cleanly here
+  // even though the platform has others elsewhere.
+  const [entry] = publicCommandList([menuRow("summarize", "neon")]);
+  assert.strictEqual(entry.insert, "/summarize");
+});
+
+test("the menu never leaks a credential", () => {
+  const entries = publicCommandList([
+    {
+      ...menuRow("summarize", "neon"),
+      webhook_url: "https://example.test/hook",
+      webhook_request: { headers: { Authorization: "Bearer clt_secret" } },
+      id: "cmd-1",
+      bot_entity_id: "entity-neon",
+    },
+  ]);
+
+  const serialized = JSON.stringify(entries);
+  assert.ok(!serialized.includes("clt_secret"));
+  assert.ok(!serialized.includes("example.test"));
+  assert.strictEqual(entries[0].webhook_url, undefined);
+  assert.strictEqual(entries[0].webhook_request, undefined);
+});
+
+test("the menu and the parser share one reach rule", () => {
+  // Both clauses, in both queries. A command offered but not runnable - or
+  // runnable but never offered - is the same bug seen from two ends.
+  for (const sql of [RESOLVE_SQL, LIST_SQL]) {
+    assert.ok(sql.includes("b.is_system OR b.entity_id = ANY("));
+    assert.ok(sql.includes("c.is_active"));
+    assert.ok(sql.includes("b.is_active"));
+  }
+});
+
+test("an empty menu is an empty list, not an error", () => {
+  assert.deepStrictEqual(publicCommandList([]), []);
+  assert.deepStrictEqual(publicCommandList(), []);
+});

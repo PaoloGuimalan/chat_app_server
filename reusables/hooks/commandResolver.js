@@ -75,6 +75,57 @@ const resolveCommand = async (command, participantEntityIds = []) => {
 };
 
 /**
+ * Every command usable in one conversation.
+ *
+ * THE SAME REACH RULE AS RESOLVE_SQL, AND THAT IS THE POINT
+ * ---------------------------------------------------------
+ * The menu and the parser have to agree. A command offered here that then
+ * refused to run, or one that runs but was never offered, is the same bug
+ * seen from two ends - so both clauses are written once, here, and differ
+ * only in that this one is not narrowed to a single name or target.
+ *
+ * THE LIST IS DERIVED, NEVER STORED
+ * ---------------------------------
+ * Computed from the participants on every call, so a bot removed from the
+ * conversation takes its commands with it and one added brings its own. There
+ * is nothing to invalidate, and no way for the menu to outlive the membership
+ * it was built from.
+ *
+ * A SYSTEM BOT IS ALWAYS IN THE ROOM
+ * ----------------------------------
+ * `/members` and `/help` work everywhere without the System bot being a
+ * participant anywhere - it cannot be added to a conversation, or searched
+ * for, or removed. `b.is_system` is what makes it a member of every
+ * conversation for this purpose and none of them for any other.
+ */
+const LIST_SQL = `
+  SELECT c.name,
+         c.description,
+         c.responds,
+         b.handle    AS bot_handle,
+         b.name      AS bot_name,
+         b.is_system AS bot_is_system
+    FROM bot_commands c
+    JOIN bot_bot b ON b.id = c.bot_id
+   WHERE c.is_active
+     AND b.is_active
+     AND (b.is_system OR b.entity_id = ANY($1::text[]))
+   ORDER BY b.is_system DESC, lower(c.name), lower(b.handle)`;
+
+/**
+ * @param {string[]} participantEntityIds  the conversation's members
+ * @returns {Promise<Array<object>>}  the menu, already public-shaped
+ */
+const listCommands = async (participantEntityIds = []) => {
+  const participants = [
+    ...new Set((participantEntityIds || []).filter(Boolean).map(String)),
+  ];
+
+  const { rows } = await pool.query(LIST_SQL, [participants]);
+  return publicCommandList(rows);
+};
+
+/**
  * What the client may be told, for autocomplete.
  *
  * An ALLOW-list rather than deleting the dangerous fields, so a column added
@@ -89,4 +140,50 @@ const publicCommand = (row) => ({
   bot: row.bot_handle,
 });
 
-module.exports = { resolveCommand, publicCommand, RESOLVE_SQL };
+/**
+ * The menu, with the text to insert worked out per entry.
+ *
+ * WHY THE SERVER DECIDES WHAT TO INSERT
+ * -------------------------------------
+ * Two bots can each own a "summarize". Combining their lists puts both in one
+ * menu, and a client that inserted the bare "/summarize" would run BOTH -
+ * which is the precise ambiguity the `:handle` suffix exists to remove.
+ *
+ * So `insert` is computed here: the bare name while it is unique in THIS
+ * conversation, and the targeted form the moment it is not. Doing it per
+ * conversation rather than globally matters - it means a name shared across
+ * the platform still inserts cleanly in a room with only one of its owners in
+ * it, and every client gets the rule right without implementing it.
+ */
+const publicCommandList = (rows = []) => {
+  const seen = new Map();
+  for (const row of rows) {
+    const name = String(row.name || "").toLowerCase();
+    seen.set(name, (seen.get(name) || 0) + 1);
+  }
+
+  return rows.map((row) => {
+    const command = publicCommand(row);
+    const ambiguous = (seen.get(String(row.name || "").toLowerCase()) || 0) > 1;
+    return {
+      ...command,
+      // The bot's display name, so a menu can show who owns a command without
+      // a second lookup per row.
+      bot_name: row.bot_name || row.bot_handle || "",
+      is_system: Boolean(row.bot_is_system),
+      insert:
+        ambiguous && row.bot_handle
+          ? `/${row.name}:${row.bot_handle}`
+          : `/${row.name}`,
+    };
+  });
+};
+
+module.exports = {
+  resolveCommand,
+  listCommands,
+  publicCommand,
+  publicCommandList,
+  RESOLVE_SQL,
+  LIST_SQL,
+};
