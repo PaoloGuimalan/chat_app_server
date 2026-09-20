@@ -15,7 +15,11 @@
     "Any new implementation should read this file and run every case. Skip the",
     "suite if the file is absent, the way the Go drift test skips when the",
     "platform sources are not on disk - a missing corpus is a checkout problem,",
-    "not a failure."
+    "not a failure.",
+    "",
+    "\"multiple\" is what parseCommands returns: every command in the message,",
+    "each with arguments bounded by the next one. \"matches\" stays the",
+    "single-command view, which is what parseCommand returns."
   ],
   "matches": [
     {
@@ -131,11 +135,11 @@
       "args": "command"
     },
     {
-      "why": "the FIRST command wins, so there is still one per message",
+      "why": "the first command is what parseCommand returns, and its arguments stop at the next one - \"/summarize\" is the following instruction, not this one's argument",
       "input": "/stop and then /summarize",
       "name": "stop",
       "target": null,
-      "args": "and then /summarize"
+      "args": "and then"
     },
     {
       "why": "a target still narrows fan-out when the command follows text",
@@ -205,6 +209,56 @@
     {
       "why": "a bare slash after text names nothing",
       "input": "ask about / please"
+    }
+  ],
+  "multiple": [
+    {
+      "why": "two commands, one thought - \"wake both\" must wake both",
+      "input": "/wake:neon /wake:xenon",
+      "commands": [
+        {
+          "name": "wake",
+          "target": "neon",
+          "args": ""
+        },
+        {
+          "name": "wake",
+          "target": "xenon",
+          "args": ""
+        }
+      ]
+    },
+    {
+      "why": "each one keeps its own arguments, bounded by the next command",
+      "input": "/stop and then /summarize the thread",
+      "commands": [
+        {
+          "name": "stop",
+          "target": null,
+          "args": "and then"
+        },
+        {
+          "name": "summarize",
+          "target": null,
+          "args": "the thread"
+        }
+      ]
+    },
+    {
+      "why": "text before the first command belongs to neither",
+      "input": "hey @ana /members please",
+      "commands": [
+        {
+          "name": "members",
+          "target": null,
+          "args": "please"
+        }
+      ]
+    },
+    {
+      "why": "an ordinary message has none",
+      "input": "see and/or the docs",
+      "commands": []
     }
   ]
 }

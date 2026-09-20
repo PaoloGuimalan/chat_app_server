@@ -27,13 +27,19 @@
  * message must not wait on, or fail because of, what the message triggers.
  */
 
-const { parseCommand } = require("./commandParser");
+const {
+  parseCommands,
+  overflowCommands,
+  MAX_COMMANDS_PER_MESSAGE,
+} = require("./commandParser");
+const { postSystemNotice } = require("./systemNotice");
 const { resolveCommand } = require("./commandResolver");
 const { buildEnvelope } = require("./commandEnvelope");
 const { publish, QUEUES } = require("../rabbitmq/workqueue");
 
 /**
- * @returns {Promise<number>} how many jobs were queued. 0 is the ordinary
+ * @returns {Promise<number>} how many jobs were queued, across every command
+ *   in the message and every bot each one resolves to. 0 is the ordinary
  *   answer - most messages are not commands.
  */
 const queueCommand = async ({
@@ -53,44 +59,82 @@ const queueCommand = async ({
     // caption, and "notif" is a string this server wrote.
     if (String(messageType).toLowerCase() !== "text") return 0;
 
-    // Usually parsed already by the caller, which needs it for the realtime
-    // frame too. Parsing again here would be a second chance for the two to
-    // disagree about what was typed.
-    const parsed = command || parseCommand(content);
-    if (!parsed) return 0;
-
-    const resolved = await resolveCommand(parsed, participants);
-
-    // Bot commands are the bot's own business - see the module docstring.
-    const rows = resolved.filter(
-      (row) => row.category === "system" || row.category === "webhook",
-    );
-    if (!rows.length) {
-      // A typo, a command whose bot is not here, a target naming a bot without
-      // it, or one that is a bot's to run. All the same here: nothing to queue.
-      return 0;
+    // EVERY command in the message, not just the first. "/wake:neon
+    // /wake:xenon" is one thought - wake both - and running only the first
+    // was a message that visibly contained two commands doing half of what it
+    // said.
+    //
+    // The caller passes the one it parsed for the realtime frame, which
+    // carries a single command; that is used as the first rather than parsing
+    // twice, so the frame and the queue cannot disagree about what was typed.
+    const parsed = parseCommands(content);
+    if (!parsed.length) return 0;
+    if (command && parsed[0]) {
+      parsed[0] = { ...parsed[0], ...command };
     }
 
-    const envelope = buildEnvelope({
-      command: parsed,
-      messageID,
-      conversationID,
-      conversationType,
-      sender,
-      senderHandle,
-      replyingTo,
-    });
-
-    // One job per bot. Fan-out is resolved HERE rather than in the worker, so
-    // a slow or failing bot cannot hold up the others.
     let queued = 0;
-    for (const row of rows) {
-      const ok = await publish(QUEUES.RUN_COMMAND, {
-        command_id: row.id,
-        envelope,
+
+    for (const typed of parsed) {
+      const resolved = await resolveCommand(typed, participants);
+
+      // Bot commands are the bot's own business - see the module docstring.
+      const rows = resolved.filter(
+        (row) => row.category === "system" || row.category === "webhook",
+      );
+      if (!rows.length) {
+        // A typo, a command whose bot is not here, a target naming a bot
+        // without it, or one that is a bot's to run. All the same here:
+        // nothing to queue for THIS command, and the next one still gets its
+        // turn.
+        continue;
+      }
+
+      // Its own envelope, carrying its own name, target and arguments. One
+      // shared envelope would tell every job it was the first command.
+      const envelope = buildEnvelope({
+        command: typed,
+        messageID,
+        conversationID,
+        conversationType,
+        sender,
+        senderHandle,
+        replyingTo,
       });
-      if (ok) queued += 1;
+
+      // One job per bot. Fan-out is resolved HERE rather than in the worker,
+      // so a slow or failing bot cannot hold up the others.
+      for (const row of rows) {
+        const ok = await publish(QUEUES.RUN_COMMAND, {
+          command_id: row.id,
+          envelope,
+        });
+        if (ok) queued += 1;
+      }
     }
+
+    // What the cap dropped, said out loud. A message that visibly contains
+    // eight commands and quietly runs five is indistinguishable from three of
+    // them failing, and nothing in the conversation tells the difference.
+    //
+    // AFTER the jobs are published, so the notice cannot arrive before the
+    // commands it is about. Not awaited for its result and never fatal - see
+    // postSystemNotice.
+    const skipped = overflowCommands(content);
+    if (skipped.length) {
+      const names = skipped
+        .map((c) => (c.target ? `/${c.name}:${c.target}` : `/${c.name}`))
+        .join(" ");
+      await postSystemNotice({
+        conversationID,
+        conversationType,
+        participants,
+        content:
+          `Only ${MAX_COMMANDS_PER_MESSAGE} commands run per message. ` +
+          `These did not: ${names}`,
+      });
+    }
+
     return queued;
   } catch (err) {
     // A command that could not be queued must not fail the message that
