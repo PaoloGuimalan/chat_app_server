@@ -13,16 +13,27 @@
  * would hold the sender's HTTP request open for the length of somebody else's
  * model call.
  *
- * AT THE START, AND ONLY ONE
- * --------------------------
- * A mention can appear anywhere in a sentence; a command cannot. People talk
- * ABOUT commands - "use the /summarize command" - and a message that merely
- * contains one must not fire it. So a command is the first thing in the
- * message or it is not a command, which also means there is exactly one per
- * message and everything after it is arguments.
+ * ANYWHERE A WORD STARTS, AND THE FIRST ONE WINS
+ * ----------------------------------------------
+ * Exactly where a mention can go, and for the same reason: people address a
+ * bot the way they address a person, and "@juanlazy /summarize the thread"
+ * reads as one thought. Requiring the command to be the first thing in the
+ * message made that sentence run nothing at all, silently.
+ *
+ * The cost is that "use the /summarize command" now parses. That is accepted
+ * on the same grounds mentions accept it: RESOLUTION is the net. A parsed name
+ * runs only if a bot in this conversation declares it, so talking about a
+ * command somebody here owns does fire it, and talking about any other does
+ * not - the same way "@ana" only notifies an Ana who is actually a member.
+ *
+ * `(?:^|\s)` is what keeps a slash inside a word out: "and/or" and
+ * "/api/v1/users" have no whitespace before their inner slashes. The first
+ * match wins, so there is still exactly one command per message and everything
+ * after its name is arguments.
  *
  * `//summarize` is the escape hatch, and it falls out of the charset rather
- * than being a special case: the second slash is not a name character.
+ * than being a special case: the second slash is not a name character, and the
+ * second one is not preceded by whitespace either.
  *
  * THE GRAMMAR IS PINNED BY A CORPUS, NOT BY THIS REGEX
  * ---------------------------------------------------
@@ -43,7 +54,7 @@
 // makes "/summarize." not a command rather than a command named "summarize"
 // with a full stop quietly dropped.
 const COMMAND_PATTERN =
-  /^\s*\/([A-Za-z0-9-]{1,32})(?::([A-Za-z0-9._-]{1,50}))?(?=$|\s)\s*([\s\S]*)$/;
+  /(?:^|\s)\/([A-Za-z0-9-]{1,32})(?::([A-Za-z0-9._-]{1,50}))?(?=$|\s)\s*([\s\S]*)$/;
 
 /**
  * The command in this message, or null.

@@ -17,7 +17,6 @@
     "platform sources are not on disk - a missing corpus is a checkout problem,",
     "not a failure."
   ],
-
   "matches": [
     {
       "why": "the simplest form",
@@ -116,22 +115,57 @@
       "name": "abcdefghijabcdefghijabcdefghijab",
       "target": null,
       "args": ""
+    },
+    {
+      "why": "a command after a mention - the case people actually type, and the reason this is no longer anchored to the start",
+      "input": "@juanlazy /summarize the thread",
+      "name": "summarize",
+      "target": null,
+      "args": "the thread"
+    },
+    {
+      "why": "anywhere a word starts, exactly like a mention",
+      "input": "use the /summarize command",
+      "name": "summarize",
+      "target": null,
+      "args": "command"
+    },
+    {
+      "why": "the FIRST command wins, so there is still one per message",
+      "input": "/stop and then /summarize",
+      "name": "stop",
+      "target": null,
+      "args": "and then /summarize"
+    },
+    {
+      "why": "a target still narrows fan-out when the command follows text",
+      "input": "hey @ana /summarize:neon now",
+      "name": "summarize",
+      "target": "neon",
+      "args": "now"
     }
   ],
-
   "nonMatches": [
-    { "why": "nothing at all", "input": "" },
-    { "why": "ordinary text", "input": "hello there" },
     {
-      "why": "NOT at the start - people talk ABOUT commands, and a message that merely contains one must not fire it",
-      "input": "use the /summarize command"
+      "why": "nothing at all",
+      "input": ""
+    },
+    {
+      "why": "ordinary text",
+      "input": "hello there"
     },
     {
       "why": "a doubled slash is the escape hatch for writing a command name without running it",
       "input": "//summarize"
     },
-    { "why": "a slash alone names nothing", "input": "/" },
-    { "why": "a slash and a space name nothing", "input": "/ summarize" },
+    {
+      "why": "a slash alone names nothing",
+      "input": "/"
+    },
+    {
+      "why": "a slash and a space name nothing",
+      "input": "/ summarize"
+    },
     {
       "why": "the name must end at whitespace, a target, or the message - so trailing punctuation does not silently become part of it",
       "input": "/summarize."
@@ -159,6 +193,18 @@
     {
       "why": "a date, for the same reason",
       "input": "/2026/09/17"
+    },
+    {
+      "why": "a slash inside a word is not a command - there is no whitespace before it",
+      "input": "see and/or the docs"
+    },
+    {
+      "why": "the doubled-slash escape hatch still holds mid-sentence",
+      "input": "write it as //summarize"
+    },
+    {
+      "why": "a bare slash after text names nothing",
+      "input": "ask about / please"
     }
   ]
 }
