@@ -225,6 +225,15 @@ const repliedMessageID = (replyingTo) => {
     : null;
 };
 
+/**
+ * A post sent into a chat WITHOUT a note is its own message type - "post",
+ * content = the post id - not an empty text reply; with a note it is a text
+ * reply to the post, as before. Messages stored the old way (an empty reply
+ * to a post) still render: the clients keep reading those.
+ */
+const POST_MESSAGE_TYPE = "post";
+const POST_MESSAGE_PREVIEW = "Sent a post";
+
 const PREVIEW_LABELS = {
   [REPLY_TARGET_TYPES.POST]: "Sent a post",
   [REPLY_TARGET_TYPES.MOMENT]: "Replied to a moment",
@@ -402,7 +411,9 @@ const messageTargetCard = (target, repliedMessage, handles) => {
   const attachedType =
     attached && attached.type !== REPLY_TARGET_TYPES.MESSAGE ? attached.type : null;
   const content =
-    messageType === "text" || messageType === "notif"
+    messageType === POST_MESSAGE_TYPE
+      ? { message_type: messageType, text: POST_MESSAGE_PREVIEW }
+      : messageType === "text" || messageType === "notif"
       ? {
           message_type: messageType,
           text: clip(repliedMessage.content) || replyPreviewLabel(repliedMessage.replyingTo) || "",
@@ -423,20 +434,54 @@ const messageTargetCard = (target, repliedMessage, handles) => {
  */
 const hydrateReplyTargets = async (messages, viewerEntityID) => {
   const replies = messages
-    .map((message) => ({
-      message,
-      target: message.isReply ? normalizeReplyTarget(message.replyingTo) : null,
-    }))
+    .map((message) => {
+      const target = message.isReply ? normalizeReplyTarget(message.replyingTo) : null;
+      // Quoting a message that had no text of its own - a sent post, a
+      // moment or thought reply: what THAT message carried, so the quote can
+      // draw its card instead of only saying "Sent a post".
+      let attached = null;
+      if (target && target.type === REPLY_TARGET_TYPES.MESSAGE) {
+        const replied = message.replyedmessage?.[0];
+        const inner = replied ? normalizeReplyTarget(replied.replyingTo) : null;
+        if (
+          replied &&
+          !replied.isDeleted &&
+          String(replied.messageType) === POST_MESSAGE_TYPE &&
+          replied.content
+        ) {
+          attached = { type: REPLY_TARGET_TYPES.POST, id: String(replied.content) };
+        } else if (
+          inner &&
+          inner.type !== REPLY_TARGET_TYPES.MESSAGE &&
+          !replied.isDeleted &&
+          String(replied.messageType || "text") === "text" &&
+          !String(replied.content || "").trim()
+        ) {
+          attached = inner;
+        }
+      }
+      return { message, target, attached };
+    })
     .filter(({ target }) => target);
 
-  if (!replies.length) return messages;
+  // Post messages: the card IS the message.
+  const postMessages = messages.filter(
+    (message) =>
+      String(message.messageType) === POST_MESSAGE_TYPE &&
+      !message.isDeleted &&
+      message.content,
+  );
+
+  if (!replies.length && !postMessages.length) return messages;
 
   const postIDs = [
-    ...new Set(
-      replies
+    ...new Set([
+      ...replies
         .filter(({ target }) => target.type !== REPLY_TARGET_TYPES.MESSAGE)
         .map(({ target }) => target.id),
-    ),
+      ...replies.filter(({ attached }) => attached).map(({ attached }) => attached.id),
+      ...postMessages.map((message) => String(message.content)),
+    ]),
   ];
 
   let posts = new Map();
@@ -449,7 +494,15 @@ const hydrateReplyTargets = async (messages, viewerEntityID) => {
   }
 
   const authorIDs = new Set();
-  for (const { message, target } of replies) {
+  for (const message of postMessages) {
+    const row = posts.get(String(message.content));
+    if (row) authorIDs.add(String(row.entity_id));
+  }
+  for (const { message, target, attached } of replies) {
+    if (attached) {
+      const row = posts.get(attached.id);
+      if (row) authorIDs.add(String(row.entity_id));
+    }
     if (target.type === REPLY_TARGET_TYPES.MESSAGE) {
       const replied = message.replyedmessage?.[0];
       if (replied?.sender) authorIDs.add(String(replied.sender));
@@ -466,17 +519,39 @@ const hydrateReplyTargets = async (messages, viewerEntityID) => {
     console.log("[replyTargets] author lookup failed:", err.message || err);
   }
 
-  for (const { message, target } of replies) {
+  for (const message of postMessages) {
+    const id = String(message.content);
+    message.postcard = postTargetCard(
+      { type: REPLY_TARGET_TYPES.POST, id },
+      posts.get(id),
+      handles,
+      viewerEntityID,
+    );
+  }
+
+  for (const { message, target, attached } of replies) {
     message.replyedtarget =
       target.type === REPLY_TARGET_TYPES.MESSAGE
         ? messageTargetCard(target, message.replyedmessage?.[0], handles)
         : postTargetCard(target, posts.get(target.id), handles, viewerEntityID);
+    // The quoted message's own card (see `attached` above), as the viewer
+    // may see it - an expired moment or a hidden post says so, as always.
+    if (attached && message.replyedtarget.content) {
+      message.replyedtarget.content.attached = postTargetCard(
+        attached,
+        posts.get(attached.id),
+        handles,
+        viewerEntityID,
+      );
+    }
   }
 
   return messages;
 };
 
 module.exports = {
+  POST_MESSAGE_TYPE,
+  POST_MESSAGE_PREVIEW,
   REPLY_TARGET_TYPES,
   REPLIED_MESSAGE_LOOKUP,
   LEGACY_REPLYING_TO_EXPR,

@@ -83,6 +83,8 @@ const {
   assertCanReplyTo,
   repliedMessageID,
   replyPreviewLabel,
+  POST_MESSAGE_TYPE,
+  POST_MESSAGE_PREVIEW,
 } = require("../../reusables/hooks/replyTargets");
 const { parseCommand } = require("../../reusables/hooks/commandParser");
 const {
@@ -1494,7 +1496,10 @@ const deliverMessage = async (params, decodedToken) => {
   const receiversfetch = await GetAllReceivers(conversationID);
   const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
 
-  const mentionedUsernames = extractMentionUsernames(decodedToken.content);
+  // A post message's content is a post id, not words anyone typed.
+  const mentionedUsernames = extractMentionUsernames(
+    decodedToken.messageType === POST_MESSAGE_TYPE ? "" : decodedToken.content,
+  );
 
   const receiverMap = new Map(
     receiversfetch.users.map((rcv) => [
@@ -1552,7 +1557,10 @@ const deliverMessage = async (params, decodedToken) => {
   // itself, or - for a post sent into the chat without a note - a line saying
   // so ("Sent a post"), where both would otherwise be blank. Never stored as
   // the message's content.
-  const previewText = sanitizedContent || replyPreviewLabel(replyingTo) || "";
+  const previewText =
+    String(decodedToken.messageType) === POST_MESSAGE_TYPE
+      ? POST_MESSAGE_PREVIEW
+      : sanitizedContent || replyPreviewLabel(replyingTo) || "";
 
   // Parsed once, used twice: the realtime frame tells every bot a command
   // was typed, and queueCommand runs the ones that are the platform's.
@@ -1775,7 +1783,10 @@ const deliverMessage = async (params, decodedToken) => {
       senderId: entity_id,
       senderName: senderDetails?.display_name || `@${username}`,
       senderAvatarUrl: senderDetails?.profile || "",
-      body: messageType === "text" ? previewText : "Sent an attachment",
+      body:
+        messageType === "text" || messageType === POST_MESSAGE_TYPE
+          ? previewText
+          : "Sent an attachment",
       messageId: messageID,
     });
   };
@@ -1976,15 +1987,33 @@ router.post(
             }
           }
 
-          const { messageID } = await deliverMessage(req.params, {
-            pendingID: null,
-            conversationID,
-            conversationType,
-            content: note,
-            messageType: "text",
-            isReply: true,
-            replyingTo: { type: targetType, id: postID },
-          });
+          // With a note it is a REPLY to the post (the note is the text);
+          // without one it is simply a post message - messageType "post",
+          // the post id as its content, like a photo's url - rather than an
+          // empty text reply.
+          const hasNote = !!String(note || "").trim();
+          const { messageID } = await deliverMessage(
+            req.params,
+            hasNote
+              ? {
+                  pendingID: null,
+                  conversationID,
+                  conversationType,
+                  content: note,
+                  messageType: "text",
+                  isReply: true,
+                  replyingTo: { type: targetType, id: postID },
+                }
+              : {
+                  pendingID: null,
+                  conversationID,
+                  conversationType,
+                  content: postID,
+                  messageType: POST_MESSAGE_TYPE,
+                  isReply: false,
+                  replyingTo: "",
+                },
+          );
           results.push({ ...target, conversationID, status: true, messageID });
         } catch (err) {
           results.push({

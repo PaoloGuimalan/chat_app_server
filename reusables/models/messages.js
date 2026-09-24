@@ -321,7 +321,10 @@ const SyncConversationLastMessage = async (conversationID) => {
           // The same preview deliverMessage wrote: a post sent without a
           // note has no content, and resyncing it to "" (which every "seen"
           // does) blanked the conversation list's "Sent a post" line.
-          text: msg.content || conversationPreviewLabel(msg.replyingTo) || "",
+          text:
+            msg.messageType === "post"
+              ? "Sent a post"
+              : msg.content || conversationPreviewLabel(msg.replyingTo) || "",
           messageDate: msg.messageDate ?? new Date(),
           messageType: msg.messageType ?? "text",
           isDeleted: msg.isDeleted === true,
