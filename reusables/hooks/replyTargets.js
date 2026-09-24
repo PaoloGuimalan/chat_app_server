@@ -261,7 +261,7 @@ const authorCard = (entityID, handles) => {
  * Deliberately NOT filtered by kind or expiry: an expired moment still has to
  * come back so the card can say "expired" and name its author.
  */
-const loadPostTargets = async (postIDs, viewerEntityID) => {
+const loadPostTargets = async (postIDs, viewerEntityID, depth = 0) => {
   if (!postIDs.length) return new Map();
 
   const { rows } = await pool.query(
@@ -291,6 +291,32 @@ const loadPostTargets = async (postIDs, viewerEntityID) => {
     `,
     [postIDs, String(viewerEntityID)],
   );
+
+  // A share's one reference is the shared POST's id, not media - so its card
+  // had no picture (a shared-post moment replied to showed a placeholder).
+  // Resolve the shared post's own first photo/video, or, when that is itself
+  // a share, the original's: the same one level of nesting a post card
+  // draws. Only what the viewer may see; one query per level, and none when
+  // the page holds no shares.
+  const shares = rows.filter((row) => row.file_type === "shared_post" && row.reference);
+  if (shares.length && depth < 2) {
+    const shared = await loadPostTargets(
+      [...new Set(shares.map((row) => String(row.reference)))],
+      viewerEntityID,
+      depth + 1,
+    );
+    for (const row of shares) {
+      const target = shared.get(String(row.reference));
+      if (!target || target.is_deleted || !target.can_view) continue;
+      if (target.file_type !== "shared_post" && target.reference) {
+        row.shared_thumbnail = target.reference;
+        row.shared_media_type = target.reference_media_type || null;
+      } else if (target.shared_thumbnail) {
+        row.shared_thumbnail = target.shared_thumbnail;
+        row.shared_media_type = target.shared_media_type || null;
+      }
+    }
+  }
 
   return new Map(rows.map((row) => [String(row.post_id), row]));
 };
@@ -328,8 +354,11 @@ const postTargetCard = (target, row, handles, viewerEntityID) => {
   }
 
   const isShare = row.file_type === "shared_post";
-  const mediaType = isShare ? null : row.reference_media_type || null;
-  const thumbnail = isShare ? null : row.reference || null;
+  // A share shows the shared post's picture (resolved in loadPostTargets).
+  const mediaType = isShare
+    ? row.shared_media_type || null
+    : row.reference_media_type || null;
+  const thumbnail = isShare ? row.shared_thumbnail || null : row.reference || null;
 
   let content;
   if (type === POST_KINDS.THOUGHT) {
