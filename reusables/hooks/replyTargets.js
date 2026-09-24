@@ -396,9 +396,18 @@ const messageTargetCard = (target, repliedMessage, handles) => {
   }
 
   const messageType = String(repliedMessage.messageType || "text");
+  // A message that was only a sent post / a reply to a moment or thought has
+  // no text of its own - say what it was rather than quoting nothing.
+  const attached = normalizeReplyTarget(repliedMessage.replyingTo);
+  const attachedType =
+    attached && attached.type !== REPLY_TARGET_TYPES.MESSAGE ? attached.type : null;
   const content =
     messageType === "text" || messageType === "notif"
-      ? { message_type: messageType, text: clip(repliedMessage.content) }
+      ? {
+          message_type: messageType,
+          text: clip(repliedMessage.content) || replyPreviewLabel(repliedMessage.replyingTo) || "",
+          ...(attachedType ? { attached_type: attachedType } : {}),
+        }
       : { message_type: messageType, url: repliedMessage.content || null };
 
   return { ...target, status: "active", author, content };
