@@ -293,6 +293,11 @@ const NotificationMessageForConversations = async (
     });
 };
 
+// Lazy: replyTargets pulls in the users/posts models, and a top-level
+// require here would risk a cycle through them.
+const conversationPreviewLabel = (replyingTo) =>
+  require("../hooks/replyTargets").replyPreviewLabel(replyingTo);
+
 const SyncConversationLastMessage = async (conversationID) => {
   if (!conversationID) throw new Error("conversationID is required");
 
@@ -313,7 +318,10 @@ const SyncConversationLastMessage = async (conversationID) => {
         last_message: {
           messageID: msg.messageID ?? null,
           sender: msg.sender ?? null,
-          text: msg.content ?? "",
+          // The same preview deliverMessage wrote: a post sent without a
+          // note has no content, and resyncing it to "" (which every "seen"
+          // does) blanked the conversation list's "Sent a post" line.
+          text: msg.content || conversationPreviewLabel(msg.replyingTo) || "",
           messageDate: msg.messageDate ?? new Date(),
           messageType: msg.messageType ?? "text",
           isDeleted: msg.isDeleted === true,
