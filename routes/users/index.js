@@ -74,6 +74,15 @@ const dateGetter = require("../../reusables/hooks/getDate");
 const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { queueCommand } = require("../../reusables/hooks/queueCommand");
+const {
+  REPLIED_MESSAGE_LOOKUP,
+  LEGACY_REPLYING_TO_EXPR,
+  legacyReplyingTo,
+  hydrateReplyTargets,
+  sanitizeIncomingReplyingTo,
+  repliedMessageID,
+  replyPreviewLabel,
+} = require("../../reusables/hooks/replyTargets");
 const { parseCommand } = require("../../reusables/hooks/commandParser");
 const {
   base64ToArrayBuffer,
@@ -154,7 +163,17 @@ const {
   isRealmMember,
   GetRealmName,
 } = require("../../reusables/models/realms");
-const { bumpChatScore } = require("../../reusables/hooks/interactionscoring");
+const {
+  bumpChatScore,
+  interactionScoreBump,
+} = require("../../reusables/hooks/interactionscoring");
+const {
+  POST_KINDS,
+  postVisibleToSQL,
+  updateRankingScore,
+  logPostShare,
+} = require("../../reusables/models/posts");
+const Conversations = require("../../schema/messages/conversation");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -1438,300 +1457,506 @@ const checkExistingMessageID = async (messageID) => {
     });
 };
 
+/**
+ * Sends one message as the acting entity in `params` (what jwtchecker puts on
+ * req.params) - everything /sendMessage does, shared with /sendPost so a post
+ * sent into a chat is an ordinary message in every respect: membership check,
+ * mentions, sanitising, the conversation's last message, the realtime frame,
+ * pushes, commands, chat scores.
+ *
+ * Resolves { pendingID, messageID } once the message is saved and the
+ * conversation's last message is updated - the point /sendMessage has always
+ * answered at. The realtime frames, the command queue and the pushes then run
+ * in the background, exactly as they always ran after the response.
+ *
+ * Throws on a bad payload or a sender who is not in the conversation, and
+ * with `saveFailed` set when the write itself fails.
+ */
+const deliverMessage = async (params, decodedToken) => {
+  const userID = params.userID;
+  const username = params.username;
+  const id = params.id;
+  const entity_id = params.entity_id;
+
+  const pendingID = decodedToken.pendingID;
+
+  const messageID = await checkExistingMessageID(makeID(30));
+  const conversationID = decodedToken.conversationID;
+
+  await isRealmMember(conversationID, entity_id);
+
+  const sender = entity_id;
+  const receiversfetch = await GetAllReceivers(conversationID);
+  const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
+
+  const mentionedUsernames = extractMentionUsernames(decodedToken.content);
+
+  const receiverMap = new Map(
+    receiversfetch.users.map((rcv) => [
+      String(rcv.username).toLowerCase(),
+      rcv.entityID,
+    ]),
+  );
+
+  const mentionedReceiverIds = mentionedUsernames
+    .map((usern) => receiverMap.get(usern.toLowerCase()))
+    .filter(Boolean);
+
+  const mentionedReceiverSet = new Set(mentionedReceiverIds);
+
+  const realmName =
+    decodedToken.conversationType === "single"
+      ? null
+      : await GetRealmName(conversationID);
+
+  // `sender` is the ACTING entity, so a mention made while switched to a
+  // page must be attributed to the page. `username` (from jwtchecker) is
+  // always the human behind it, and is kept only as a fallback.
+  const mentionerDetails = await GetSenderDetails(sender);
+
+  const mentioner = {
+    entityID: sender,
+    username: `@${mentionerDetails?.handle || username}`,
+    realmName: realmName,
+    isSingle: decodedToken.conversationType === "single",
+  };
+
+  // const seeners = [userID]; //Array
+  const seeners = [entity_id]; //Array
+  const content = decodedToken.content;
+  // const messageDate = {
+  //   date: dateGetter(),
+  //   time: timeGetter(),
+  // };
+  const isReply = decodedToken.isReply;
+  // A message id string, or {type, id} for a reply to a post / moment /
+  // thought - validated here so a malformed object is a 400, not a stored
+  // document every reader has to survive.
+  const replyingTo = sanitizeIncomingReplyingTo(decodedToken.replyingTo);
+  const messageType = decodedToken.messageType;
+  const conversationType = normalizeConversationType(
+    decodedToken.conversationType,
+  );
+
+  const sanitizedContent = sanitizeForStorage(content);
+
+  // What the conversation list and the push show for this message. The text
+  // itself, or - for a post sent into the chat without a note - a line saying
+  // so ("Sent a post"), where both would otherwise be blank. Never stored as
+  // the message's content.
+  const previewText = sanitizedContent || replyPreviewLabel(replyingTo) || "";
+
+  // Parsed once, used twice: the realtime frame tells every bot a command
+  // was typed, and queueCommand runs the ones that are the platform's.
+  // Parsing in both places would be a second chance for them to disagree
+  // about what was said.
+  const typedCommand =
+    String(messageType).toLowerCase() === "text"
+      ? parseCommand(sanitizedContent)
+      : null;
+
+  const payload = {
+    messageID: messageID,
+    conversationID: conversationID,
+    pendingID: pendingID,
+    sender: sender,
+    receivers: [], // receivers
+    seeners: seeners,
+    content: sanitizedContent,
+    // messageDate: messageDate,
+    isReply: isReply,
+    replyingTo: replyingTo,
+    reactions: [],
+    isDeleted: false,
+    messageType: messageType,
+    conversationType: conversationType,
+  };
+
+  const newMessage = new UserMessage(payload);
+
+  // The save and the two conversation writes after it were one promise chain
+  // with one catch before this was a function, answering "Error checking
+  // message" for a failure in any of the three - kept as one unit here.
+  try {
+    await newMessage.save();
+
+    // Context only - see queueMessageTagging. Never awaited: sending a
+    // message must not wait on content analysis.
+    queueMessageTagging({
+      messageID,
+      conversationID,
+      sender,
+      content: sanitizedContent,
+      messageType,
+    });
+
+    await ChatHistory.updateMany(
+      {
+        conversationID: conversationID,
+      },
+      {
+        $set: {
+          isArchived: false,
+        },
+      },
+    );
+
+    await SaveConversation(
+      conversationID,
+      conversationType,
+      "user",
+      null,
+      receivers,
+      messageID,
+      sender,
+      previewText,
+      new Date(),
+      messageType,
+      false,
+    );
+  } catch (err) {
+    console.log(err);
+    err.saveFailed = true;
+    throw err;
+  }
+
+  // Everything below ran after the response before this was a function, and
+  // still does: the caller has its answer the moment the conversation is
+  // updated. Never awaited, so a failure here is logged and never surfaces as
+  // a failed send.
+  const afterSend = async () => {
+    receivers.map((rcvs, i) => {
+      const isMentioned = mentionedReceiverSet.has(rcvs);
+
+      MessagesTrigger(
+        rcvs,
+        {
+          conversationID,
+          entityID: sender,
+          mentioner: isMentioned ? mentioner : null,
+          // A bot learns about a command the way it learns about a
+          // mention: from the frame. Name and target only - enough to
+          // decide whether it has this command, and not enough to act
+          // without reading the message, which it does anyway.
+          //
+          // Sent to EVERY recipient rather than only to bots that own
+          // the name: chatterloop does not know what an external bot
+          // answers to, and deciding is the bot's business.
+          command: typedCommand
+            ? { name: typedCommand.name, target: typedCommand.target }
+            : null,
+        },
+        false,
+      );
+    });
+    // A /command, if this message is one. Same contract as
+    // queueMessageTagging: never awaited, never throws.
+    //
+    // QUEUED LAST, AND THAT ORDER IS LOAD-BEARING
+    // -------------------------------------------
+    // worker_service answers a command by writing a message of its own,
+    // and it starts the moment this is published. Queued any earlier, it
+    // races the three writes above and loses in all three ways:
+    //
+    //   SaveConversation had not run, so the `conversations` document
+    //   was missing or stale - and that document is where the worker
+    //   reads the participants it announces the reply to. No
+    //   participants, no frames, so the reply arrived for nobody until
+    //   they refreshed.
+    //
+    //   SaveConversation would then OVERWRITE last_message with this
+    //   message, so the chat list showed the command as the latest thing
+    //   said even though the reply came after it.
+    //
+    //   MessagesTrigger had not run, so the answer was announced before
+    //   the question - the reply appeared above a message that was not
+    //   on screen yet.
+    //
+    // The message itself is saved well before this either way; it is the
+    // writes AROUND it that the worker depends on.
+    queueCommand({
+      command: typedCommand,
+      messageID,
+      conversationID,
+      conversationType,
+      sender,
+      senderHandle: mentionerDetails?.handle || username,
+      content: sanitizedContent,
+      messageType,
+      // Message threading only: the command envelope carries a message
+      // id, so a reply to a moment/post/thought reaches it as no reply.
+      replyingTo: repliedMessageID(replyingTo),
+      // What decides reach - a bot answers a command only in
+      // conversations it belongs to.
+      participants: receivers,
+    });
+
+    bumpChatScore(conversationID, receivers, entity_id);
+
+    if (messageType === "text") {
+      resolveLinkPreviewForMessage(
+        messageID,
+        conversationID,
+        sanitizedContent,
+        receivers,
+        sender,
+      );
+    }
+
+    const senderDetails = await GetSenderDetails(sender);
+
+    // GetAllReceivers includes the sender, and their own other devices
+    // would otherwise be notified of their own message.
+    const pushReceivers = receivers.filter(
+      (r) => String(r) !== String(entity_id),
+    );
+
+    // Anyone @mentioned gets the mention push INSTEAD of the plain
+    // message push, not as well as it - two tray entries for one message
+    // is noise, and the mention one is strictly more informative (it
+    // carries the message text too, so nothing is lost by the swap).
+    const mentionedPushReceivers = pushReceivers.filter((r) =>
+      mentionedReceiverSet.has(r),
+    );
+    const plainPushReceivers = pushReceivers.filter(
+      (r) => !mentionedReceiverSet.has(r),
+    );
+
+    if (mentionedPushReceivers.length > 0) {
+      const mentionPreview =
+        messageType === "text" && sanitizedContent
+          ? `${mentioner.username} mentioned you: ${sanitizedContent}`
+          : `${mentioner.username} mentioned you`;
+
+      // sendActivity, not sendMessage: this rides the quieter Activity
+      // channel, whose tone is notification_alert - the exact sound
+      // webapp plays for a mention (reusables/hooks/sse.ts's mentioner
+      // branch), and a channel whose description already names mentions.
+      // The app renders any non-"message" type generically from
+      // title/body/route, so this needs no mobile release
+      // (chatterloop_app/lib/core/notifications/push_payload.dart).
+      push.sendActivity({
+        receivers: mentionedPushReceivers,
+        type: "mention",
+        // Titled like the message push - the group for a group, the
+        // person for a single chat - so the two read consistently in
+        // the tray. webapp folds the realm into its sentence instead
+        // ("... mentioned you at X") because a toast has no title slot.
+        title:
+          decodedToken.conversationType !== "single"
+            ? realmName
+            : senderDetails?.display_name || `@${username}`,
+        body: mentionPreview,
+        route: `/conversation/${conversationID}`,
+        senderAvatarUrl: senderDetails?.profile || "",
+      });
+    }
+
+    push.sendMessage({
+      receivers: plainPushReceivers,
+      conversationId: conversationID,
+      // Which chat this is, NOT who sent it (senderName carries that).
+      // A group is titled by the group; a single chat by the person.
+      // realmName is null for singles by construction above, so the two
+      // arms can't be swapped without the single case losing its title.
+      conversationName:
+        decodedToken.conversationType !== "single"
+          ? realmName
+          : senderDetails?.display_name || `@${username}`,
+      isGroup: decodedToken.conversationType !== "single",
+      senderId: entity_id,
+      senderName: senderDetails?.display_name || `@${username}`,
+      senderAvatarUrl: senderDetails?.profile || "",
+      body: messageType === "text" ? previewText : "Sent an attachment",
+      messageId: messageID,
+    });
+  };
+
+  afterSend().catch((err) => {
+    console.log(err);
+  });
+
+  return { pendingID, messageID };
+};
+
 router.post(
   "/sendMessage",
   jwtchecker,
   requiresPermission("messages.send"),
   async (req, res) => {
-    const userID = req.params.userID;
-    const username = req.params.username;
-    const id = req.params.id;
+    try {
+      const decodedToken = jwt.verify(req.body.token, JWT_SECRET);
+      const { pendingID } = await deliverMessage(req.params, decodedToken);
+
+      res.send({
+        status: true,
+        message: "Message Sent",
+        pendingID: pendingID,
+      });
+    } catch (ex) {
+      console.log(ex);
+      if (ex.saveFailed) {
+        return res.send({ status: false, message: "Error checking message" });
+      }
+      res
+        .status(400)
+        .send({ status: false, message: ex.message || ex.toString() });
+    }
+  },
+);
+
+// How many conversations one "Send in message" may reach.
+const SEND_POST_MAX_CONVERSATIONS = 10;
+
+/**
+ * "Send in message": sends a post into up to SEND_POST_MAX_CONVERSATIONS of
+ * the sender's conversations - any kind, single, group, server or page thread.
+ *
+ * Each is an ordinary message through deliverMessage (text, the optional note
+ * as its content) whose replyingTo is {type: "post", id} - so the chat shows
+ * the post as a reply card, hydrated per reader by replyTargets.js, and the
+ * sender needs to be in every conversation exactly as for any message.
+ *
+ * It is a SHARE: one ranking bump, one interaction bump towards the author and
+ * one engagement row (via "message") per send, however many chats it reached,
+ * so sending to ten chats cannot count ten times. No notification to the
+ * author - unlike a repost, this is a private share.
+ *
+ * Signed payload: { postID, conversationIDs: [..], content?: note }
+ * Answers with the outcome per conversation; `status` is true if at least one
+ * went through.
+ */
+router.post(
+  "/sendPost",
+  jwtchecker,
+  requiresPermission("messages.send"),
+  async (req, res) => {
     const entity_id = req.params.entity_id;
-    const token = req.body.token;
 
     try {
-      const decodedToken = jwt.verify(token, JWT_SECRET);
+      const decodedToken = jwt.verify(req.body.token, JWT_SECRET);
+      const postID = String(decodedToken.postID || "");
+      const note =
+        typeof decodedToken.content === "string" ? decodedToken.content : "";
+      const conversationIDs = [
+        ...new Set(
+          (Array.isArray(decodedToken.conversationIDs)
+            ? decodedToken.conversationIDs
+            : []
+          )
+            .filter(Boolean)
+            .map(String),
+        ),
+      ];
 
-      const pendingID = decodedToken.pendingID;
+      if (!postID) {
+        return res
+          .status(400)
+          .send({ status: false, message: "No post to send" });
+      }
+      if (conversationIDs.length === 0) {
+        return res
+          .status(400)
+          .send({ status: false, message: "Choose at least one conversation" });
+      }
+      if (conversationIDs.length > SEND_POST_MAX_CONVERSATIONS) {
+        return res.status(400).send({
+          status: false,
+          message: `A post can be sent to at most ${SEND_POST_MAX_CONVERSATIONS} conversations at once`,
+        });
+      }
 
-      const messageID = await checkExistingMessageID(makeID(30));
-      const conversationID = decodedToken.conversationID;
+      // The sender must be able to read the post themselves, and it must
+      // still be live. 404 for all of it: whether a post they cannot see
+      // exists is not something to confirm.
+      const { rows: postRows } = await pool.query(
+        `
+        SELECT p.entity_id, p.on_feed
+        FROM newsfeed_post p
+        WHERE p.post_id = $1
+          AND p.deleted_at IS NULL
+          AND (p.expires_at IS NULL OR p.expires_at > now())
+          AND (p.is_archived = FALSE OR p.entity_id = $2)
+          AND ${postVisibleToSQL("p", "$2")}
+        LIMIT 1;
+        `,
+        [postID, String(entity_id)],
+      );
 
-      await isRealmMember(conversationID, entity_id);
+      if (postRows.length === 0) {
+        return res
+          .status(404)
+          .send({ status: false, message: "Post not available" });
+      }
 
-      const sender = entity_id;
-      const receiversfetch = await GetAllReceivers(conversationID);
-      const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
+      const authorID = String(postRows[0].entity_id);
+      const kind = postRows[0].on_feed;
+      const targetType =
+        kind === POST_KINDS.MOMENT || kind === POST_KINDS.THOUGHT
+          ? kind
+          : "post";
 
-      const mentionedUsernames = extractMentionUsernames(decodedToken.content);
-
-      const receiverMap = new Map(
-        receiversfetch.users.map((rcv) => [
-          String(rcv.username).toLowerCase(),
-          rcv.entityID,
+      // conversationType from the conversation itself rather than the
+      // client, which only sends ids here. The picker lists conversations
+      // that already exist, so one with no document is not a valid target.
+      const conversationDocs = await Conversations.find(
+        { conversationID: { $in: conversationIDs } },
+        { conversationID: 1, conversationType: 1 },
+      ).lean();
+      const typeByConversation = new Map(
+        conversationDocs.map((doc) => [
+          String(doc.conversationID),
+          doc.conversationType || "single",
         ]),
       );
 
-      const mentionedReceiverIds = mentionedUsernames
-        .map((usern) => receiverMap.get(usern.toLowerCase()))
-        .filter(Boolean);
-
-      const mentionedReceiverSet = new Set(mentionedReceiverIds);
-
-      const realmName =
-        decodedToken.conversationType === "single"
-          ? null
-          : await GetRealmName(conversationID);
-
-      // `sender` is the ACTING entity, so a mention made while switched to a
-      // page must be attributed to the page. `username` (from jwtchecker) is
-      // always the human behind it, and is kept only as a fallback.
-      const mentionerDetails = await GetSenderDetails(sender);
-
-      const mentioner = {
-        entityID: sender,
-        username: `@${mentionerDetails?.handle || username}`,
-        realmName: realmName,
-        isSingle: decodedToken.conversationType === "single",
-      };
-
-      // const seeners = [userID]; //Array
-      const seeners = [entity_id]; //Array
-      const content = decodedToken.content;
-      // const messageDate = {
-      //   date: dateGetter(),
-      //   time: timeGetter(),
-      // };
-      const isReply = decodedToken.isReply;
-      const replyingTo = decodedToken.replyingTo;
-      const messageType = decodedToken.messageType;
-      const conversationType = normalizeConversationType(
-        decodedToken.conversationType,
-      );
-
-      const sanitizedContent = sanitizeForStorage(content);
-
-      // Parsed once, used twice: the realtime frame tells every bot a command
-      // was typed, and queueCommand runs the ones that are the platform's.
-      // Parsing in both places would be a second chance for them to disagree
-      // about what was said.
-      const typedCommand =
-        String(messageType).toLowerCase() === "text"
-          ? parseCommand(sanitizedContent)
-          : null;
-
-      const payload = {
-        messageID: messageID,
-        conversationID: conversationID,
-        pendingID: pendingID,
-        sender: sender,
-        receivers: [], // receivers
-        seeners: seeners,
-        content: sanitizedContent,
-        // messageDate: messageDate,
-        isReply: isReply,
-        replyingTo: replyingTo,
-        reactions: [],
-        isDeleted: false,
-        messageType: messageType,
-        conversationType: conversationType,
-      };
-
-      const newMessage = new UserMessage(payload);
-
-      newMessage
-        .save()
-        .then(async () => {
-          // Context only - see queueMessageTagging. Never awaited: sending a
-          // message must not wait on content analysis.
-          queueMessageTagging({
-            messageID,
+      // One at a time, in the order chosen: a handful of sends, and each
+      // resolves as soon as its message is stored.
+      const results = [];
+      for (const conversationID of conversationIDs) {
+        const conversationType = typeByConversation.get(conversationID);
+        if (!conversationType) {
+          results.push({
             conversationID,
-            sender,
-            content: sanitizedContent,
-            messageType,
+            status: false,
+            message: "Conversation not found",
           });
+          continue;
+        }
 
-          await ChatHistory.updateMany(
-            {
-              conversationID: conversationID,
-            },
-            {
-              $set: {
-                isArchived: false,
-              },
-            },
-          );
-
-          await SaveConversation(
+        try {
+          const { messageID } = await deliverMessage(req.params, {
+            pendingID: null,
             conversationID,
             conversationType,
-            "user",
-            null,
-            receivers,
-            messageID,
-            sender,
-            sanitizedContent,
-            new Date(),
-            messageType,
-            false,
-          );
-
-          res.send({
-            status: true,
-            message: "Message Sent",
-            pendingID: pendingID,
+            content: note,
+            messageType: "text",
+            isReply: true,
+            replyingTo: { type: targetType, id: postID },
           });
-
-          receivers.map((rcvs, i) => {
-            const isMentioned = mentionedReceiverSet.has(rcvs);
-
-            MessagesTrigger(
-              rcvs,
-              {
-                conversationID,
-                entityID: sender,
-                mentioner: isMentioned ? mentioner : null,
-                // A bot learns about a command the way it learns about a
-                // mention: from the frame. Name and target only - enough to
-                // decide whether it has this command, and not enough to act
-                // without reading the message, which it does anyway.
-                //
-                // Sent to EVERY recipient rather than only to bots that own
-                // the name: chatterloop does not know what an external bot
-                // answers to, and deciding is the bot's business.
-                command: typedCommand
-                  ? { name: typedCommand.name, target: typedCommand.target }
-                  : null,
-              },
-              false,
-            );
-          });
-          // A /command, if this message is one. Same contract as
-          // queueMessageTagging: never awaited, never throws.
-          //
-          // QUEUED LAST, AND THAT ORDER IS LOAD-BEARING
-          // -------------------------------------------
-          // worker_service answers a command by writing a message of its own,
-          // and it starts the moment this is published. Queued any earlier, it
-          // races the three writes above and loses in all three ways:
-          //
-          //   SaveConversation had not run, so the `conversations` document
-          //   was missing or stale - and that document is where the worker
-          //   reads the participants it announces the reply to. No
-          //   participants, no frames, so the reply arrived for nobody until
-          //   they refreshed.
-          //
-          //   SaveConversation would then OVERWRITE last_message with this
-          //   message, so the chat list showed the command as the latest thing
-          //   said even though the reply came after it.
-          //
-          //   MessagesTrigger had not run, so the answer was announced before
-          //   the question - the reply appeared above a message that was not
-          //   on screen yet.
-          //
-          // The message itself is saved well before this either way; it is the
-          // writes AROUND it that the worker depends on.
-          queueCommand({
-            command: typedCommand,
-            messageID,
+          results.push({ conversationID, status: true, messageID });
+        } catch (err) {
+          results.push({
             conversationID,
-            conversationType,
-            sender,
-            senderHandle: mentionerDetails?.handle || username,
-            content: sanitizedContent,
-            messageType,
-            replyingTo,
-            // What decides reach - a bot answers a command only in
-            // conversations it belongs to.
-            participants: receivers,
+            status: false,
+            message: err.saveFailed
+              ? "Error sending message"
+              : err.message || "Could not send to this conversation",
           });
+        }
+      }
 
-          bumpChatScore(conversationID, receivers, entity_id);
+      const sent = results.filter((result) => result.status).length;
 
-          if (messageType === "text") {
-            resolveLinkPreviewForMessage(
-              messageID,
-              conversationID,
-              sanitizedContent,
-              receivers,
-              sender,
-            );
-          }
+      if (sent > 0) {
+        updateRankingScore(postID, "share", false);
+        if (authorID !== String(entity_id)) {
+          interactionScoreBump(entity_id, authorID, "SHARE", false);
+        }
+        logPostShare(entity_id, postID, "message", { conversations: sent });
+      }
 
-          const senderDetails = await GetSenderDetails(sender);
-
-          // GetAllReceivers includes the sender, and their own other devices
-          // would otherwise be notified of their own message.
-          const pushReceivers = receivers.filter(
-            (r) => String(r) !== String(entity_id),
-          );
-
-          // Anyone @mentioned gets the mention push INSTEAD of the plain
-          // message push, not as well as it - two tray entries for one message
-          // is noise, and the mention one is strictly more informative (it
-          // carries the message text too, so nothing is lost by the swap).
-          const mentionedPushReceivers = pushReceivers.filter((r) =>
-            mentionedReceiverSet.has(r),
-          );
-          const plainPushReceivers = pushReceivers.filter(
-            (r) => !mentionedReceiverSet.has(r),
-          );
-
-          if (mentionedPushReceivers.length > 0) {
-            const mentionPreview =
-              messageType === "text" && sanitizedContent
-                ? `${mentioner.username} mentioned you: ${sanitizedContent}`
-                : `${mentioner.username} mentioned you`;
-
-            // sendActivity, not sendMessage: this rides the quieter Activity
-            // channel, whose tone is notification_alert - the exact sound
-            // webapp plays for a mention (reusables/hooks/sse.ts's mentioner
-            // branch), and a channel whose description already names mentions.
-            // The app renders any non-"message" type generically from
-            // title/body/route, so this needs no mobile release
-            // (chatterloop_app/lib/core/notifications/push_payload.dart).
-            push.sendActivity({
-              receivers: mentionedPushReceivers,
-              type: "mention",
-              // Titled like the message push - the group for a group, the
-              // person for a single chat - so the two read consistently in
-              // the tray. webapp folds the realm into its sentence instead
-              // ("... mentioned you at X") because a toast has no title slot.
-              title:
-                decodedToken.conversationType !== "single"
-                  ? realmName
-                  : senderDetails?.display_name || `@${username}`,
-              body: mentionPreview,
-              route: `/conversation/${conversationID}`,
-              senderAvatarUrl: senderDetails?.profile || "",
-            });
-          }
-
-          push.sendMessage({
-            receivers: plainPushReceivers,
-            conversationId: conversationID,
-            // Which chat this is, NOT who sent it (senderName carries that).
-            // A group is titled by the group; a single chat by the person.
-            // realmName is null for singles by construction above, so the two
-            // arms can't be swapped without the single case losing its title.
-            conversationName:
-              decodedToken.conversationType !== "single"
-                ? realmName
-                : senderDetails?.display_name || `@${username}`,
-            isGroup: decodedToken.conversationType !== "single",
-            senderId: entity_id,
-            senderName: senderDetails?.display_name || `@${username}`,
-            senderAvatarUrl: senderDetails?.profile || "",
-            body:
-              messageType === "text" ? sanitizedContent : "Sent an attachment",
-            messageId: messageID,
-          });
-        })
-        .catch((err) => {
-          console.log(err);
-          res.send({ status: false, message: "Error checking message" });
-        });
+      res.send({ status: sent > 0, result: { sent, results } });
     } catch (ex) {
       console.log(ex);
       res
@@ -1860,7 +2085,9 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
         content: { $last: "$content" },
         messageDate: { $last: "$messageDate" },
         isReply: { $last: "$isReply" },
-        replyingTo: { $last: "$replyingTo" },
+        // Stored as {type, id}; listed as the bare id clients have always
+        // read (see LEGACY_REPLYING_TO_EXPR).
+        replyingTo: { $last: LEGACY_REPLYING_TO_EXPR },
         reactions: { $last: "$reactions" },
         isDeleted: { $last: "$isDeleted" },
         messageType: { $last: "$messageType" },
@@ -2126,14 +2353,9 @@ router.get(
         },
       },
       // --- END OF NEW CODE ---
-      {
-        $lookup: {
-          from: "messages",
-          localField: "replyingTo",
-          foreignField: "messageID",
-          as: "replyedmessage",
-        },
-      },
+      // `replyedmessage`: the quoted message, for either stored replyingTo
+      // shape (bare id, or {type: "message", id}).
+      REPLIED_MESSAGE_LOOKUP,
       {
         $project: {
           "reactionsWithInfo._id": 0,
@@ -2258,6 +2480,22 @@ router.get(
 
           return messageDocument;
         });
+
+        // `replyedtarget` on every reply - messages, posts, moments and
+        // thoughts alike. Live messages need nothing extra: MessagesTrigger
+        // only announces the conversation, and the client reloads it here.
+        await hydrateReplyTargets(mutatedMessagesArray, entity_id);
+
+        // Stored as {type, id}; sent the way every installed app build reads
+        // it - the replied-to message id, or "" (see legacyReplyingTo).
+        // The quoted message inside replyedmessage too - it comes straight
+        // from the lookup, stored shape and all.
+        for (const message of mutatedMessagesArray) {
+          message.replyingTo = legacyReplyingTo(message.replyingTo);
+          for (const quoted of message.replyedmessage || []) {
+            quoted.replyingTo = legacyReplyingTo(quoted.replyingTo);
+          }
+        }
 
         const encodedResult = jwt.sign(
           {
@@ -3367,7 +3605,11 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
         try {
           const conversationID = fields.conversationID?.[0];
           const isReply = fields.isReply?.[0] === "true";
-          const replyingTo = fields.replyingTo?.[0] || null;
+          // Stored as {type, id} like every reply - see
+          // sanitizeIncomingReplyingTo. "" when this is not a reply.
+          const replyingTo = sanitizeIncomingReplyingTo(
+            fields.replyingTo?.[0] || "",
+          );
           const conversationType = normalizeConversationType(
             fields.conversationType?.[0],
           );
@@ -3478,7 +3720,7 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
     // const receivers = decodeToken.receivers;
     const files = decodeToken.files;
     const isReply = decodeToken.isReply;
-    const replyingTo = decodeToken.replyingTo;
+    const replyingTo = sanitizeIncomingReplyingTo(decodeToken.replyingTo);
     const conversationType = normalizeConversationType(
       decodeToken.conversationType,
     );

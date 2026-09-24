@@ -199,21 +199,24 @@ const GetEntityHandles = async (entity_ids = []) => {
     `SELECT entity_id,
             'user' AS entity_type,
             username AS handle,
-            TRIM(CONCAT(first_name, ' ', last_name)) AS display_name
+            TRIM(CONCAT(first_name, ' ', last_name)) AS display_name,
+            NULLIF(NULLIF(profile, 'none'), 'N/A') AS profile
        FROM user_account
       WHERE entity_id = ANY($1::text[])
       UNION ALL
      SELECT entity_id,
             'realm' AS entity_type,
             slug AS handle,
-            name AS display_name
+            name AS display_name,
+            NULLIF(NULLIF(profile, 'none'), 'N/A') AS profile
        FROM community_realm
       WHERE entity_id = ANY($1::text[])
       UNION ALL
      SELECT entity_id,
             'bot' AS entity_type,
             handle,
-            name AS display_name
+            name AS display_name,
+            NULLIF(profile, 'none') AS profile
        FROM bot_bot
       WHERE entity_id = ANY($1::text[]);`,
     [ids],

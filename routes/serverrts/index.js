@@ -7,6 +7,9 @@ const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const router = express.Router();
+const {
+  LEGACY_REPLYING_TO_EXPR,
+} = require("../../reusables/hooks/replyTargets");
 
 const UserServer = require("../../schema/users/servers");
 const UserMessage = require("../../schema/messages/message");
@@ -196,7 +199,9 @@ router.get(
           content: { $last: "$content" },
           messageDate: { $last: "$messageDate" },
           isReply: { $last: "$isReply" },
-          replyingTo: { $last: "$replyingTo" },
+          // Stored as {type, id}; listed as the bare id clients have always
+          // read (see LEGACY_REPLYING_TO_EXPR).
+          replyingTo: { $last: LEGACY_REPLYING_TO_EXPR },
           reactions: { $last: "$reactions" },
           isDeleted: { $last: "$isDeleted" },
           messageType: { $last: "$messageType" },

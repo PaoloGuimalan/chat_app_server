@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const cassandra = require("cassandra-driver");
 const multiparty = require("multiparty");
 const fs = require("fs/promises");
 const sse = require("sse-express");
@@ -35,6 +34,11 @@ const {
   queueContentTagging,
   ResolvePostPrivacyStatus,
   CanEntityViewPost,
+  POST_KINDS,
+  EPHEMERAL_LIFETIME_MS,
+  THOUGHT_MAX_LENGTH,
+  isEphemeralKind,
+  logPostShare,
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
 const {
@@ -60,7 +64,6 @@ const { generateUUID } = require("../../reusables/hooks/transformers");
 
 const Storage = require("../../reusables/hooks/storage");
 const { MAX_UPLOAD_FILE_SIZE } = require("../../reusables/vars/uploads");
-const { query } = require("../../reusables/database/cassandra");
 const {
   interactionScoreBump,
   followerInteractionScoreBump,
@@ -437,436 +440,626 @@ router.post("/upload", jwtchecker, async (req, res) => {
   }
 });
 
+/**
+ * The whole create-a-post pipeline, shared by /createpost, /moments/create and
+ * /thoughts/create.
+ *
+ * One pipeline on purpose: a moment or thought IS a newsfeed_post row, and it
+ * gets everything a post gets - references, tagging and tag notifications,
+ * privacy, hashtags, the score row, fan-out, moderation. The kind routes only
+ * validate and shape their payload into the one `decodeToken` shape this takes
+ * (the same shape the signed /createpost payload has always had).
+ *
+ * `kind` is decided by the ROUTE, never by the client: on_feed used to be
+ * copied from the payload's `onfeed`, which the mobile profile-photo upload
+ * sends as boolean `true`.
+ *
+ * Resolves { postID, expiresAt }. Throws an Error with `.status` - 400 for a
+ * bad payload, 500 for a failed transaction - for the route to send.
+ */
+const createPostFromPayload = async ({ params, decodeToken, kind }) => {
+  const userID = params.userID;
+  const username = params.username;
+  const id = params.id;
+  const entityID = params.entity_id;
+  const postID = await checkPostIDExisting(makeID(30));
+  const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
+  // Fixed from the same clock as date_posted, so expires_at - date_posted is
+  // exactly the lifetime.
+  const expiresAt = isEphemeralKind(kind)
+    ? new Date(currentTimestampInSeconds * 1000 + EPHEMERAL_LIFETIME_MS)
+    : null;
+
+  try {
+    const filereferencesraw = decodeToken.content.references;
+    const content_type = decodeToken.type.contentType;
+    const otherEntityID = decodeToken.otherEntityID;
+    const filereferences = filereferencesraw.map((mp) => ({
+      name: mp.name || `${postID}_${makeID(20)}`,
+      caption: mp.caption,
+      reference: mp.reference,
+      referenceMediaType: mp.referenceMediaType,
+      referenceID: `${postID}_${makeID(20)}`,
+    }));
+
+    // References may already be CDN URLs if the client uploaded media
+    // up-front via POST /posts/upload (the new two-step flow) - in that case
+    // there's nothing left to upload here. Legacy clients that still embed
+    // base64 media directly in the signed payload fall through to the
+    // original inline-upload path for backward compatibility.
+    const isAlreadyUploaded = (ref) =>
+      typeof ref === "string" && /^https?:\/\//i.test(ref);
+
+    const finaluploadedreferences =
+      decodeToken.content.isShared ||
+      filereferences.every((mp) => isAlreadyUploaded(mp.reference))
+        ? filereferences
+        : await Storage.uploadMultipleBase64(
+            filereferences,
+            {
+              referenceIDs: [postID],
+              action: "post",
+            },
+            `uploads/posts/${id}/${postID}`,
+          );
+
+    if (decodeToken.content.isShared) {
+      finaluploadedreferences.forEach(async (mp) => {
+        const { rows: query_post_user } = await pool.query(
+          `SELECT 
+              ua.username,
+              ua.id,
+              ua.entity_id AS "entityID" 
+          FROM 
+              newsfeed_post np 
+          JOIN 
+              user_account ua  
+          ON 
+              np.entity_id  = ua.entity_id 
+          WHERE
+              np.post_id = $1
+        `,
+          [mp.reference],
+        );
+
+        if (query_post_user.length > 0) {
+          const post_user = query_post_user[0].entityID;
+
+          if (post_user !== entityID) {
+            interactionScoreBump(entityID, post_user, "SHARE", false);
+            followerInteractionScoreBump(
+              entityID,
+              otherEntityID,
+              "SHARE",
+              false,
+            );
+
+            const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+            // entityID is the ACTING entity; `username` is always the human
+            // behind it (jwtchecker sets it from the user row), so sharing as
+            // a page credited the owner instead of the page.
+            const sharerDetails = await GetSenderDetails(entityID);
+            const shareDetails = `@${sharerDetails?.handle || username} shared your post.`;
+
+            const notifParams = {
+              notificationID: awaitNotifID,
+              referenceID: postID,
+              // See the tag notification above - stated rather than inferred.
+              target: { type: "post", supportingID: postID, anchor: null },
+              referenceStatus: false,
+              toUserID: post_user,
+              fromUserID: entityID,
+              content: {
+                headline: `Shared post`,
+                details: shareDetails,
+              },
+              date: {
+                date: dateGetter(),
+                time: timeGetter(),
+              },
+              type: "shared_post_notification",
+              isRead: false,
+            };
+
+            const newNotif = new UserNotifications(notifParams);
+            newNotif
+              .save()
+              .then(() => {
+                publish(`events_${post_user}`, `notifications`, {
+                  status: true,
+                  auth: true,
+                  message: shareDetails,
+                  result: "", //encodedResult
+                });
+              })
+              .catch((err) => {
+                console.log(err);
+              });
+          }
+
+          // shares_count is NOT incremented here any more: the worker's
+          // UpdateRankingScore moves the counter itself as part of
+          // recomputing the score, so doing both counts every share twice.
+          updateRankingScore(mp.reference, "share", false);
+        }
+
+        // saveFileRecordToDatabase(
+        //   [mp.referenceID],
+        //   mp.reference,
+        //   "post",
+        //   mp.referenceMediaType,
+        //   "digitalocean",
+        //   mp.name,
+        // );
+      });
+    }
+
+    // A private profile's posts default to connections-only. Resolved here,
+    // against user_account.is_private, rather than taken from the signed
+    // payload as-is - see ResolvePostPrivacyStatus for why an explicit choice
+    // still wins but a missing one must not default to public.
+    const resolvedPrivacyStatus = await ResolvePostPrivacyStatus(
+      entityID,
+      decodeToken.privacy?.status,
+    );
+
+    // Prepare main post insert
+    const postInsertQuery = `
+    INSERT INTO newsfeed_post (
+      post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
+      is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived,
+      expires_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, to_timestamp($7),
+      $8, $9, $10, $11, $12, $13, $14,
+      $15
+    );
+  `;
+    const postValues = [
+      postID,
+      entityID,
+      false, // isSponsored
+      false, // isLive
+      kind,
+      true, // fromSystem
+      currentTimestampInSeconds,
+      decodeToken.content.isShared,
+      decodeToken.type.fileType,
+      decodeToken.content.data,
+      decodeToken.type.contentType,
+      decodeToken.tagging.isTagged,
+      resolvedPrivacyStatus,
+      false,
+      expiresAt,
+    ];
+
+    // A CHECKED-OUT client, not the pool. This was `await pool.getPool()`,
+    // which is the Pool itself - so BEGIN, the inserts and COMMIT each ran on
+    // whichever connection the pool handed out, nothing here was actually a
+    // transaction, and ROLLBACK undid nothing. The one-live-thought rule below
+    // depends on it being real: its advisory lock is transaction-scoped.
+    const client = await pool.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // One live thought per entity: posting a new one ends the current one
+      // (expires_at = now, row kept - it is history, not garbage).
+      //
+      // The advisory lock serialises two thoughts posted at once by the same
+      // entity. Without it both transactions expire "the others" before
+      // either has inserted, and both new thoughts end up live. Transaction-
+      // scoped, so COMMIT/ROLLBACK releases it.
+      if (kind === POST_KINDS.THOUGHT) {
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext('thought:' || $1));`,
+          [entityID],
+        );
+        await client.query(
+          `
+          UPDATE newsfeed_post
+          SET expires_at = now()
+          WHERE entity_id = $1
+            AND on_feed = 'thought'
+            AND deleted_at IS NULL
+            AND expires_at > now();
+          `,
+          [entityID],
+        );
+      }
+
+      // Insert Post
+      if (filereferences.length !== finaluploadedreferences.length) {
+        throw new Error("Failed to create post!");
+      }
+
+      await client.query(postInsertQuery, postValues);
+
+      // Batch insert post references
+      if (finaluploadedreferences.length > 0) {
+        if (content_type === "profile") {
+          await pool.query(
+            `WITH target_record AS (
+              SELECT type FROM entity_entity WHERE id = $1
+            )
+            , run_realm_update AS (
+              UPDATE community_realm
+              SET profile = $2
+              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
+            )
+            UPDATE user_account
+            SET profile = $2
+            WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
+            RETURNING id;
+          `,
+            [entityID, finaluploadedreferences[0].reference],
+          );
+        }
+
+        if (content_type === "cover_photo") {
+          await pool.query(
+            `WITH target_record AS (
+              SELECT type FROM entity_entity WHERE id = $1
+            )
+            , run_realm_update AS (
+              UPDATE community_realm
+              SET cover_photo = $2
+              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
+            )
+            UPDATE user_account
+            SET coverphoto = $2
+            WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
+            RETURNING id;
+          `,
+            [entityID, finaluploadedreferences[0].reference],
+          );
+        }
+
+        const refValues = [];
+        const refRowsSql = finaluploadedreferences
+          .map((ref, i) => {
+            refValues.push(
+              ref.referenceID,
+              postID,
+              ref.reference,
+              ref.caption || null,
+              ref.referenceMediaType,
+              ref.name || null,
+            );
+            const baseIndex = i * 6;
+
+            return `($${baseIndex + 1}, $${baseIndex + 2}, $${
+              baseIndex + 3
+            }, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
+          })
+          .join(", ");
+
+        const refInsertQuery = `
+        INSERT INTO newsfeed_postreference (reference_id, post_id, reference, caption, reference_media_type, reference_name)
+        VALUES ${refRowsSql};
+      `;
+
+        await client.query(refInsertQuery, refValues);
+      }
+
+      if (
+        decodeToken.tagging.isTagged &&
+        decodeToken.tagging.users.length > 0
+      ) {
+        // tagging.users holds entity ids - a user OR a realm/page (newsfeed_
+        // posttag.entity_id FKs the generic entity table, so both are valid).
+        // Validate against entity_entity so a stale/bogus id can't FK-violate
+        // and roll the whole post back, and so we insert each tag exactly once.
+        const taggedEntityIds = decodeToken.tagging.users;
+
+        const { rows: entityRows } = await client.query(
+          `SELECT id FROM entity_entity WHERE id = ANY($1)`,
+          [taggedEntityIds],
+        );
+
+        if (entityRows.length > 0) {
+          const tagValues = [];
+          const tagRowsSQL = entityRows
+            .map((entity, i) => {
+              const postTagId = generateUUID();
+              tagValues.push(postTagId, postID, entity.id);
+              const baseIndex = i * 3;
+              return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
+            })
+            .join(", ");
+
+          const insertTagQuery = `
+          INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
+          VALUES ${tagRowsSQL};
+        `;
+
+          await client.query(insertTagQuery, tagValues);
+        }
+      }
+
+      // newsfeed_previewcount rows are NOT seeded here any more. This used to
+      // write one count=0 row per emoji for every new post, which made that
+      // table posts x emojis - almost entirely zeros - and grew the cost of
+      // creating a post with every emoji ever added.
+      //
+      // A missing row and a count=0 row are the same thing to every reader:
+      // the clients render preview.filter(count > 0), the totals sum
+      // identically, and the emoji picker reads newsfeed_emoji rather than
+      // this table. The Django reaction endpoints (user_service
+      // newsfeed/views.py PostReactionsView) create the row on first reaction
+      // via get_or_create, guarded by a unique constraint on
+      // (post_id, emoji_id) so two simultaneous first-reactions can't split
+      // the count. Nothing else in this service touches newsfeed_previewcount.
+      //
+      // newsfeed_postscore below is deliberately NOT lazy: an absent score row
+      // means ranking_score 0.0, which would bury a brand-new post at the
+      // bottom of every ranked feed with no way to recover - nobody sees it,
+      // so nobody interacts, so nothing ever creates the row.
+
+      // Hashtags in the caption become interests, linked to this post.
+      //
+      // Inside the transaction, unlike the moderation publish below: these
+      // are rows about the post, so they belong to the same commit and must
+      // vanish with it if it rolls back. Cheap enough to sit here - a regex
+      // and one upsert per distinct tag, no network call and no model.
+      //
+      // Links only. All SCORING (affinity, trending) stays with the
+      // moderation service's interest sink, which is its single writer and
+      // reaches this post either by the queue publish below or by its own
+      // scour - exactly once either way.
+      await savePostHashtags(client, postID, decodeToken.content.data);
+
+      // POST SCORE TABLE SAVE
+      //
+      // Published AFTER the commit below rather than inserted here: the
+      // handler reads newsfeed_postreference to weight the post by its media,
+      // and those rows are written in this same transaction - publishing
+      // before the commit scores the post as if it had no attachments.
+      //
+      // Note the scoring constants are now the worker's, which are the Django
+      // signal's (+1.2 image / +1.5 video, decay ^1.2, no base engagement) and
+      // NOT the ones this block used. Post scores will differ from before.
+
+      // END: POST SCORE TABLE SAVE
+
+      await client.query("COMMIT");
+
+      createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
+
+      // Fan out to the author's FOLLOWERS, not their connections. The feed is
+      // keyed on the follow graph now; connecting auto-follows both ways, so
+      // connections still receive this via the follow it created. Also fixes
+      // pages: the connection-based query JOINed user_account on both sides,
+      // so a page's post previously fanned out to nobody.
+      // The follower query moved into the worker, which resolves it from
+      // current_entity_id - same filter, same ORDER BY, same 500 cap - so
+      // GetFollowerIDs is no longer called on this path.
+      bulkFanoutToCache(
+        entityID,
+        { id: postID, author_id: entityID },
+        "fanout",
+      );
+
+      // Moderation and interest tagging. Skips silently when the moderation
+      // service is offline - its scour picks the post up later - so a post
+      // never waits on it and never fails because of it. Not awaited: the
+      // response should not carry the latency of a queue publish.
+      queueContentTagging({
+        postID,
+        entityID,
+        caption: decodeToken.content.data,
+        references: finaluploadedreferences,
+      });
+
+      if (decodeToken.content.isShared) {
+        // The share's engagement row. "feed" as opposed to "message" (a post
+        // sent into chats, /users/sendPost) - both count as shares.
+        //
+        // target_id stays the NEW post's id, as it always has been.
+        await logPostShare(entityID, postID, "feed");
+      }
+
+      // Notify tagged users if any
+      if (decodeToken.tagging.isTagged) {
+        const taggedUsernames = decodeToken.tagging.users;
+
+        // Query user IDs for all tagged usernames
+        const userQuery = `
+        SELECT entity_id AS "entityID"
+        FROM user_account
+        WHERE entity_id = ANY($1)
+      `;
+
+        const { rows: userRows } = await client.query(userQuery, [
+          taggedUsernames,
+        ]);
+        notifyTaggedUser(
+          entityID,
+          username,
+          postID,
+          userRows.map((mp) => mp.entityID),
+        );
+      }
+
+      return { postID, expiresAt };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("Transaction error:", err);
+      err.status = 500;
+      throw err;
+    } finally {
+      // client.release(); // very important!
+      pool.releaseClient(client);
+    }
+  } catch (ex) {
+    if (!ex.status) {
+      console.error(ex);
+      ex.status = 400;
+    }
+    throw ex;
+  }
+};
+
+/**
+ * Sends a createPostFromPayload failure the way /createpost always has: 500
+ * with the message for a failed transaction, 400 "Error processing request"
+ * for anything before it.
+ */
+const sendCreatePostError = (res, ex) => {
+  if (ex.status === 500) {
+    return res
+      .status(500)
+      .send({ status: false, message: ex.message || ex.toString() });
+  }
+  return res.status(ex.status || 400).send({
+    status: false,
+    message: ex.publicMessage || "Error processing request",
+    details: ex.message,
+  });
+};
+
+const badRequest = (message) =>
+  Object.assign(new Error(message), { status: 400, publicMessage: message });
+
+// The tagging block createPostFromPayload expects, from whatever a kind
+// route's client sent: entity ids only, and isTagged true only when there is
+// actually someone to tag.
+const normalizeTagging = (tagging) => {
+  const users = Array.isArray(tagging?.users)
+    ? [...new Set(tagging.users.filter(Boolean).map(String))]
+    : [];
+  return { isTagged: users.length > 0, users };
+};
+
 router.post(
   "/createpost",
   jwtchecker,
   requiresPermission("posts.create"),
   async (req, res) => {
-    const userID = req.params.userID;
-    const username = req.params.username;
-    const id = req.params.id;
-    const entityID = req.params.entity_id;
-    const postID = await checkPostIDExisting(makeID(30));
-    const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
-
-    const token = req.body.token;
-
     try {
-      const decodeToken = jwt.verify(token, JWT_SECRET);
-      const filereferencesraw = decodeToken.content.references;
-      const content_type = decodeToken.type.contentType;
-      const otherEntityID = decodeToken.otherEntityID;
-      const filereferences = filereferencesraw.map((mp) => ({
-        name: mp.name || `${postID}_${makeID(20)}`,
-        caption: mp.caption,
-        reference: mp.reference,
-        referenceMediaType: mp.referenceMediaType,
-        referenceID: `${postID}_${makeID(20)}`,
-      }));
-
-      // References may already be CDN URLs if the client uploaded media
-      // up-front via POST /posts/upload (the new two-step flow) - in that case
-      // there's nothing left to upload here. Legacy clients that still embed
-      // base64 media directly in the signed payload fall through to the
-      // original inline-upload path for backward compatibility.
-      const isAlreadyUploaded = (ref) =>
-        typeof ref === "string" && /^https?:\/\//i.test(ref);
-
-      const finaluploadedreferences =
-        decodeToken.content.isShared ||
-        filereferences.every((mp) => isAlreadyUploaded(mp.reference))
-          ? filereferences
-          : await Storage.uploadMultipleBase64(
-              filereferences,
-              {
-                referenceIDs: [postID],
-                action: "post",
-              },
-              `uploads/posts/${id}/${postID}`,
-            );
-
-      if (decodeToken.content.isShared) {
-        finaluploadedreferences.forEach(async (mp) => {
-          const { rows: query_post_user } = await pool.query(
-            `SELECT 
-                ua.username,
-                ua.id,
-                ua.entity_id AS "entityID" 
-            FROM 
-                newsfeed_post np 
-            JOIN 
-                user_account ua  
-            ON 
-                np.entity_id  = ua.entity_id 
-            WHERE
-                np.post_id = $1
-          `,
-            [mp.reference],
-          );
-
-          if (query_post_user.length > 0) {
-            const post_user = query_post_user[0].entityID;
-
-            if (post_user !== entityID) {
-              interactionScoreBump(entityID, post_user, "SHARE", false);
-              followerInteractionScoreBump(
-                entityID,
-                otherEntityID,
-                "SHARE",
-                false,
-              );
-
-              const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
-              // entityID is the ACTING entity; `username` is always the human
-              // behind it (jwtchecker sets it from the user row), so sharing as
-              // a page credited the owner instead of the page.
-              const sharerDetails = await GetSenderDetails(entityID);
-              const shareDetails = `@${sharerDetails?.handle || username} shared your post.`;
-
-              const notifParams = {
-                notificationID: awaitNotifID,
-                referenceID: postID,
-                // See the tag notification above - stated rather than inferred.
-                target: { type: "post", supportingID: postID, anchor: null },
-                referenceStatus: false,
-                toUserID: post_user,
-                fromUserID: entityID,
-                content: {
-                  headline: `Shared post`,
-                  details: shareDetails,
-                },
-                date: {
-                  date: dateGetter(),
-                  time: timeGetter(),
-                },
-                type: "shared_post_notification",
-                isRead: false,
-              };
-
-              const newNotif = new UserNotifications(notifParams);
-              newNotif
-                .save()
-                .then(() => {
-                  publish(`events_${post_user}`, `notifications`, {
-                    status: true,
-                    auth: true,
-                    message: shareDetails,
-                    result: "", //encodedResult
-                  });
-                })
-                .catch((err) => {
-                  console.log(err);
-                });
-            }
-
-            // shares_count is NOT incremented here any more: the worker's
-            // UpdateRankingScore moves the counter itself as part of
-            // recomputing the score, so doing both counts every share twice.
-            updateRankingScore(mp.reference, "share", false);
-          }
-
-          // saveFileRecordToDatabase(
-          //   [mp.referenceID],
-          //   mp.reference,
-          //   "post",
-          //   mp.referenceMediaType,
-          //   "digitalocean",
-          //   mp.name,
-          // );
-        });
-      }
-
-      // A private profile's posts default to connections-only. Resolved here,
-      // against user_account.is_private, rather than taken from the signed
-      // payload as-is - see ResolvePostPrivacyStatus for why an explicit choice
-      // still wins but a missing one must not default to public.
-      const resolvedPrivacyStatus = await ResolvePostPrivacyStatus(
-        entityID,
-        decodeToken.privacy?.status,
-      );
-
-      // Prepare main post insert
-      const postInsertQuery = `
-      INSERT INTO newsfeed_post (
-        post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
-        is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, to_timestamp($7),
-        $8, $9, $10, $11, $12, $13, $14
-      );
-    `;
-      const postValues = [
-        postID,
-        entityID,
-        false, // isSponsored
-        false, // isLive
-        decodeToken.onfeed,
-        true, // fromSystem
-        currentTimestampInSeconds,
-        decodeToken.content.isShared,
-        decodeToken.type.fileType,
-        decodeToken.content.data,
-        decodeToken.type.contentType,
-        decodeToken.tagging.isTagged,
-        resolvedPrivacyStatus,
-        false,
-      ];
-
-      const client = await pool.getPool();
-
-      try {
-        await client.query("BEGIN");
-
-        // Insert Post
-        if (filereferences.length !== finaluploadedreferences.length) {
-          throw new Error("Failed to create post!");
-        }
-
-        await client.query(postInsertQuery, postValues);
-
-        // Batch insert post references
-        if (finaluploadedreferences.length > 0) {
-          if (content_type === "profile") {
-            await pool.query(
-              `WITH target_record AS (
-                SELECT type FROM entity_entity WHERE id = $1
-              )
-              , run_realm_update AS (
-                UPDATE community_realm
-                SET profile = $2
-                WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
-              )
-              UPDATE user_account
-              SET profile = $2
-              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
-              RETURNING id;
-            `,
-              [entityID, finaluploadedreferences[0].reference],
-            );
-          }
-
-          if (content_type === "cover_photo") {
-            await pool.query(
-              `WITH target_record AS (
-                SELECT type FROM entity_entity WHERE id = $1
-              )
-              , run_realm_update AS (
-                UPDATE community_realm
-                SET cover_photo = $2
-                WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'realm'
-              )
-              UPDATE user_account
-              SET coverphoto = $2
-              WHERE entity_id = $1 AND (SELECT type FROM target_record) = 'user'
-              RETURNING id;
-            `,
-              [entityID, finaluploadedreferences[0].reference],
-            );
-          }
-
-          const refValues = [];
-          const refRowsSql = finaluploadedreferences
-            .map((ref, i) => {
-              refValues.push(
-                ref.referenceID,
-                postID,
-                ref.reference,
-                ref.caption || null,
-                ref.referenceMediaType,
-                ref.name || null,
-              );
-              const baseIndex = i * 6;
-
-              return `($${baseIndex + 1}, $${baseIndex + 2}, $${
-                baseIndex + 3
-              }, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6})`;
-            })
-            .join(", ");
-
-          const refInsertQuery = `
-          INSERT INTO newsfeed_postreference (reference_id, post_id, reference, caption, reference_media_type, reference_name)
-          VALUES ${refRowsSql};
-        `;
-
-          await client.query(refInsertQuery, refValues);
-        }
-
-        if (
-          decodeToken.tagging.isTagged &&
-          decodeToken.tagging.users.length > 0
-        ) {
-          // tagging.users holds entity ids - a user OR a realm/page (newsfeed_
-          // posttag.entity_id FKs the generic entity table, so both are valid).
-          // Validate against entity_entity so a stale/bogus id can't FK-violate
-          // and roll the whole post back, and so we insert each tag exactly once.
-          const taggedEntityIds = decodeToken.tagging.users;
-
-          const { rows: entityRows } = await client.query(
-            `SELECT id FROM entity_entity WHERE id = ANY($1)`,
-            [taggedEntityIds],
-          );
-
-          if (entityRows.length > 0) {
-            const tagValues = [];
-            const tagRowsSQL = entityRows
-              .map((entity, i) => {
-                const postTagId = generateUUID();
-                tagValues.push(postTagId, postID, entity.id);
-                const baseIndex = i * 3;
-                return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
-              })
-              .join(", ");
-
-            const insertTagQuery = `
-            INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
-            VALUES ${tagRowsSQL};
-          `;
-
-            await client.query(insertTagQuery, tagValues);
-          }
-        }
-
-        // newsfeed_previewcount rows are NOT seeded here any more. This used to
-        // write one count=0 row per emoji for every new post, which made that
-        // table posts x emojis - almost entirely zeros - and grew the cost of
-        // creating a post with every emoji ever added.
-        //
-        // A missing row and a count=0 row are the same thing to every reader:
-        // the clients render preview.filter(count > 0), the totals sum
-        // identically, and the emoji picker reads newsfeed_emoji rather than
-        // this table. The Django reaction endpoints (user_service
-        // newsfeed/views.py PostReactionsView) create the row on first reaction
-        // via get_or_create, guarded by a unique constraint on
-        // (post_id, emoji_id) so two simultaneous first-reactions can't split
-        // the count. Nothing else in this service touches newsfeed_previewcount.
-        //
-        // newsfeed_postscore below is deliberately NOT lazy: an absent score row
-        // means ranking_score 0.0, which would bury a brand-new post at the
-        // bottom of every ranked feed with no way to recover - nobody sees it,
-        // so nobody interacts, so nothing ever creates the row.
-
-        // Hashtags in the caption become interests, linked to this post.
-        //
-        // Inside the transaction, unlike the moderation publish below: these
-        // are rows about the post, so they belong to the same commit and must
-        // vanish with it if it rolls back. Cheap enough to sit here - a regex
-        // and one upsert per distinct tag, no network call and no model.
-        //
-        // Links only. All SCORING (affinity, trending) stays with the
-        // moderation service's interest sink, which is its single writer and
-        // reaches this post either by the queue publish below or by its own
-        // scour - exactly once either way.
-        await savePostHashtags(client, postID, decodeToken.content.data);
-
-        // POST SCORE TABLE SAVE
-        //
-        // Published AFTER the commit below rather than inserted here: the
-        // handler reads newsfeed_postreference to weight the post by its media,
-        // and those rows are written in this same transaction - publishing
-        // before the commit scores the post as if it had no attachments.
-        //
-        // Note the scoring constants are now the worker's, which are the Django
-        // signal's (+1.2 image / +1.5 video, decay ^1.2, no base engagement) and
-        // NOT the ones this block used. Post scores will differ from before.
-
-        // END: POST SCORE TABLE SAVE
-
-        await client.query("COMMIT");
-
-        createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
-
-        // Fan out to the author's FOLLOWERS, not their connections. The feed is
-        // keyed on the follow graph now; connecting auto-follows both ways, so
-        // connections still receive this via the follow it created. Also fixes
-        // pages: the connection-based query JOINed user_account on both sides,
-        // so a page's post previously fanned out to nobody.
-        // The follower query moved into the worker, which resolves it from
-        // current_entity_id - same filter, same ORDER BY, same 500 cap - so
-        // GetFollowerIDs is no longer called on this path.
-        bulkFanoutToCache(
-          entityID,
-          { id: postID, author_id: entityID },
-          "fanout",
-        );
-
-        // Moderation and interest tagging. Skips silently when the moderation
-        // service is offline - its scour picks the post up later - so a post
-        // never waits on it and never fails because of it. Not awaited: the
-        // response should not carry the latency of a queue publish.
-        queueContentTagging({
-          postID,
-          entityID,
-          caption: decodeToken.content.data,
-          references: finaluploadedreferences,
-        });
-
-        if (decodeToken.content.isShared) {
-          // CASSANDRA LOG INSERT
-
-          const pending_log_id = cassandra.types.uuid();
-
-          const cassandra_log_query =
-            "INSERT INTO chatterloop.user_engagement_log " +
-            "(log_id, user_id, activity_time, time_spent, activity_type, target_type, target_id, metadata, created_at, updated_at) " +
-            "VALUES (?, ?, toTimestamp(now()), ?, ?, ?, ?, ?, toTimestamp(now()), toTimestamp(now()))";
-
-          const cassandra_log_params = [
-            pending_log_id,
-            entityID,
-            0,
-            "share",
-            "post",
-            postID,
-            null,
-          ];
-
-          await query(cassandra_log_query, cassandra_log_params, {
-            prepare: true,
-          });
-
-          // END: CASSANDRA LOG INSERT
-        }
-
-        // Notify tagged users if any
-        if (decodeToken.tagging.isTagged) {
-          const taggedUsernames = decodeToken.tagging.users;
-
-          // Query user IDs for all tagged usernames
-          const userQuery = `
-          SELECT entity_id AS "entityID"
-          FROM user_account
-          WHERE entity_id = ANY($1)
-        `;
-
-          const { rows: userRows } = await client.query(userQuery, [
-            taggedUsernames,
-          ]);
-          notifyTaggedUser(
-            entityID,
-            username,
-            postID,
-            userRows.map((mp) => mp.entityID),
-          );
-        }
-
-        res.send({ status: true, result: "OK" });
-      } catch (err) {
-        await client.query("ROLLBACK");
-        console.error("Transaction error:", err);
-        res
-          .status(500)
-          .send({ status: false, message: err.message || err.toString() });
-      } finally {
-        // client.release(); // very important!
-        pool.releaseClient(client);
-      }
-    } catch (ex) {
-      console.error(ex);
-      res.status(400).send({
-        status: false,
-        message: "Error processing request",
-        details: ex.message,
+      const decodeToken = jwt.verify(req.body.token, JWT_SECRET);
+      // Always a feed post. The payload's `onfeed` is ignored: the mobile
+      // profile/cover upload sends it as boolean `true`, and the kind of a
+      // row is not the client's to choose - moments and thoughts have their
+      // own routes below.
+      await createPostFromPayload({
+        params: req.params,
+        decodeToken,
+        kind: POST_KINDS.FEED,
       });
+      res.send({ status: true, result: "OK" });
+    } catch (ex) {
+      sendCreatePostError(res, ex);
+    }
+  },
+);
+
+/**
+ * A moment: exactly ONE media item, optional caption, tags and privacy, live
+ * for 24h. An entity can post as many as it likes - each is its own row.
+ *
+ * Media is uploaded first through POST /posts/upload, exactly like a post's,
+ * and arrives here as a URL reference.
+ *
+ * Signed payload:
+ *   { content: { reference: {reference, referenceMediaType, name?, caption?},
+ *                data?: caption },
+ *     tagging?: { isTagged, users: [entity_id] },
+ *     privacy?: { status } }
+ */
+router.post(
+  "/moments/create",
+  jwtchecker,
+  requiresPermission("posts.create"),
+  async (req, res) => {
+    try {
+      const payload = jwt.verify(req.body.token, JWT_SECRET);
+      const reference = payload?.content?.reference;
+
+      if (!reference || typeof reference.reference !== "string") {
+        throw badRequest("A moment needs exactly one media item");
+      }
+      const topType = String(reference.referenceMediaType || "").split("/")[0];
+      if (!["image", "video"].includes(topType)) {
+        throw badRequest("A moment must be an image or a video");
+      }
+
+      const { postID, expiresAt } = await createPostFromPayload({
+        params: req.params,
+        kind: POST_KINDS.MOMENT,
+        decodeToken: {
+          content: {
+            references: [reference],
+            data: String(payload.content.data || ""),
+            // Never a share: a moment is always its own media.
+            isShared: false,
+          },
+          // content_type is also what createPostFromPayload keys the
+          // profile/cover-photo side effects on, so it must never be
+          // "profile" or "cover_photo" here.
+          type: { fileType: "media", contentType: POST_KINDS.MOMENT },
+          tagging: normalizeTagging(payload.tagging),
+          privacy: payload.privacy,
+        },
+      });
+
+      res.send({
+        status: true,
+        result: { post_id: postID, expires_at: expiresAt.toISOString() },
+      });
+    } catch (ex) {
+      sendCreatePostError(res, ex);
+    }
+  },
+);
+
+/**
+ * A thought: a short text note, live for 24h, ONE live per entity - posting a
+ * new one ends the current one (see createPostFromPayload).
+ *
+ * `content` is an object so a thought can grow fields (an emoji, a song)
+ * without a new contract; only `text` exists today.
+ *
+ * Signed payload: { content: { text }, privacy?: { status } }
+ */
+router.post(
+  "/thoughts/create",
+  jwtchecker,
+  requiresPermission("posts.create"),
+  async (req, res) => {
+    try {
+      const payload = jwt.verify(req.body.token, JWT_SECRET);
+      const text = String(payload?.content?.text ?? "").trim();
+
+      // Counted in code points, not UTF-16 units, so an emoji is one
+      // character - the same count the composer's counter shows.
+      const length = [...text].length;
+      if (length === 0) {
+        throw badRequest("A thought cannot be empty");
+      }
+      if (length > THOUGHT_MAX_LENGTH) {
+        throw badRequest(
+          `A thought can be at most ${THOUGHT_MAX_LENGTH} characters`,
+        );
+      }
+
+      const { postID, expiresAt } = await createPostFromPayload({
+        params: req.params,
+        kind: POST_KINDS.THOUGHT,
+        decodeToken: {
+          content: { references: [], data: text, isShared: false },
+          type: { fileType: "text", contentType: POST_KINDS.THOUGHT },
+          tagging: { isTagged: false, users: [] },
+          privacy: payload.privacy,
+        },
+      });
+
+      res.send({
+        status: true,
+        result: { post_id: postID, expires_at: expiresAt.toISOString() },
+      });
+    } catch (ex) {
+      sendCreatePostError(res, ex);
     }
   },
 );

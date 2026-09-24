@@ -1,6 +1,9 @@
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
+const {
+  LEGACY_REPLYING_TO_EXPR,
+} = require("../../reusables/hooks/replyTargets");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const Axios = require("axios");
@@ -981,7 +984,9 @@ router.get("/archives", jwtchecker, async (req, res) => {
           content: { $last: "$content" },
           messageDate: { $last: "$messageDate" },
           isReply: { $last: "$isReply" },
-          replyingTo: { $last: "$replyingTo" },
+          // Stored as {type, id}; listed as the bare id clients have always
+          // read (see LEGACY_REPLYING_TO_EXPR).
+          replyingTo: { $last: LEGACY_REPLYING_TO_EXPR },
           reactions: { $last: "$reactions" },
           isDeleted: { $last: "$isDeleted" },
           messageType: { $last: "$messageType" },

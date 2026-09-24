@@ -4,6 +4,8 @@ const makeid = require("../hooks/makeID");
 const pool = require("../database/postgres");
 const { publish, QUEUES } = require("../rabbitmq/workqueue");
 const { isModerationServiceOnline } = require("../redis/pubsub");
+const cassandra = require("cassandra-driver");
+const { query: cassandraQuery } = require("../database/cassandra");
 
 const checkPostIDExisting = async (currentID) => {
   const { rows } = await pool.query(
@@ -67,6 +69,28 @@ const GetAllPostsCountInProfile = async (userID) => {
 };
 
 const POST_PRIVACY_LEVELS = ["public", "connections", "private", "custom"];
+
+/**
+ * What a newsfeed_post row IS, stored in on_feed.
+ *
+ * Django mirror: newsfeed/models.py PostKind (the schema of record). Which
+ * kinds each LIST read returns lives only in Django (newsfeed/services/
+ * post_kinds.py) - nothing in Node lists posts.
+ */
+const POST_KINDS = Object.freeze({
+  FEED: "feed",
+  MOMENT: "moment",
+  THOUGHT: "thought",
+});
+
+// Moments and thoughts live 24h. Django mirror: EPHEMERAL_LIFETIME.
+const EPHEMERAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+// A thought's text limit, counted in code points.
+const THOUGHT_MAX_LENGTH = 60;
+
+const isEphemeralKind = (kind) =>
+  kind === POST_KINDS.MOMENT || kind === POST_KINDS.THOUGHT;
 
 /**
  * The audience a new post by `entityID` should carry.
@@ -192,6 +216,41 @@ const queueContentTagging = async ({ postID, entityID, caption, references }) =>
  * answer false. A stream that should have been allowed and was not is a
  * missing live update; the reverse is a leak.
  */
+/**
+ * The audience rule as a SQL boolean expression: may the entity bound to
+ * `viewerParam` (e.g. "$2") read the newsfeed_post aliased `postAlias`.
+ *
+ * The four levels of post_visibility.py can_view_post(), and the one place
+ * Node states them - CanEntityViewPost below and the reply-target hydrator
+ * (reusables/hooks/replyTargets.js) both embed this rather than keeping copies.
+ * Deletion is NOT part of it; callers decide what a deleted post means.
+ */
+const postVisibleToSQL = (postAlias, viewerParam) => `(
+  ${postAlias}.privacy_status = 'public'
+  OR ${postAlias}.entity_id = ${viewerParam}
+  OR (
+    ${postAlias}.privacy_status = 'connections'
+    AND EXISTS (
+      SELECT 1
+      FROM entity_connection c
+      WHERE c.status = TRUE
+        AND (
+          (c.action_by_id = ${postAlias}.entity_id AND c.involved_entity_id = ${viewerParam})
+          OR (c.action_by_id = ${viewerParam} AND c.involved_entity_id = ${postAlias}.entity_id)
+        )
+    )
+  )
+  OR (
+    ${postAlias}.privacy_status = 'custom'
+    AND EXISTS (
+      SELECT 1
+      FROM newsfeed_postprivacy pp
+      WHERE pp.post_id = ${postAlias}.post_id
+        AND pp.allowed_entity_id = ${viewerParam}
+    )
+  )
+)`;
+
 const CanEntityViewPost = async (postID, entityID) => {
   if (!postID || !entityID) return false;
 
@@ -202,31 +261,7 @@ const CanEntityViewPost = async (postID, entityID) => {
       FROM newsfeed_post p
       WHERE p.post_id = $1
         AND p.deleted_at IS NULL
-        AND (
-          p.privacy_status = 'public'
-          OR p.entity_id = $2
-          OR (
-            p.privacy_status = 'connections'
-            AND EXISTS (
-              SELECT 1
-              FROM entity_connection c
-              WHERE c.status = TRUE
-                AND (
-                  (c.action_by_id = p.entity_id AND c.involved_entity_id = $2)
-                  OR (c.action_by_id = $2 AND c.involved_entity_id = p.entity_id)
-                )
-            )
-          )
-          OR (
-            p.privacy_status = 'custom'
-            AND EXISTS (
-              SELECT 1
-              FROM newsfeed_postprivacy pp
-              WHERE pp.post_id = p.post_id
-                AND pp.allowed_entity_id = $2
-            )
-          )
-        )
+        AND ${postVisibleToSQL("p", "$2")}
       LIMIT 1;
       `,
       [String(postID), String(entityID)],
@@ -239,7 +274,41 @@ const CanEntityViewPost = async (postID, entityID) => {
   }
 };
 
+/**
+ * Records that `entityID` shared `postID` - the user_engagement_log row the
+ * backfill and ranking read ("share" is one of the engagements that decides
+ * what a new follower is shown).
+ *
+ * `via` is how it was shared: "feed" (reposted as a post of their own) or
+ * "message" (sent into chats). Both are shares; metadata keeps them apart for
+ * anything that later needs to tell them apart. `extra` is merged into it.
+ *
+ * Never throws - the share itself has already happened by the time this runs.
+ */
+const logPostShare = async (entityID, postID, via, extra = {}) => {
+  try {
+    await cassandraQuery(
+      "INSERT INTO chatterloop.user_engagement_log " +
+        "(log_id, user_id, activity_time, time_spent, activity_type, target_type, target_id, metadata, created_at, updated_at) " +
+        "VALUES (?, ?, toTimestamp(now()), ?, ?, ?, ?, ?, toTimestamp(now()), toTimestamp(now()))",
+      [
+        cassandra.types.uuid(),
+        entityID,
+        0,
+        "share",
+        "post",
+        String(postID),
+        JSON.stringify({ via, ...extra }),
+      ],
+      { prepare: true },
+    );
+  } catch (err) {
+    console.log("[share] engagement log failed:", err.message || err);
+  }
+};
+
 module.exports = {
+  logPostShare,
   checkPostIDExisting,
   GetAllPostsCountInProfile,
   updateRankingScore,
@@ -247,5 +316,10 @@ module.exports = {
   queueContentTagging,
   ResolvePostPrivacyStatus,
   POST_PRIVACY_LEVELS,
+  POST_KINDS,
+  EPHEMERAL_LIFETIME_MS,
+  THOUGHT_MAX_LENGTH,
+  isEphemeralKind,
+  postVisibleToSQL,
   CanEntityViewPost,
 };
