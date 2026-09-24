@@ -194,6 +194,8 @@ const assertCanReplyTo = async (replyingTo, senderEntityID) => {
     `
     SELECT
       p.on_feed,
+      p.entity_id,
+      p.is_archived,
       p.expires_at IS NOT NULL AND p.expires_at <= now() AS is_expired,
       COALESCE(p.details ->> 'allow_replies', 'true') <> 'false' AS allows_replies
     FROM newsfeed_post p
@@ -206,7 +208,11 @@ const assertCanReplyTo = async (replyingTo, senderEntityID) => {
   );
 
   const row = rows[0];
-  if (!row) throw new Error(`That ${target.type} is not available`);
+  // Archived posts are hidden from everyone but their author - the same rule
+  // the reply card applies.
+  if (!row || (row.is_archived && String(row.entity_id) !== String(senderEntityID))) {
+    throw new Error(`That ${target.type} is not available`);
+  }
   if (row.is_expired) throw new Error(`That ${target.type} has expired`);
   if (row.on_feed !== "feed" && !row.allows_replies) {
     throw new Error(`Replies are turned off for this ${target.type}`);
