@@ -51,7 +51,9 @@ const {
   ConnectionCheck,
 } = require("../../reusables/models/users");
 const conversation = require("../../schema/messages/conversation");
-const makeid = require("../../reusables/hooks/makeID");
+const {
+  findOrCreateDirectConversation,
+} = require("../../reusables/models/directConversation");
 
 const MAILINGSERVICE_DOMAIN = process.env.MAILINGSERVICE;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -1572,22 +1574,6 @@ router.get("/conversations", jwtchecker, async (req, res) => {
   }
 });
 
-const checkExistingConversationID = async (conversationID) => {
-  return await Conversations.find({ conversation_id: conversationID })
-    .then((result) => {
-      if (result.length > 0) {
-        // Crucial: Must use 'return' here so the final clean ID passes back up the loop
-        return checkExistingConversationID(makeid(20));
-      } else {
-        return conversationID;
-      }
-    })
-    .catch((err) => {
-      console.log(err);
-      return false;
-    });
-};
-
 router.post(
   "/crtc",
   jwtchecker,
@@ -1615,57 +1601,19 @@ router.post(
         });
       }
 
-      const initialParticipants = [entity_id, otherEntityID];
+      // Shared with /u/sendPost - see reusables/models/directConversation.js.
+      const { conversationID, isNew } = await findOrCreateDirectConversation(
+        entity_id,
+        otherEntityID,
+      );
 
-      const check = await ConnectionCheck(entity_id, otherEntityID);
-
-      if (check) {
-        // If a private room already exists, return its ID safely to prevent duplication
-        return res.status(200).json({
-          status: true,
-          message: "Conversation already initialized",
-          conversationID: check.connection_id,
-          isNew: false,
-        });
-      }
-
-      // 1. Race Condition Check: Must contain exactly only those two participant IDs
-      // $all checks for presence of both elements, $size enforces strict direct chat boundaries
-      const existingConversation = await Conversations.findOne({
-        participant_ids: {
-          $all: initialParticipants,
-          $size: 2,
-        },
-        conversationType: "single",
-      });
-
-      if (existingConversation) {
-        // If a private room already exists, return its ID safely to prevent duplication
-        return res.status(200).json({
-          status: true,
-          message: "Conversation already initialized",
-          conversationID: existingConversation.conversationID,
-          isNew: false,
-        });
-      }
-
-      const newConversationID = await checkExistingConversationID(makeid(20));
-
-      // 2. Fallback execution: Create a clean initialization layout
-      const newConversation = await Conversations.create({
-        conversationID: newConversationID,
-        participant_ids: initialParticipants,
-        conversationType: "single",
-        last_message: null, // Kept null so it stays hidden from inbox listing aggregation maps
-        created_at: new Date(),
-        updated_at: new Date(),
-      });
-
-      return res.status(201).json({
+      return res.status(isNew ? 201 : 200).json({
         status: true,
-        message: "Conversation successfully initialized",
-        conversationID: newConversation.conversationID,
-        isNew: true,
+        message: isNew
+          ? "Conversation successfully initialized"
+          : "Conversation already initialized",
+        conversationID,
+        isNew,
       });
     } catch (err) {
       console.log(err);

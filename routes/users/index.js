@@ -80,6 +80,7 @@ const {
   legacyReplyingTo,
   hydrateReplyTargets,
   sanitizeIncomingReplyingTo,
+  assertCanReplyTo,
   repliedMessageID,
   replyPreviewLabel,
 } = require("../../reusables/hooks/replyTargets");
@@ -158,6 +159,7 @@ const {
   GetUsersWithConnectionIDs,
   CreateEntity,
   GetSenderDetails,
+  GetEntityHandles,
 } = require("../../reusables/models/users");
 const {
   isRealmMember,
@@ -167,6 +169,9 @@ const {
   bumpChatScore,
   interactionScoreBump,
 } = require("../../reusables/hooks/interactionscoring");
+const {
+  findOrCreateDirectConversation,
+} = require("../../reusables/models/directConversation");
 const {
   POST_KINDS,
   postVisibleToSQL,
@@ -1533,6 +1538,9 @@ const deliverMessage = async (params, decodedToken) => {
   // thought - validated here so a malformed object is a 400, not a stored
   // document every reader has to survive.
   const replyingTo = sanitizeIncomingReplyingTo(decodedToken.replyingTo);
+  // A reply to a moment/thought/post: it must still be there, visible to the
+  // sender, and - for a moment or thought - taking replies.
+  await assertCanReplyTo(replyingTo, entity_id);
   const messageType = decodedToken.messageType;
   const conversationType = normalizeConversationType(
     decodedToken.conversationType,
@@ -1805,26 +1813,56 @@ router.post(
   },
 );
 
-// How many conversations one "Send in message" may reach.
+// How many destinations one "Send in message" may reach.
 const SEND_POST_MAX_CONVERSATIONS = 10;
 
+const cleanProfile = (profile) =>
+  profile && profile !== "none" && profile !== "N/A" ? profile : null;
+
 /**
- * "Send in message": sends a post into up to SEND_POST_MAX_CONVERSATIONS of
- * the sender's conversations - any kind, single, group, server or page thread.
+ * The conversationType of a group or channel conversation the sender picked:
+ * from its conversation document when there is one, else from the realm it
+ * belongs to (a group's or channel's conversationID IS its realm_id, and a
+ * channel is a realm with a parent server). Null when it is neither.
+ */
+const conversationTypeOf = async (conversationID) => {
+  const doc = await Conversations.findOne(
+    { conversationID },
+    { conversationType: 1 },
+  ).lean();
+  if (doc?.conversationType) return doc.conversationType;
+
+  const { rows } = await pool.query(
+    `SELECT type, parent_id FROM community_realm WHERE realm_id = $1 AND is_active = TRUE`,
+    [conversationID],
+  );
+  if (!rows[0]) return null;
+  return rows[0].parent_id ? "channel" : rows[0].type;
+};
+
+/**
+ * "Send in message": sends a post to up to SEND_POST_MAX_CONVERSATIONS
+ * destinations, each either
+ *
+ *   {kind: "entity", id}        a person or a page - through the SAME
+ *                               find-or-create as /m/crtc, so it reaches
+ *                               anyone, not only people you already have a
+ *                               conversation with;
+ *   {kind: "conversation", id}  a group chat or a server channel you are in.
  *
  * Each is an ordinary message through deliverMessage (text, the optional note
  * as its content) whose replyingTo is {type: "post", id} - so the chat shows
- * the post as a reply card, hydrated per reader by replyTargets.js, and the
- * sender needs to be in every conversation exactly as for any message.
+ * the post as a reply card, hydrated per reader by replyTargets.js.
  *
  * It is a SHARE: one ranking bump, one interaction bump towards the author and
  * one engagement row (via "message") per send, however many chats it reached,
- * so sending to ten chats cannot count ten times. No notification to the
- * author - unlike a repost, this is a private share.
+ * so sending to ten cannot count ten times. No notification to the author -
+ * unlike a repost, this is a private share.
  *
- * Signed payload: { postID, conversationIDs: [..], content?: note }
- * Answers with the outcome per conversation; `status` is true if at least one
- * went through.
+ * Signed payload: { postID, targets: [{kind, id}], content?: note }
+ * (`conversationIDs: [..]` is still accepted, as conversation targets.)
+ * Answers with the outcome per target; `status` is true if at least one went
+ * through.
  */
 router.post(
   "/sendPost",
@@ -1838,31 +1876,46 @@ router.post(
       const postID = String(decodedToken.postID || "");
       const note =
         typeof decodedToken.content === "string" ? decodedToken.content : "";
-      const conversationIDs = [
-        ...new Set(
-          (Array.isArray(decodedToken.conversationIDs)
-            ? decodedToken.conversationIDs
-            : []
-          )
-            .filter(Boolean)
-            .map(String),
-        ),
+
+      const rawTargets = [
+        ...(Array.isArray(decodedToken.targets) ? decodedToken.targets : []),
+        ...(Array.isArray(decodedToken.conversationIDs)
+          ? decodedToken.conversationIDs.map((id) => ({
+              kind: "conversation",
+              id,
+            }))
+          : []),
       ];
+      const seen = new Set();
+      const targets = rawTargets
+        .filter(
+          (target) =>
+            target &&
+            (target.kind === "entity" || target.kind === "conversation") &&
+            target.id,
+        )
+        .map((target) => ({ kind: target.kind, id: String(target.id) }))
+        .filter((target) => {
+          const key = `${target.kind}:${target.id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
 
       if (!postID) {
         return res
           .status(400)
           .send({ status: false, message: "No post to send" });
       }
-      if (conversationIDs.length === 0) {
+      if (targets.length === 0) {
         return res
           .status(400)
-          .send({ status: false, message: "Choose at least one conversation" });
+          .send({ status: false, message: "Choose at least one recipient" });
       }
-      if (conversationIDs.length > SEND_POST_MAX_CONVERSATIONS) {
+      if (targets.length > SEND_POST_MAX_CONVERSATIONS) {
         return res.status(400).send({
           status: false,
-          message: `A post can be sent to at most ${SEND_POST_MAX_CONVERSATIONS} conversations at once`,
+          message: `A post can be sent to at most ${SEND_POST_MAX_CONVERSATIONS} chats at once`,
         });
       }
 
@@ -1896,35 +1949,33 @@ router.post(
           ? kind
           : "post";
 
-      // conversationType from the conversation itself rather than the
-      // client, which only sends ids here. The picker lists conversations
-      // that already exist, so one with no document is not a valid target.
-      const conversationDocs = await Conversations.find(
-        { conversationID: { $in: conversationIDs } },
-        { conversationID: 1, conversationType: 1 },
-      ).lean();
-      const typeByConversation = new Map(
-        conversationDocs.map((doc) => [
-          String(doc.conversationID),
-          doc.conversationType || "single",
-        ]),
-      );
-
       // One at a time, in the order chosen: a handful of sends, and each
       // resolves as soon as its message is stored.
       const results = [];
-      for (const conversationID of conversationIDs) {
-        const conversationType = typeByConversation.get(conversationID);
-        if (!conversationType) {
-          results.push({
-            conversationID,
-            status: false,
-            message: "Conversation not found",
-          });
-          continue;
-        }
-
+      for (const target of targets) {
+        // Known up front for a group/channel; found or made for a person.
+        let conversationID = target.kind === "conversation" ? target.id : null;
         try {
+          let conversationType;
+          if (target.kind === "entity") {
+            ({ conversationID } = await findOrCreateDirectConversation(
+              entity_id,
+              target.id,
+            ));
+            conversationType = "single";
+          } else {
+            conversationType = await conversationTypeOf(conversationID);
+            if (!conversationType) {
+              results.push({
+                ...target,
+                conversationID,
+                status: false,
+                message: "Chat not found",
+              });
+              continue;
+            }
+          }
+
           const { messageID } = await deliverMessage(req.params, {
             pendingID: null,
             conversationID,
@@ -1934,14 +1985,15 @@ router.post(
             isReply: true,
             replyingTo: { type: targetType, id: postID },
           });
-          results.push({ conversationID, status: true, messageID });
+          results.push({ ...target, conversationID, status: true, messageID });
         } catch (err) {
           results.push({
+            ...target,
             conversationID,
             status: false,
             message: err.saveFailed
               ? "Error sending message"
-              : err.message || "Could not send to this conversation",
+              : err.message || "Could not send to this chat",
           });
         }
       }
@@ -1965,6 +2017,133 @@ router.post(
     }
   },
 );
+
+/**
+ * Who "Send in message" can send to, in three sections (all filtered by `q`):
+ *
+ *   direct    people and pages. Without `q`, the ones you chatted with most
+ *             recently; with `q`, ANYONE matching - you do not need an
+ *             existing chat, sendPost opens one like /m/crtc.
+ *   groups    group chats you are a member of.
+ *   channels  server channels you are a member of, labelled with their server.
+ *
+ * GET /u/sendPostTargets?q=  ->  { direct, groups, channels }
+ */
+router.get("/sendPostTargets", jwtchecker, async (req, res) => {
+  const entity_id = String(req.params.entity_id);
+  const q = String(req.query.q || "").trim();
+  const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+  try {
+    // ── Direct: people and pages ──
+    let directIDs = [];
+    if (q) {
+      const { rows } = await pool.query(
+        `
+        SELECT entity_id FROM (
+          SELECT ua.entity_id, ua.username AS handle,
+                 TRIM(CONCAT(ua.first_name, ' ', ua.last_name)) AS name
+          FROM user_account ua
+          WHERE ua.is_active = TRUE AND ua.is_verified = TRUE
+          UNION ALL
+          SELECT r.entity_id, r.slug AS handle, r.name
+          FROM community_realm r
+          WHERE r.type = 'page' AND r.is_active = TRUE
+        ) people
+        WHERE entity_id <> $1
+          AND (name ILIKE $2 OR handle ILIKE $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM entity_block b
+            WHERE (b.blocker_id = $1 AND b.blocked_id = people.entity_id)
+               OR (b.blocked_id = $1 AND b.blocker_id = people.entity_id)
+          )
+        ORDER BY (handle ILIKE $3) DESC, name
+        LIMIT 20;
+        `,
+        [entity_id, like, `${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`],
+      );
+      directIDs = rows.map((row) => String(row.entity_id));
+    } else {
+      const recent = await Conversations.find(
+        {
+          participant_ids: entity_id,
+          conversationType: "single",
+          last_message: { $ne: null },
+        },
+        { participant_ids: 1 },
+      )
+        .sort({ "last_message.messageDate": -1 })
+        .limit(20)
+        .lean();
+      directIDs = [
+        ...new Set(
+          recent
+            .map((doc) =>
+              (doc.participant_ids || [])
+                .map(String)
+                .find((id) => id !== entity_id),
+            )
+            .filter(Boolean),
+        ),
+      ];
+    }
+
+    const handles = await GetEntityHandles(directIDs);
+    const direct = directIDs
+      .map((id) => {
+        const found = handles.get(id);
+        if (!found) return null;
+        return {
+          entity_id: id,
+          type: found.entity_type,
+          display_name: found.display_name || found.handle || "",
+          handle: found.handle || "",
+          profile: cleanProfile(found.profile),
+        };
+      })
+      .filter(Boolean);
+
+    // ── Groups and channels you are a member of ──
+    const { rows: realms } = await pool.query(
+      `
+      SELECT r.realm_id, r.name, r.slug, r.profile, r.type, r.parent_id,
+             s.name AS server_name, s.profile AS server_profile
+      FROM community_member m
+      JOIN community_realm r ON r.realm_id = m.realm_id AND r.is_active = TRUE
+      LEFT JOIN community_realm s ON s.realm_id = r.parent_id
+      WHERE m.entity_id = $1
+        AND (r.type = 'group' OR r.parent_id IS NOT NULL)
+        AND ($2 = '' OR r.name ILIKE $3 OR s.name ILIKE $3)
+      ORDER BY s.name NULLS FIRST, r.name
+      LIMIT 100;
+      `,
+      [entity_id, q, like],
+    );
+
+    const groups = realms
+      .filter((realm) => !realm.parent_id)
+      .map((realm) => ({
+        conversation_id: realm.realm_id,
+        display_name: realm.name || realm.slug || "",
+        profile: cleanProfile(realm.profile),
+      }));
+    const channels = realms
+      .filter((realm) => realm.parent_id)
+      .map((realm) => ({
+        conversation_id: realm.realm_id,
+        display_name: realm.name || realm.slug || "",
+        server_name: realm.server_name || "",
+        server_profile: cleanProfile(realm.server_profile),
+      }));
+
+    res.send({ status: true, result: { direct, groups, channels } });
+  } catch (err) {
+    console.log(err);
+    res
+      .status(400)
+      .send({ status: false, message: "Couldn't load who you can send to" });
+  }
+});
 
 function removeNullServerDetails(obj) {
   // Check if serverdetails key exists and its value is null or undefined

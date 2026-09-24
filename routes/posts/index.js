@@ -37,6 +37,9 @@ const {
   POST_KINDS,
   EPHEMERAL_LIFETIME_MS,
   THOUGHT_MAX_LENGTH,
+  MOMENT_CAPTION_MAX_LENGTH,
+  THOUGHT_MOODS,
+  EPHEMERAL_AUDIENCES,
   isEphemeralKind,
   logPostShare,
 } = require("../../reusables/models/posts");
@@ -454,10 +457,18 @@ router.post("/upload", jwtchecker, async (req, res) => {
  * copied from the payload's `onfeed`, which the mobile profile-photo upload
  * sends as boolean `true`.
  *
+ * `details` is newsfeed_post.details - kind-specific settings (a thought's
+ * mood, a moment's allow_replies); null for a feed post.
+ *
  * Resolves { postID, expiresAt }. Throws an Error with `.status` - 400 for a
  * bad payload, 500 for a failed transaction - for the route to send.
  */
-const createPostFromPayload = async ({ params, decodeToken, kind }) => {
+const createPostFromPayload = async ({
+  params,
+  decodeToken,
+  kind,
+  details = null,
+}) => {
   const userID = params.userID;
   const username = params.username;
   const id = params.id;
@@ -539,7 +550,11 @@ const createPostFromPayload = async ({ params, decodeToken, kind }) => {
             // behind it (jwtchecker sets it from the user row), so sharing as
             // a page credited the owner instead of the page.
             const sharerDetails = await GetSenderDetails(entityID);
-            const shareDetails = `@${sharerDetails?.handle || username} shared your post.`;
+            // A moment can be a share too ("Share a post" in Create Moment).
+            const shareDetails =
+              kind === POST_KINDS.MOMENT
+                ? `@${sharerDetails?.handle || username} shared your post to their Moment.`
+                : `@${sharerDetails?.handle || username} shared your post.`;
 
             const notifParams = {
               notificationID: awaitNotifID,
@@ -598,9 +613,16 @@ const createPostFromPayload = async ({ params, decodeToken, kind }) => {
     // against user_account.is_private, rather than taken from the signed
     // payload as-is - see ResolvePostPrivacyStatus for why an explicit choice
     // still wins but a missing one must not default to public.
+    //
+    // A moment or thought takes only Public or Contacts ("Close" is designed
+    // but hidden until a close-friends list exists); anything else it is sent
+    // gets the same profile-derived default as a missing choice.
+    const requestedPrivacy = decodeToken.privacy?.status;
     const resolvedPrivacyStatus = await ResolvePostPrivacyStatus(
       entityID,
-      decodeToken.privacy?.status,
+      isEphemeralKind(kind) && !EPHEMERAL_AUDIENCES.includes(requestedPrivacy)
+        ? undefined
+        : requestedPrivacy,
     );
 
     // Prepare main post insert
@@ -608,11 +630,11 @@ const createPostFromPayload = async ({ params, decodeToken, kind }) => {
     INSERT INTO newsfeed_post (
       post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
       is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived,
-      expires_at
+      expires_at, details
     ) VALUES (
       $1, $2, $3, $4, $5, $6, to_timestamp($7),
       $8, $9, $10, $11, $12, $13, $14,
-      $15
+      $15, $16
     );
   `;
     const postValues = [
@@ -631,6 +653,7 @@ const createPostFromPayload = async ({ params, decodeToken, kind }) => {
       resolvedPrivacyStatus,
       false,
       expiresAt,
+      details ? JSON.stringify(details) : null,
     ];
 
     // A CHECKED-OUT client, not the pool. This was `await pool.getPool()`,
@@ -856,7 +879,11 @@ const createPostFromPayload = async ({ params, decodeToken, kind }) => {
         // sent into chats, /users/sendPost) - both count as shares.
         //
         // target_id stays the NEW post's id, as it always has been.
-        await logPostShare(entityID, postID, "feed");
+        await logPostShare(
+          entityID,
+          postID,
+          kind === POST_KINDS.MOMENT ? "moment" : "feed",
+        );
       }
 
       // Notify tagged users if any
@@ -955,17 +982,23 @@ router.post(
 );
 
 /**
- * A moment: exactly ONE media item, optional caption, tags and privacy, live
- * for 24h. An entity can post as many as it likes - each is its own row.
+ * A moment: ONE photo or video, or ONE shared post, with an optional caption,
+ * tags and audience, live for 24h. An entity can post as many as it likes -
+ * each is its own row.
  *
  * Media is uploaded first through POST /posts/upload, exactly like a post's,
- * and arrives here as a URL reference.
+ * and arrives here as a URL reference. "Share a post" instead names a post
+ * the author can see; it goes through the same share path as a repost (the
+ * original's author is credited and notified, the share is counted), just as
+ * a moment.
  *
  * Signed payload:
- *   { content: { reference: {reference, referenceMediaType, name?, caption?},
- *                data?: caption },
+ *   { content: { reference?: {reference, referenceMediaType, name?, caption?},
+ *                sharedPostID?: <post id>,         // exactly one of the two
+ *                data?: caption },                 // <= 120 characters
  *     tagging?: { isTagged, users: [entity_id] },
- *     privacy?: { status } }
+ *     privacy?: { status },                         // public | connections
+ *     allowReplies?: bool }                         // default true
  */
 router.post(
   "/moments/create",
@@ -974,32 +1007,80 @@ router.post(
   async (req, res) => {
     try {
       const payload = jwt.verify(req.body.token, JWT_SECRET);
-      const reference = payload?.content?.reference;
+      const content = payload?.content || {};
+      const reference = content.reference;
+      const sharedPostID = content.sharedPostID
+        ? String(content.sharedPostID)
+        : null;
+      const caption = String(content.data || "").trim();
 
-      if (!reference || typeof reference.reference !== "string") {
-        throw badRequest("A moment needs exactly one media item");
+      if (!!reference === !!sharedPostID) {
+        throw badRequest("A moment is one photo or video, or one shared post");
       }
-      const topType = String(reference.referenceMediaType || "").split("/")[0];
-      if (!["image", "video"].includes(topType)) {
-        throw badRequest("A moment must be an image or a video");
+      if ([...caption].length > MOMENT_CAPTION_MAX_LENGTH) {
+        throw badRequest(
+          `A moment's caption can be at most ${MOMENT_CAPTION_MAX_LENGTH} characters`,
+        );
+      }
+
+      let references;
+      if (sharedPostID) {
+        // Only a live feed post the author can see - a moment of a moment
+        // would expire under whoever shared it, and a post you cannot see is
+        // not yours to pass on.
+        const { rows } = await pool.query(
+          `SELECT 1 FROM newsfeed_post
+           WHERE post_id = $1 AND on_feed = 'feed' AND deleted_at IS NULL
+             AND is_archived = FALSE`,
+          [sharedPostID],
+        );
+        if (
+          rows.length === 0 ||
+          !(await CanEntityViewPost(sharedPostID, req.params.entity_id))
+        ) {
+          throw badRequest("That post can't be shared");
+        }
+        references = [
+          {
+            reference: sharedPostID,
+            referenceMediaType: "shared_post",
+            name: null,
+            caption: "",
+          },
+        ];
+      } else {
+        if (typeof reference.reference !== "string") {
+          throw badRequest("A moment needs exactly one media item");
+        }
+        const topType = String(reference.referenceMediaType || "").split(
+          "/",
+        )[0];
+        if (!["image", "video"].includes(topType)) {
+          throw badRequest("A moment must be an image or a video");
+        }
+        references = [reference];
       }
 
       const { postID, expiresAt } = await createPostFromPayload({
         params: req.params,
         kind: POST_KINDS.MOMENT,
+        details: { allow_replies: payload.allowReplies !== false },
         decodeToken: {
           content: {
-            references: [reference],
-            data: String(payload.content.data || ""),
-            // Never a share: a moment is always its own media.
-            isShared: false,
+            references,
+            data: caption,
+            isShared: !!sharedPostID,
           },
           // content_type is also what createPostFromPayload keys the
           // profile/cover-photo side effects on, so it must never be
           // "profile" or "cover_photo" here.
-          type: { fileType: "media", contentType: POST_KINDS.MOMENT },
+          type: {
+            fileType: sharedPostID ? "shared_post" : "media",
+            contentType: POST_KINDS.MOMENT,
+          },
           tagging: normalizeTagging(payload.tagging),
           privacy: payload.privacy,
+          otherEntityID: null,
         },
       });
 
@@ -1014,13 +1095,14 @@ router.post(
 );
 
 /**
- * A thought: a short text note, live for 24h, ONE live per entity - posting a
- * new one ends the current one (see createPostFromPayload).
+ * A thought: a short text note with an optional mood, live for 24h, ONE live
+ * per entity - posting a new one ends the current one (see
+ * createPostFromPayload). Editing one in place is Django's PUT
+ * /api/newsfeed/thoughts/<post_id>/, which keeps its timer.
  *
- * `content` is an object so a thought can grow fields (an emoji, a song)
- * without a new contract; only `text` exists today.
- *
- * Signed payload: { content: { text }, privacy?: { status } }
+ * Signed payload:
+ *   { content: { text, mood? },    // text <= 60 characters; mood: THOUGHT_MOODS
+ *     privacy?: { status } }       // public | connections
  */
 router.post(
   "/thoughts/create",
@@ -1030,6 +1112,7 @@ router.post(
     try {
       const payload = jwt.verify(req.body.token, JWT_SECRET);
       const text = String(payload?.content?.text ?? "").trim();
+      const mood = payload?.content?.mood ?? null;
 
       // Counted in code points, not UTF-16 units, so an emoji is one
       // character - the same count the composer's counter shows.
@@ -1042,10 +1125,14 @@ router.post(
           `A thought can be at most ${THOUGHT_MAX_LENGTH} characters`,
         );
       }
+      if (mood !== null && !THOUGHT_MOODS.includes(mood)) {
+        throw badRequest("Unknown mood");
+      }
 
       const { postID, expiresAt } = await createPostFromPayload({
         params: req.params,
         kind: POST_KINDS.THOUGHT,
+        details: mood ? { mood } : {},
         decodeToken: {
           content: { references: [], data: text, isShared: false },
           type: { fileType: "text", contentType: POST_KINDS.THOUGHT },

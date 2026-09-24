@@ -178,6 +178,42 @@ const sanitizeIncomingReplyingTo = (replyingTo) => {
 };
 
 /**
+ * Refuses a reply to a post, moment or thought the sender may not reply to:
+ * one that does not exist or is deleted, one they cannot see, a moment or
+ * thought that has expired, or one whose author turned replies off
+ * (details.allow_replies). Message replies are not checked here - the
+ * conversation membership check already covers them.
+ *
+ * Throws an Error whose message is safe to show; resolves quietly otherwise.
+ */
+const assertCanReplyTo = async (replyingTo, senderEntityID) => {
+  const target = normalizeReplyTarget(replyingTo);
+  if (!target || target.type === REPLY_TARGET_TYPES.MESSAGE) return;
+
+  const { rows } = await pool.query(
+    `
+    SELECT
+      p.on_feed,
+      p.expires_at IS NOT NULL AND p.expires_at <= now() AS is_expired,
+      COALESCE(p.details ->> 'allow_replies', 'true') <> 'false' AS allows_replies
+    FROM newsfeed_post p
+    WHERE p.post_id = $1
+      AND p.deleted_at IS NULL
+      AND ${postVisibleToSQL("p", "$2")}
+    LIMIT 1;
+    `,
+    [target.id, String(senderEntityID)],
+  );
+
+  const row = rows[0];
+  if (!row) throw new Error(`That ${target.type} is not available`);
+  if (row.is_expired) throw new Error(`That ${target.type} has expired`);
+  if (row.on_feed !== "feed" && !row.allows_replies) {
+    throw new Error(`Replies are turned off for this ${target.type}`);
+  }
+};
+
+/**
  * The message id a reply points at, or null when it is not a message reply.
  * For the readers that only understand message threading (the command
  * envelope, bots).
@@ -409,6 +445,7 @@ module.exports = {
   legacyReplyingTo,
   normalizeReplyTarget,
   sanitizeIncomingReplyingTo,
+  assertCanReplyTo,
   repliedMessageID,
   replyPreviewLabel,
   hydrateReplyTargets,

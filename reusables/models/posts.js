@@ -89,6 +89,25 @@ const EPHEMERAL_LIFETIME_MS = 24 * 60 * 60 * 1000;
 // A thought's text limit, counted in code points.
 const THOUGHT_MAX_LENGTH = 60;
 
+// A moment's caption limit, counted in code points.
+const MOMENT_CAPTION_MAX_LENGTH = 120;
+
+// A thought's optional mood. Django mirror: newsfeed/models.py THOUGHT_MOODS.
+const THOUGHT_MOODS = Object.freeze([
+  "chilling",
+  "busy",
+  "focused",
+  "traveling",
+  "celebrating",
+  "resting",
+  "hungry",
+]);
+
+// Who a moment or thought can be shown to. "Close" (a close-friends list) is
+// designed but hidden until that list exists, so moments and thoughts take
+// only these two - anything else falls back to the profile default.
+const EPHEMERAL_AUDIENCES = Object.freeze(["public", "connections"]);
+
 const isEphemeralKind = (kind) =>
   kind === POST_KINDS.MOMENT || kind === POST_KINDS.THOUGHT;
 
@@ -319,6 +338,9 @@ module.exports = {
   POST_KINDS,
   EPHEMERAL_LIFETIME_MS,
   THOUGHT_MAX_LENGTH,
+  MOMENT_CAPTION_MAX_LENGTH,
+  THOUGHT_MOODS,
+  EPHEMERAL_AUDIENCES,
   isEphemeralKind,
   postVisibleToSQL,
   CanEntityViewPost,

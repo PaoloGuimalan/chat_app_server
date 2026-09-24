@@ -68,6 +68,26 @@ const ROUTES = {
     ios: (p) =>
       p.postId ? withQueryAnchor(`/post/${p.postId}`, p.anchor) : null,
   },
+  // A reaction to YOUR moment / thought (the only writers today) - so the
+  // recipient is the author, whose viewer / Thoughts rail is what opens. The
+  // apps get the post page for a moment (works on versions without a moment
+  // viewer, and for the author even once it has expired) and no link for a
+  // thought, which has no page of its own there yet.
+  moment: {
+    web: (p) =>
+      p.postId && p.ownerEntityId
+        ? `/moments/${p.ownerEntityId}?post=${p.postId}`
+        : p.postId
+          ? `/post/${p.postId}`
+          : null,
+    android: (p) => (p.postId ? `/post/${p.postId}` : null),
+    ios: (p) => (p.postId ? `/post/${p.postId}` : null),
+  },
+  thought: {
+    web: () => "/messages",
+    android: () => null,
+    ios: () => null,
+  },
   conversation: {
     web: (p) => (p.conversationId ? `/messages/${p.conversationId}` : null),
     android: (p) =>
@@ -286,6 +306,13 @@ const paramsFor = (notification, sender) => {
             ? notification.referenceID
             : null) ||
           null,
+        anchor,
+      };
+    case "moment":
+    case "thought":
+      return {
+        postId: target.supportingID || null,
+        ownerEntityId: notification.toUserID || null,
         anchor,
       };
     case "conversation":
