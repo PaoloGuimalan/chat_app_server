@@ -287,6 +287,7 @@ const loadPostTargets = async (postIDs, viewerEntityID, depth = 0) => {
       p.on_feed,
       p.caption,
       p.file_type,
+      p.details -> 'poster' ->> 'url' AS poster_url,
       p.is_archived,
       p.deleted_at IS NOT NULL AS is_deleted,
       p.expires_at,
@@ -369,11 +370,19 @@ const postTargetCard = (target, row, handles, viewerEntityID) => {
   }
 
   const isShare = row.file_type === "shared_post";
-  // A share shows the shared post's picture (resolved in loadPostTargets).
-  const mediaType = isShare
-    ? row.shared_media_type || null
-    : row.reference_media_type || null;
-  const thumbnail = isShare ? row.shared_thumbnail || null : row.reference || null;
+  // A share shows the shared post's picture (resolved in loadPostTargets); a
+  // moment encoded on the device shows its poster - a still image - rather
+  // than making the card load the video.
+  const mediaType = row.poster_url
+    ? "image/jpeg"
+    : isShare
+      ? row.shared_media_type || null
+      : row.reference_media_type || null;
+  const thumbnail = row.poster_url
+    ? row.poster_url
+    : isShare
+      ? row.shared_thumbnail || null
+      : row.reference || null;
 
   let content;
   if (type === POST_KINDS.THOUGHT) {

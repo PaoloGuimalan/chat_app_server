@@ -15,6 +15,11 @@ const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { savePostHashtags } = require("../../reusables/hooks/hashtags");
 const {
+  assertOwnUpload,
+  vetEncodedVideo,
+  vetPoster,
+} = require("../../reusables/hooks/momentMedia");
+const {
   jwtchecker,
   jwtssechecker,
   createJWT,
@@ -998,7 +1003,16 @@ router.post(
  *                data?: caption },                 // <= 120 characters
  *     tagging?: { isTagged, users: [entity_id] },
  *     privacy?: { status },                         // public | connections
- *     allowReplies?: bool }                         // default true
+ *     allowReplies?: bool,                          // default true
+ *     // Encoded on the device (the app's editor) - see momentMedia.js:
+ *     poster?: { url, w, h },                       // our upload, JPEG/PNG
+ *     source?: "photo" | "video",                   // what it was made from
+ *     hasAudio?: bool }                             // a photo with sound added
+ *
+ * The media URL must be one of the creator's own uploads. With a poster the
+ * video must also be a streamable H.264/AAC MP4 of at most 2 minutes, and
+ * `details` records { source, has_audio, poster, duration_ms } - the
+ * duration read from the file itself.
  */
 router.post(
   "/moments/create",
@@ -1024,6 +1038,8 @@ router.post(
       }
 
       let references;
+      // Set only for a moment encoded on the device - see below.
+      let encoded = {};
       if (sharedPostID) {
         // Only a live feed post the author can see - a moment of a moment
         // would expire under whoever shared it, and a post you cannot see is
@@ -1058,13 +1074,46 @@ router.post(
         if (!["image", "video"].includes(topType)) {
           throw badRequest("A moment must be an image or a video");
         }
+        // Every moment's media is one of the creator's own uploads - not an
+        // arbitrary URL. Web and app already upload this way.
+        await assertOwnUpload(reference.reference, req.params.id);
+
+        // Encoded on the device (the app's editor): it comes with a poster,
+        // and must be a streamable H.264/AAC MP4 within the limits. What is
+        // stored about it (duration, size) is read from the FILE.
+        if (payload.poster) {
+          if (topType !== "video") {
+            throw badRequest("An encoded moment must be a video");
+          }
+          const video = await vetEncodedVideo(reference.reference, req.params.id);
+          await vetPoster(payload.poster.url, req.params.id);
+          const source = payload.source === "photo" ? "photo" : "video";
+          const edge = (value, fallback) => {
+            const n = Math.round(Number(value));
+            return Number.isFinite(n) && n > 0 && n <= 4096 ? n : fallback;
+          };
+          encoded = {
+            source,
+            // A photo always carries an audio TRACK (silent when none was
+            // added), so only the creator knows whether it has sound; a
+            // video has sound when it has a track.
+            has_audio:
+              source === "photo" ? payload.hasAudio === true : video.hasAudioTrack,
+            poster: {
+              url: String(payload.poster.url),
+              w: edge(payload.poster.w, video.width),
+              h: edge(payload.poster.h, video.height),
+            },
+            duration_ms: video.durationMs,
+          };
+        }
         references = [reference];
       }
 
       const { postID, expiresAt } = await createPostFromPayload({
         params: req.params,
         kind: POST_KINDS.MOMENT,
-        details: { allow_replies: payload.allowReplies !== false },
+        details: { allow_replies: payload.allowReplies !== false, ...encoded },
         decodeToken: {
           content: {
             references,
