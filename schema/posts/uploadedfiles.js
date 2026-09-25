@@ -13,4 +13,9 @@ const uploadedfiles = mongoose.Schema({
   dateUploaded: { type: mongoose.Schema.Types.Mixed, require: true },
 });
 
+// Moment creation looks an upload up by its URL (momentMedia.assertOwnUpload)
+// - without this every lookup scanned the whole collection. Built by
+// mongoose's autoIndex when the server starts.
+uploadedfiles.index({ "fileDetails.data": 1 });
+
 module.exports = mongoose.model("UploadedFiles", uploadedfiles, "files");
