@@ -574,6 +574,20 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     ...rows[0].json_build_object,
   };
 
+  // Whether the viewer may create channels here, asked exactly the way
+  // /u/createchannel decides it - so the clients show the create button only
+  // to the people that route will accept. `is_admin` is not a substitute:
+  // the role matrix is editable in the database and a member can hold an
+  // individual grant or deny.
+  deconstructedData.can_create_channel = await hasPermission(
+    entityID,
+    "realm.channel.create",
+    serverID,
+  ).catch((err) => {
+    console.error("[initserverchannels] can_create_channel check failed:", err);
+    return false;
+  });
+
   UserMessage.aggregate([
     {
       $match: {
