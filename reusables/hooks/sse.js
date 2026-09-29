@@ -240,6 +240,21 @@ const CallRejectNotif = (rcp, decodedToken) => {
   });
 };
 
+/// A call ended without this entity ever joining it. The live-connection twin
+/// of the missed-call push - pushnotification.js's missedCallData builds both
+/// - for the devices the worker won't push to because they are online.
+const CallMissedNotif = (rcp, missedData) => {
+  const encodedResult = createJWTwExp({
+    missedcall: missedData,
+  });
+
+  publish(`events_${rcp}`, `callmissed`, {
+    status: true,
+    auth: true,
+    result: encodedResult,
+  });
+};
+
 const UpdateContactswSessionStatus = (rcp, decodedToken) => {
   // const sseWithUserID = sseNotificationsWaiters[rcp];
 
@@ -369,6 +384,7 @@ module.exports = {
   BroadcastIsTypingStatus,
   ReachCallRecepients,
   CallRejectNotif,
+  CallMissedNotif,
   UpdateContactswSessionStatus,
   clearASingleSession,
   clearAllSession,

@@ -12,6 +12,12 @@ const { publish, QUEUES } = require("../rabbitmq/workqueue");
 // (worker_service/internal/services/rabbitmq/push.go).
 const CHANNEL_MESSAGES = "chatterloop_messages_v2";
 const CHANNEL_ACTIVITY = "chatterloop_activity_v2";
+const CHANNEL_CALLS = "chatterloop_calls_v1";
+
+// How long FCM may hold an undelivered ring before discarding it. A ring that
+// arrives after the call is over is worse than none, and the app gives up
+// ringing at 45s anyway.
+const CALL_RING_TTL_SEC = 30;
 
 /**
  * Reusable push sender for every kind of alert.
@@ -71,6 +77,9 @@ class PushNotification {
     body = "",
     tag = null,
     imageUrl = null,
+    // 0 leaves FCM's default (up to four weeks). Set it for anything that is
+    // pointless late - a ring, a ring's cancellation.
+    ttlSeconds = 0,
   }) {
     const receivers = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
       .filter(Boolean)
@@ -100,7 +109,89 @@ class PushNotification {
       tag: tag ? String(tag) : "",
       image_url: imageUrl ? String(imageUrl) : "",
       os_rendered: !!osRendered,
+      ttl_seconds: Math.max(0, Math.floor(Number(ttlSeconds) || 0)),
       data: stringData,
+    });
+  }
+
+  /**
+   * An incoming direct or group call, rung on the Calls channel until it is
+   * answered, declined, cancelled or 45s pass.
+   *
+   * [callMetadata] is the caller's own /call token payload - the same object
+   * the `incomingcall` SSE relays - so the push and the live alert can't
+   * describe the call differently. Flattened here because FCM data is
+   * string-only; `recepients` travels as JSON.
+   */
+  async sendCall({ receivers = [], callMetadata, ringStartedAt = Date.now() }) {
+    const isGroup = callMetadata.conversationType !== "single";
+    const kind = callMetadata.callType === "video" ? "video call" : "voice call";
+    const callerName = callMetadata.caller?.name || "";
+    return this.send({
+      entityIDs: receivers,
+      channelId: CHANNEL_CALLS,
+      tag: `call:${callMetadata.conversationID}`,
+      ttlSeconds: CALL_RING_TTL_SEC,
+      title: callMetadata.callDisplayName,
+      body: isGroup ? `${callerName} is calling · ${kind}` : `Incoming ${kind}`,
+      data: {
+        type: "call",
+        conversationID: callMetadata.conversationID,
+        conversationType: callMetadata.conversationType,
+        callType: callMetadata.callType,
+        callDisplayName: callMetadata.callDisplayName,
+        callerName,
+        callerEntityID: callMetadata.caller?.entityID,
+        recepients: JSON.stringify(callMetadata.recepients || []),
+        displayImage:
+          callMetadata.displayImage && callMetadata.displayImage !== "none"
+            ? callMetadata.displayImage
+            : "",
+        title: callMetadata.callDisplayName,
+        body: isGroup ? `${callerName} is calling · ${kind}` : `Incoming ${kind}`,
+        // The app stops ringing 45s after THIS, not after arrival, so a push
+        // that sat in FCM for 20s rings for the remaining 25.
+        sentAt: String(ringStartedAt),
+      },
+    });
+  }
+
+  /**
+   * Takes a ring back silently: the app removes the call notification for
+   * [conversationID]. For a callee's OTHER devices once one of them answers
+   * or declines - they acted on it, so there is nothing to tell them.
+   */
+  async cancelCall({ receivers = [], conversationID }) {
+    return this.send({
+      entityIDs: receivers,
+      channelId: CHANNEL_CALLS,
+      ttlSeconds: CALL_RING_TTL_SEC * 2,
+      data: { type: "call_cancel", conversationID },
+    });
+  }
+
+  /**
+   * The call ENDED - its room emptied - and [receivers] never joined it: a
+   * direct call the caller hung up unanswered, or a group call however many
+   * others took part. See callRinging.js.
+   *
+   * The app replaces the ring, if it is somehow still up, with a "Missed
+   * call" on the quieter Activity channel. The shared `tag` lets an
+   * OS-rendered ring (the future iOS path) be replaced the same way, since
+   * iOS can only replace a notification, never remove one.
+   *
+   * No TTL, unlike the ring: a device that was off for an hour should still
+   * learn it missed a call.
+   */
+  async sendMissedCall({ receivers = [], callMetadata }) {
+    const data = missedCallData(callMetadata);
+    return this.send({
+      entityIDs: receivers,
+      channelId: CHANNEL_ACTIVITY,
+      tag: `call:${callMetadata.conversationID}`,
+      title: data.title,
+      body: data.body,
+      data,
     });
   }
 
@@ -192,7 +283,7 @@ class PushNotification {
         body,
         // Only these prefixes are honoured by the app; anything else falls
         // back to the notifications screen: /conversation/ /user/ /realm/
-        // /notifications /profile /settings
+        // /notifications /profile /settings /post/ /moments/ /server/
         route,
         imageUrl,
         senderAvatarUrl,
@@ -201,6 +292,34 @@ class PushNotification {
   }
 }
 
+/**
+ * What a missed call says, and where tapping it goes - built once so the
+ * push and the `callmissed` SSE (sse.js) are the same notice.
+ */
+function missedCallData(callMetadata) {
+  const isGroup = callMetadata.conversationType !== "single";
+  const kind = callMetadata.callType === "video" ? "video call" : "voice call";
+  const callerName = callMetadata.caller?.name || "";
+  return {
+    type: "call_missed",
+    conversationID: callMetadata.conversationID,
+    title: callMetadata.callDisplayName || callerName || "Missed call",
+    body: isGroup && callerName ? `Missed ${kind} from ${callerName}` : `Missed ${kind}`,
+    route: `/conversation/${callMetadata.conversationID}`,
+    senderAvatarUrl:
+      callMetadata.displayImage && callMetadata.displayImage !== "none"
+        ? callMetadata.displayImage
+        : "",
+    // Lets the app drop the notice for someone who hit Decline on the ring -
+    // that Decline is local only, so the server can't know. See
+    // NotificationRenderer's decline marker.
+    ringStartedAt: callMetadata.ringStartedAt
+      ? String(callMetadata.ringStartedAt)
+      : "",
+  };
+}
+
 // Single shared instance - there's no per-caller state worth duplicating.
 module.exports = new PushNotification();
 module.exports.PushNotification = PushNotification;
+module.exports.missedCallData = missedCallData;

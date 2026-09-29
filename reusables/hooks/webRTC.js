@@ -1121,9 +1121,23 @@ async function leaveRoom(conversationID, entityID, clientId) {
   }
 
   // Notify remaining members
-  const remainingMembers = await rs
-    .getAllMembers(conversationID)
-    .catch(() => ({}));
+  let membersRead = true;
+  const remainingMembers = await rs.getAllMembers(conversationID).catch(() => {
+    membersRead = false;
+    return {};
+  });
+
+  // Nobody left: the call is over, however the last person went - hang-up,
+  // app closed, or the dead-client sweep. That is what owes a missed call to
+  // whoever the call rang and never joined. Read from Redis, so it holds
+  // whichever pod has the room; and only on a SUCCESSFUL read - a failed one
+  // must not end a live call's invite list. Deferred require, like
+  // announceParticipantRemoval's.
+  if (membersRead && Object.keys(remainingMembers).length === 0) {
+    require("./callRinging")
+      .ringOut(conversationID)
+      .catch((err) => console.error("[WebRTC] missed-call ring-out failed:", err));
+  }
   const notifiedUsers = new Set();
   for (const [memberClientId, member] of Object.entries(remainingMembers)) {
     if (memberClientId === clientId || notifiedUsers.has(member.entityID))

@@ -271,6 +271,122 @@ async function isModerationServiceOnline() {
   }
 }
 
+/**
+ * True the first time [key] is claimed within [ttlSec] (the push should go
+ * out), false while that window is still open.
+ *
+ * FAILS CLOSED, like isModerationServiceOnline and for the same kind of
+ * reason: these cooldowns exist to stop one event fanning out to a crowd of
+ * phones, so an unreachable Redis skips the push rather than letting that
+ * fan-out through. Never throws - callers are request handlers that have
+ * already done the real work.
+ *
+ * Mirrors RedisPubSubClient.acquire_push_cooldown in user_service, which
+ * uses the same key prefix.
+ */
+async function acquirePushCooldown(key, ttlSec) {
+  if (!publisher) return false;
+  try {
+    const result = await publisher.set(`chatterloop:push:${key}_cooldown`, "1", {
+      NX: true,
+      EX: ttlSec,
+    });
+    return result === "OK";
+  } catch (err) {
+    console.log("[push] cooldown check failed, skipping push:", err.message || err);
+    return false;
+  }
+}
+
+// The app stops ringing 45s after the push was SENT; the few extra seconds
+// cover device clock skew. Past this, a ring has already stopped on its own
+// and there is nothing left to take back.
+const RING_WINDOW_MS = 50 * 1000;
+
+// Passive cleanup only - how long an invite list may outlive a call whose end
+// was never seen (a pod dying mid-call). A call still running past this just
+// sends no missed calls when it ends.
+const CALL_INVITE_TTL_SEC = 12 * 60 * 60;
+
+/**
+ * Who a direct or group call rang and hasn't joined yet, per conversation.
+ *
+ * Drained when the call ENDS - the room empties (webRTC.js leaveRoom) - and
+ * everyone still in it gets a missed call. Joining (/notify-voice-join) or
+ * declining in the app (/rejectcall) takes a person out. No timers anywhere:
+ * the only expiry is Redis's own, as a leak horizon.
+ *
+ * [meta] is what the missed-call notice needs to say (the /call token's
+ * details) plus `ringStartedAt`, which is what tells a join or decline
+ * whether the ring is still sounding on the person's other devices.
+ */
+async function markInvited(conversationID, entityIDs, meta) {
+  if (!publisher || entityIDs.length === 0) return;
+  const key = `call:invited:${conversationID}`;
+  try {
+    // Replaces, not merges: a redial is a new call, and a list left over from
+    // the one before would send missed calls this call never earned.
+    await publisher
+      .multi()
+      .del(key)
+      .sAdd(key, entityIDs.map(String))
+      .expire(key, CALL_INVITE_TTL_SEC)
+      .set(`${key}:meta`, JSON.stringify(meta || {}), { EX: CALL_INVITE_TTL_SEC })
+      .exec();
+  } catch (err) {
+    console.log("[push] markInvited failed:", err.message || err);
+  }
+}
+
+/**
+ * Takes [entityID] off the call's invite list - they joined or declined, so
+ * the call's end owes them nothing.
+ *
+ * Returns whether their ring is probably STILL SOUNDING on their other
+ * devices (they were invited, within the ring window), which is when those
+ * devices need telling.
+ */
+async function takeInvited(conversationID, entityID) {
+  if (!publisher) return false;
+  const key = `call:invited:${conversationID}`;
+  try {
+    const [removed, rawMeta] = await publisher
+      .multi()
+      .sRem(key, String(entityID))
+      .get(`${key}:meta`)
+      .exec();
+    if (removed !== 1 || !rawMeta) return false;
+    const { ringStartedAt } = JSON.parse(rawMeta);
+    return Date.now() - Number(ringStartedAt || 0) < RING_WINDOW_MS;
+  } catch (err) {
+    console.log("[push] takeInvited failed:", err.message || err);
+    return false;
+  }
+}
+
+/**
+ * Everyone who never joined, plus the call's details, and forgets the call.
+ *
+ * One transaction, so two last-leaves racing (a hang-up and a dead-client
+ * sweep) can't both come away with the list and send missed calls twice.
+ */
+async function drainInvited(conversationID) {
+  if (!publisher) return { invited: [], meta: null };
+  const key = `call:invited:${conversationID}`;
+  try {
+    const [invited, rawMeta] = await publisher
+      .multi()
+      .sMembers(key)
+      .get(`${key}:meta`)
+      .del([key, `${key}:meta`])
+      .exec();
+    return { invited: invited || [], meta: rawMeta ? JSON.parse(rawMeta) : null };
+  } catch (err) {
+    console.log("[push] drainInvited failed:", err.message || err);
+    return { invited: [], meta: null };
+  }
+}
+
 module.exports = {
   connect_redis,
   listen,
@@ -286,5 +402,9 @@ module.exports = {
   bumpLock,
   isModerationServiceOnline,
   MODERATION_PRESENCE_KEY,
+  acquirePushCooldown,
+  markInvited,
+  takeInvited,
+  drainInvited,
   activeStreams
 };

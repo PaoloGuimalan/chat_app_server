@@ -26,6 +26,9 @@ const {
   listen,
   addParticipant,
   getAllParticipants,
+  acquirePushCooldown,
+  markInvited,
+  takeInvited,
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
@@ -3997,11 +4000,32 @@ router.post("/call", jwtchecker, async (req, res) => {
 
     await isRealmMember(decodeToken.conversationID, entity_id);
 
-    recepients.users
-      .filter((flt) => flt.entityID !== entity_id)
-      .map((rcp) => {
-        ReachCallRecepients(rcp.entityID, decodeToken);
+    const callees = recepients.users
+      .map((rcp) => rcp.entityID)
+      .filter((rcpID) => rcpID !== entity_id);
+
+    // One timestamp for this ring everywhere - the SSE, the push and the
+    // invite list - so the app can match a missed call to the exact ring it
+    // declined without trusting its own clock.
+    const ringStartedAt = Date.now();
+
+    callees.map((rcpID) => {
+      ReachCallRecepients(rcpID, { ...decodeToken, ringStartedAt });
+    });
+
+    // The SSE above only reaches devices with a live connection; the push
+    // rings the rest (the worker sends only to devices without one). Direct
+    // and group calls only - voice channels never ring.
+    //
+    // Everyone rung is also recorded as invited, which is what earns them a
+    // missed call if the call ends without them (callRinging.js).
+    if (["single", "group"].includes(decodeToken.conversationType)) {
+      await markInvited(decodeToken.conversationID, callees, {
+        ...decodeToken,
+        ringStartedAt,
       });
+      push.sendCall({ receivers: callees, callMetadata: decodeToken, ringStartedAt });
+    }
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
@@ -4051,12 +4075,92 @@ router.post("/notify-voice-join", jwtchecker, async (req, res) => {
       instance,
     });
 
+    // Joining settles the invite - no missed call at the end - and, while the
+    // ring is still sounding, stops it on this person's other devices.
+    // takeInvited says so only for someone who was rung and is still inside
+    // the ring window, so the caller starting a call, or anyone joining a
+    // long-running call, sends nothing.
+    takeInvited(channelID, entityID).then((stillRinging) => {
+      if (stillRinging) {
+        push.cancelCall({ receivers: [entityID], conversationID: channelID });
+      }
+    });
+
+    pushVoiceChannelJoin(channelID, entityID, parsedSavedRecipients).catch(
+      (err) => console.log("[push] voice join push failed:", err),
+    );
+
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.log(ex);
     res.send({ status: false, message: "Error declaring call!" });
   }
 });
+
+// Long enough that a dropped connection rejoining - which calls
+// /notify-voice-join again - never announces twice; short enough that coming
+// back later in the day does.
+const VOICE_JOIN_PUSH_COOLDOWN_SEC = 10 * 60;
+
+/**
+ * "@alice joined the voice channel", pushed to a server voice channel's
+ * members who aren't already in it.
+ *
+ * Does nothing for any other room: /notify-voice-join announces direct and
+ * group calls too, and those ring instead (see /call).
+ *
+ * [memberIDs] is the channel's saved membership, never the request's
+ * `recipients` - that list is client-supplied, and a push fan-out must not be
+ * aimable by the client.
+ */
+const pushVoiceChannelJoin = async (channelID, entityID, memberIDs) => {
+  const { rows } = await pool.query(
+    `SELECT ch.name AS channel_name,
+            sv.realm_id AS server_id,
+            sv.name AS server_name
+     FROM community_realm ch
+     JOIN community_realm sv ON sv.realm_id = ch.parent_id
+     WHERE ch.realm_id = $1 AND ch.type = 'voice';`,
+    [channelID],
+  );
+  if (rows.length === 0) return;
+  const { channel_name, server_id, server_name } = rows[0];
+
+  // Per person per channel, claimed before any more work so a burst of
+  // rejoins can't race past it.
+  const claimed = await acquirePushCooldown(
+    `voice_join:${channelID}:${entityID}`,
+    VOICE_JOIN_PUSH_COOLDOWN_SEC,
+  );
+  if (!claimed) return;
+
+  const [inRoom, sender] = await Promise.all([
+    getAllParticipants(channelID),
+    // The ACTING entity - a page joining as itself is announced as the page,
+    // not as the person behind it (req.params.username always names the
+    // person).
+    GetSenderDetails(entityID),
+  ]);
+  const alreadyThere = new Set(inRoom.map((p) => String(p.entityID)));
+  const receivers = memberIDs.filter(
+    (id) => String(id) !== String(entityID) && !alreadyThere.has(String(id)),
+  );
+  if (receivers.length === 0) return;
+
+  const avatar =
+    sender?.profile && !["N/A", "none"].includes(sender.profile)
+      ? sender.profile
+      : "";
+
+  push.sendActivity({
+    receivers,
+    type: "voice_join",
+    title: `${channel_name} · ${server_name}`,
+    body: `@${sender?.handle || "someone"} joined the voice channel.`,
+    route: `/server/${server_id}?name=${encodeURIComponent(server_name)}`,
+    senderAvatarUrl: avatar,
+  });
+};
 
 const checkSessionID = async (currentID, deviceToken) => {
   return await UserSessions.find({
@@ -4324,6 +4428,19 @@ router.post("/rejectcall", jwtchecker, async (req, res) => {
 
     if (conversationType == "single") {
       CallRejectNotif(callerID, {
+        conversationID: conversationID,
+        rejectedBy: entity_id,
+      });
+    }
+
+    // Declining settles the invite: a call you turned down is not a missed
+    // call. While it is still ringing, stop it on this person's other devices
+    // too - by push for the offline ones, and by the same `callreject` the
+    // caller gets for the online ones (the declining device has already
+    // cleared its alert, so to it this is a no-op).
+    if (await takeInvited(conversationID, entity_id)) {
+      push.cancelCall({ receivers: [entity_id], conversationID });
+      CallRejectNotif(entity_id, {
         conversationID: conversationID,
         rejectedBy: entity_id,
       });
