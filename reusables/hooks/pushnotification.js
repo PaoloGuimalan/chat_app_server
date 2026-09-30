@@ -64,8 +64,9 @@ class PushNotification {
    * hatch for a shape they don't cover, and the entry point for any future
    * notification type.
    *
-   * Targets either [entityIDs] - the worker resolves their offline devices -
-   * or an explicit [tokens] list, which skips resolution.
+   * Targets either [entityIDs] - the worker resolves their offline devices,
+   * or every device with [allDevices] - or an explicit [tokens] list, which
+   * skips resolution.
    */
   async send({
     entityIDs = null,
@@ -80,6 +81,11 @@ class PushNotification {
     // 0 leaves FCM's default (up to four weeks). Set it for anything that is
     // pointless late - a ring, a ring's cancellation.
     ttlSeconds = 0,
+    // Push to online devices too, not only offline ones. For calls: an app
+    // Android has frozen in the background still holds its live connection
+    // open, so it counts as online - and would never hear its phone ring.
+    // The app drops whichever of the push and the live event comes second.
+    allDevices = false,
   }) {
     const receivers = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
       .filter(Boolean)
@@ -110,6 +116,7 @@ class PushNotification {
       image_url: imageUrl ? String(imageUrl) : "",
       os_rendered: !!osRendered,
       ttl_seconds: Math.max(0, Math.floor(Number(ttlSeconds) || 0)),
+      all_devices: !!allDevices,
       data: stringData,
     });
   }
@@ -132,6 +139,7 @@ class PushNotification {
       channelId: CHANNEL_CALLS,
       tag: `call:${callMetadata.conversationID}`,
       ttlSeconds: CALL_RING_TTL_SEC,
+      allDevices: true,
       title: callMetadata.callDisplayName,
       body: isGroup ? `${callerName} is calling · ${kind}` : `Incoming ${kind}`,
       data: {
@@ -166,6 +174,7 @@ class PushNotification {
       entityIDs: receivers,
       channelId: CHANNEL_CALLS,
       ttlSeconds: CALL_RING_TTL_SEC * 2,
+      allDevices: true,
       data: { type: "call_cancel", conversationID },
     });
   }
@@ -191,6 +200,7 @@ class PushNotification {
       tag: `call:${callMetadata.conversationID}`,
       title: data.title,
       body: data.body,
+      allDevices: true,
       data,
     });
   }
