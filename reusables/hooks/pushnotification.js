@@ -12,7 +12,7 @@ const { publish, QUEUES } = require("../rabbitmq/workqueue");
 // (worker_service/internal/services/rabbitmq/push.go).
 const CHANNEL_MESSAGES = "chatterloop_messages_v2";
 const CHANNEL_ACTIVITY = "chatterloop_activity_v2";
-const CHANNEL_CALLS = "chatterloop_calls_v1";
+const CHANNEL_CALLS = "chatterloop_calls_v2";
 
 // How long FCM may hold an undelivered ring before discarding it. A ring that
 // arrives after the call is over is worse than none, and the app gives up
