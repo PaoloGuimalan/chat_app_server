@@ -18,4 +18,9 @@ const usermessage = mongoose.Schema({
   linkPreview: { type: mongoose.Schema.Types.Mixed, required: false },
 });
 
+// One conversation, newest first - the order the chat and the shared-files
+// tabs (/m/conversationfiles) both page in, with _id as the tie-break. Built
+// by mongoose's autoIndex when the server starts.
+usermessage.index({ conversationID: 1, messageDate: -1, _id: -1 });
+
 module.exports = mongoose.model("UserMessage", usermessage, "messages");

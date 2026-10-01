@@ -10,7 +10,6 @@ const Axios = require("axios");
 
 const UserAccount = require("../../schema/auth/useraccount");
 const UserVerification = require("../../schema/auth/userverification");
-const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserContacts = require("../../schema/users/contacts");
 const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
@@ -529,24 +528,15 @@ router.get(
         }
 
         const formattedResult = formatConnectionData(finalrows);
+        formattedResult.chatHistory = chatHistory;
 
-        UploadedFiles.find({ foreignID: conversationID })
-          .then((result) => {
-            formattedResult.chatHistory = chatHistory;
-            formattedResult.conversationfiles = result;
-            var flattenedResults = formattedResult;
-            const encodedResult = createJWT({
-              data: flattenedResults,
-            });
-            res.send({ status: true, result: encodedResult });
-          })
-          .catch((err) => {
-            console.log(err);
-            res.send({
-              status: false,
-              message: "Cannot determine conversation details",
-            });
-          });
+        // No shared files here any more - they were an unpaginated, unindexed
+        // read of every upload on every conversation open. The info modal
+        // pages them from /conversationfiles when it is actually opened.
+        const encodedResult = createJWT({
+          data: formattedResult,
+        });
+        res.send({ status: true, result: encodedResult });
       } else {
         const { rows: realmRows } = await pool.query(
           `
@@ -601,7 +591,6 @@ router.get(
           const lobbyResult = { ...result, usersWithInfo: [] };
           const formattedResult = formatToDesiredStructure(lobbyResult);
           formattedResult.chatHistory = null;
-          formattedResult.conversationfiles = [];
 
           const encodedResult = createJWT({ data: formattedResult });
           return res.send({ status: true, result: encodedResult });
@@ -653,29 +642,231 @@ router.get(
           );
         }
 
-        UploadedFiles.find({ foreignID: resolvedConversationID })
-          .then((result) => {
-            formattedResult.chatHistory = chatHistory;
-            formattedResult.conversationfiles = result;
-            var flattenedResults = formattedResult;
-            const encodedResult = createJWT({
-              data: flattenedResults,
-            });
-            res.send({ status: true, result: encodedResult });
-          })
-          .catch((err) => {
-            console.log(err);
-            res.send({
-              status: false,
-              message: "Cannot determine conversation details",
-            });
-          });
+        formattedResult.chatHistory = chatHistory;
+
+        // Shared files are paged from /conversationfiles - see the single
+        // branch above.
+        const encodedResult = createJWT({
+          data: formattedResult,
+        });
+        res.send({ status: true, result: encodedResult });
       }
     } catch (err) {
       console.log(err);
       res.status(err.message ? 403 : 500).send({
         status: false,
         message: err.message || "Invalid Group/Channel",
+      });
+    }
+  },
+);
+
+/**
+ * What a conversation's shared-files tabs can ask for.
+ *
+ * Classified from `messageType` with the SAME rules both clients' message
+ * renderers use (webapp ContentHandler, app message_content_widget), so a
+ * thing that renders as a video in the chat is a video here too:
+ *
+ *   image - messageType is exactly "image"
+ *   video - contains "video"
+ *   audio - contains "audio" (and not "video", which the renderers test first)
+ *   file  - everything else that is not a text, post or system ("notif") row
+ */
+const CONVERSATION_FILE_KINDS = ["image", "video", "audio", "file"];
+
+const conversationFileKindFilter = (kind) => {
+  switch (kind) {
+    case "image":
+      return { messageType: "image" };
+    case "video":
+      return { messageType: { $regex: "video" } };
+    case "audio":
+      return { messageType: { $regex: "audio", $not: /video/ } };
+    default:
+      return {
+        messageType: {
+          $type: "string",
+          $nin: ["text", "post", "image"],
+          $not: /video|audio|notif/,
+        },
+      };
+  }
+};
+
+const conversationFileKind = (messageType) => {
+  const value = String(messageType || "");
+  if (value === "image") return "image";
+  if (value.includes("video")) return "video";
+  if (value.includes("audio")) return "audio";
+  return "file";
+};
+
+// The cursor is the last row's sort key - "<messageDate ms>_<_id>" in
+// base64url. Opaque to clients; they only ever hand back what they were given.
+const encodeConversationFilesCursor = (row) =>
+  Buffer.from(
+    `${new Date(row.messageDate).getTime()}_${String(row._id)}`,
+  ).toString("base64url");
+
+const decodeConversationFilesCursor = (cursor) => {
+  const [ms, id] = Buffer.from(String(cursor), "base64url")
+    .toString("utf8")
+    .split("_");
+  const date = new Date(Number(ms));
+  if (!ms || isNaN(date.getTime()) || !mongoose.Types.ObjectId.isValid(id)) {
+    return null;
+  }
+  return { date, id: new mongoose.Types.ObjectId(id) };
+};
+
+/**
+ * One page of the files shared in a conversation - the conversation info
+ * modal's Photos / Videos / Audio / Files tabs.
+ *
+ * Replaces the `conversationfiles` array /conversationinfo used to carry,
+ * which read EVERY upload record for the conversation (unpaginated, on an
+ * unindexed field) every time a conversation was opened, info modal or not.
+ *
+ * READ FROM THE MESSAGES, NOT THE `files` COLLECTION. A message is what was
+ * actually shared, and reading it gets three things right that the upload
+ * records got wrong:
+ *   - an unsent message (isDeleted) takes its attachment with it - the upload
+ *     record outlives it, so unsent media stayed listed;
+ *   - "clear history" (chat_history.cleared_at) hides it here as it does in
+ *     the chat;
+ *   - a group's/channel's own profile and cover photos are not in it. Those
+ *     uploads carry the realm_id in foreignID, so they showed up as group
+ *     media.
+ *
+ * Query: ?types=image,video,audio,file (any mix; default all), ?limit (1-60,
+ * default 30), ?cursor (the previous page's nextCursor). Newest first by
+ * messageDate with _id as the tie-break - the same order the chat pages in -
+ * and keyset-paged so a file sent while someone scrolls cannot shift rows
+ * into a page they already have.
+ *
+ * `content` is the RAW stored string (a bare URL, or the legacy
+ * "url%%%name"): both clients already have the helpers that read it.
+ */
+router.get(
+  "/conversationfiles/:conversationID/:type",
+  jwtchecker,
+  async (req, res) => {
+    const entity_id = req.params.entity_id;
+    const type = req.params.type;
+    let conversationID = req.params.conversationID;
+
+    try {
+      // Same resolution as /conversationinfo: a group/channel can be
+      // addressed by slug, but its messages are keyed by realm_id.
+      if (type !== "single") {
+        const { rows: realmRows } = await pool.query(
+          `SELECT realm_id FROM community_realm
+           WHERE realm_id = $1 OR slug = $1
+           LIMIT 1`,
+          [conversationID],
+        );
+
+        if (realmRows.length === 0) {
+          return res
+            .status(404)
+            .send({ status: false, message: "Invalid Group/Channel" });
+        }
+
+        conversationID = realmRows[0].realm_id;
+      }
+
+      try {
+        await isRealmMember(conversationID, entity_id);
+      } catch (err) {
+        return res.status(403).send({
+          status: false,
+          message: err.message || "You do not have access to this conversation",
+        });
+      }
+
+      const requestedKinds = String(req.query.types || "")
+        .split(",")
+        .map((kind) => kind.trim())
+        .filter((kind) => CONVERSATION_FILE_KINDS.includes(kind));
+      const kinds = requestedKinds.length
+        ? [...new Set(requestedKinds)]
+        : CONVERSATION_FILE_KINDS;
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 30, 1), 60);
+
+      const conditions = [
+        { $or: kinds.map(conversationFileKindFilter) },
+      ];
+
+      if (req.query.cursor) {
+        const cursor = decodeConversationFilesCursor(req.query.cursor);
+        if (!cursor) {
+          return res
+            .status(400)
+            .send({ status: false, message: "Invalid cursor" });
+        }
+        conditions.push({
+          $or: [
+            { messageDate: { $lt: cursor.date } },
+            { messageDate: cursor.date, _id: { $lt: cursor.id } },
+          ],
+        });
+      }
+
+      // cleared_at has been stored both as a Date and as a string - the chat
+      // queries handle both, and new Date() reads either.
+      const history = await ChatHistory.findOne({
+        conversationID: conversationID,
+        entityID: entity_id,
+      }).lean();
+      const clearedAt = history?.cleared_at
+        ? new Date(history.cleared_at)
+        : null;
+      if (clearedAt && !isNaN(clearedAt.getTime())) {
+        conditions.push({ messageDate: { $gt: clearedAt } });
+      }
+
+      // limit + 1: the extra row only says whether there is another page.
+      const rows = await UserMessage.find({
+        conversationID: conversationID,
+        isDeleted: { $ne: true },
+        content: { $type: "string", $ne: "" },
+        $and: conditions,
+      })
+        .sort({ messageDate: -1, _id: -1 })
+        .limit(limit + 1)
+        .select({
+          messageID: 1,
+          sender: 1,
+          content: 1,
+          messageType: 1,
+          messageDate: 1,
+        })
+        .lean();
+
+      const page = rows.slice(0, limit);
+
+      res.json({
+        status: true,
+        items: page.map((row) => ({
+          messageID: row.messageID,
+          sender: row.sender,
+          kind: conversationFileKind(row.messageType),
+          mimeType: row.messageType,
+          content: row.content,
+          sentAt: row.messageDate,
+        })),
+        nextCursor:
+          rows.length > limit
+            ? encodeConversationFilesCursor(page[page.length - 1])
+            : null,
+      });
+    } catch (err) {
+      console.log(err);
+      res.status(500).send({
+        status: false,
+        message: "Cannot load conversation files",
       });
     }
   },

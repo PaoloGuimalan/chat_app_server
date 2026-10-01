@@ -221,7 +221,6 @@ function formatToDesiredStructure(input) {
       entityType: u.entityType,
       realmType: u.realmType,
     })),
-    conversationfiles: [],
   };
 
   return data;
