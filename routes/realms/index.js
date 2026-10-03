@@ -2,20 +2,8 @@
 const express = require("express");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
 const pool = require("../../reusables/database/postgres");
-const Storage = require("../../reusables/hooks/storage");
-const multiparty = require("multiparty");
-const fs = require("fs/promises");
-const makeid = require("../../reusables/hooks/makeID");
 const {
-  readProfileImage,
-  removeTempFiles,
-  ImageUploadError,
-} = require("../../reusables/hooks/imageUpload");
-const {
-  MAX_PROFILE_IMAGE_SIZE,
-  MAX_PROFILE_IMAGE_SIZE_MB,
-} = require("../../reusables/vars/uploads");
-const {
+  MediaUploadError,
   resolveUploadByID,
   attachRecords,
 } = require("../../reusables/media/uploads");
@@ -52,7 +40,7 @@ const applyRealmMedia = async (realm_id, media_type, upload) => {
     realm_id,
   ]);
   const target = { type: "realm_media", id: String(realm_id) };
-  if (upload.version === 2) attachRecords([upload], target);
+  attachRecords([upload], target);
   const previous = before[0]?.url;
   if (previous && previous !== url) {
     publishRelease([{ target, urls: [previous] }]);
@@ -60,114 +48,32 @@ const applyRealmMedia = async (realm_id, media_type, upload) => {
   return url;
 };
 
+// { realm_id, media_type, uploadID } - the photo already uploaded straight to
+// storage through /media/uploads.
 router.post("/upload-media", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
   const id = req.params.id;
   const entityID = req.params.entity_id;
-
-  // Already uploaded straight to storage: { realm_id, media_type, uploadID }.
-  if (!(req.headers["content-type"] || "").includes("multipart/form-data")) {
-    try {
-      const { realm_id, media_type, uploadID } = req.body || {};
-      if (!REALM_MEDIA_COLUMN[media_type]) throw new ImageUploadError("Media type mismatch");
-      if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
-        throw new ImageUploadError("You do not have permission to make this action.", 403);
-      }
-      const upload = await resolveUploadByID({
-        accountID: id,
-        uploadID,
-        purposes: [media_type === "profile" ? "avatar" : "cover"],
-        realmID: realm_id,
-      });
-      if (upload.kind !== "image") throw new ImageUploadError("Only photos can be used here");
-      const url = await applyRealmMedia(realm_id, media_type, upload);
-      res.send({ status: true, message: `Upload successful!`, details: { media_type, url } });
-    } catch (ex) {
-      res
-        .status(ex.status || 500)
-        .send({ status: false, message: ex.message || ex.toString() });
-      console.log(ex);
+  try {
+    const { realm_id, media_type, uploadID } = req.body || {};
+    if (!REALM_MEDIA_COLUMN[media_type]) throw new MediaUploadError("Media type mismatch");
+    if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
+      throw new MediaUploadError("You do not have permission to make this action.", 403);
     }
-    return;
+    const upload = await resolveUploadByID({
+      accountID: id,
+      uploadID,
+      purposes: [media_type === "profile" ? "avatar" : "cover"],
+      realmID: realm_id,
+    });
+    if (upload.kind !== "image") throw new MediaUploadError("Only photos can be used here");
+    const url = await applyRealmMedia(realm_id, media_type, upload);
+    res.send({ status: true, message: `Upload successful!`, details: { media_type, url } });
+  } catch (ex) {
+    res
+      .status(ex.status || 500)
+      .send({ status: false, message: ex.message || ex.toString() });
+    console.log(ex);
   }
-
-  // Caps the whole form, so a huge file is cut off while it streams in;
-  // readProfileImage then checks the image itself.
-  const form = new multiparty.Form({ maxFilesSize: MAX_PROFILE_IMAGE_SIZE });
-  form.parse(req, async (err, fields, files) => {
-    if (err) {
-      await removeTempFiles(files);
-      const isSizeErr = /maxFilesSize/i.test(err.message || "");
-      return res.status(isSizeErr ? 413 : 400).json({
-        status: false,
-        message: isSizeErr
-          ? `Images can be at most ${MAX_PROFILE_IMAGE_SIZE_MB}MB`
-          : "Error processing upload",
-      });
-    }
-
-    try {
-      const realm_id = fields.realm_id[0];
-      const realm_type = fields.realm_type[0];
-      const media_type = fields.media_type[0];
-
-      // It names the storage folder, so nothing but a plain word.
-      if (!/^[a-z_]+$/.test(String(realm_type))) {
-        throw new ImageUploadError("Invalid realm type");
-      }
-
-      const { rows } = await pool.query(
-        `SELECT EXISTS (SELECT 1 FROM community_realm WHERE realm_id = $1) as realm_exists`,
-        [realm_id],
-      );
-
-      if (media_type !== "profile" && media_type !== "cover_photo") {
-        throw new Error("Media type mismatch");
-      }
-
-      if (rows.length <= 0 || !rows[0].realm_exists) {
-        throw new Error("Realm does not exist");
-      }
-
-      if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
-        throw new Error("You do not have permission to make this action.");
-      }
-
-      const imageFile = files.image?.[0];
-      const { buffer: imageBuffer, mime } = await readProfileImage(imageFile);
-
-      const imageUpload = await Storage.upload(
-        entityID,
-        imageBuffer,
-        `${makeid(10)}_${imageFile.originalFilename}`,
-        {
-          referenceIDs: [id, realm_id, entityID],
-          action: media_type,
-          contentType: mime,
-          originalName: imageFile.originalFilename,
-        },
-        `uploads/${realm_type}s/${realm_id}`,
-      );
-
-      if (imageUpload) {
-        await applyRealmMedia(realm_id, media_type, imageUpload);
-        res.send({
-          status: true,
-          message: `Upload successful!`,
-          details: { media_type, url: imageUpload.fileDetails.data },
-        });
-      } else {
-        throw new Error("Error occured during upload");
-      }
-    } catch (ex) {
-      res
-        .status(ex.status || 500)
-        .send({ status: false, message: ex.message || ex.toString() });
-      console.log(ex);
-    } finally {
-      await removeTempFiles(files);
-    }
-  });
 });
 
 router.delete("/remove-user", jwtchecker, async (req, res) => {

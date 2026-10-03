@@ -312,7 +312,7 @@ test("someone else's upload can't be completed or used", async () => {
   );
 });
 
-test("attaching: own ready files only; older links still pass for now", async () => {
+test("attaching: own ready uploads only - any other link is refused", async () => {
   const w = world();
   const [upload] = await ask();
   await assert.rejects(
@@ -324,10 +324,33 @@ test("attaching: own ready files only; older links still pass for now", async ()
     uploads.resolveAttachable({ urls: [upload.fileUrl], accountID: "acc1", purposes: ["comment"] }),
     /something else/,
   );
+  // An external link, or a file from the retired upload paths, has no record.
+  await assert.rejects(
+    uploads.resolveAttachable({
+      urls: [upload.fileUrl, "https://old.cdn/legacy.jpg"],
+      accountID: "acc1",
+      purposes: ["post_media"],
+    }),
+    /uploaded to Chatterloop first/,
+  );
   const found = await uploads.resolveAttachable({
-    urls: [upload.fileUrl, "https://old.cdn/legacy.jpg"],
+    urls: [upload.fileUrl],
     accountID: "acc1",
     purposes: ["post_media"],
+  });
+  assert.equal(found.length, 1);
+});
+
+test("attaching: a link matches whether or not its name was URI-encoded", async () => {
+  const w = world();
+  const [upload] = await ask({
+    files: [{ name: "beach day.png", size: PNG.length, type: "image/png" }],
+  });
+  w.records[0].status = "ready";
+  assert.match(upload.fileUrl, /beach%20day\.png$/);
+  const found = await uploads.resolveAttachable({
+    urls: [decodeURI(upload.fileUrl)],
+    accountID: "acc1",
   });
   assert.equal(found.length, 1);
 });

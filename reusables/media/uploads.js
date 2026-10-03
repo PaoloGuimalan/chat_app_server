@@ -386,19 +386,37 @@ const cancelUpload = async ({ accountID, uploadID }) => {
   await discard(record, "cancelled");
 };
 
+/** A link as sent, decoded, and re-encoded - a client may have URI-encoded
+ * the name (spaces, non-ASCII) or not, and both mean the same file. */
+const urlVariants = (url) => {
+  let decoded = url;
+  try {
+    decoded = decodeURI(url);
+  } catch {
+    // Not valid percent-encoding: only the link as sent can match.
+  }
+  return [...new Set([url, decoded, encodeURI(decoded)])];
+};
+
 /**
- * The version-2 upload records behind `urls`, checked: each must be the
- * caller's, confirmed, and of an allowed purpose. URLs with no version-2
- * record (older uploads, or external links) are simply absent from the
- * result - they are still accepted until the old paths are retired.
+ * The upload records behind `urls`, checked: every link must be a file the
+ * caller uploaded through /media/uploads, confirmed, and of an allowed
+ * purpose. Anything else - an external link, someone else's file, a file
+ * from the retired upload paths - is refused.
  */
 const resolveAttachable = async ({ urls, accountID, purposes = null }) => {
   const wanted = [...new Set((urls || []).filter((u) => typeof u === "string" && u))];
   if (!wanted.length) return [];
   const records = await UploadedFiles.find({
     version: 2,
-    "fileDetails.data": { $in: wanted },
+    "fileDetails.data": { $in: wanted.flatMap(urlVariants) },
   });
+  const byUrl = new Map(records.map((r) => [r.fileDetails.data, r]));
+  for (const url of wanted) {
+    if (!urlVariants(url).some((v) => byUrl.has(v))) {
+      throw new MediaUploadError("Files must be uploaded to Chatterloop first");
+    }
+  }
   for (const record of records) {
     if (record.ownerAccount !== String(accountID)) {
       throw new MediaUploadError("You can only use files you uploaded", 403);

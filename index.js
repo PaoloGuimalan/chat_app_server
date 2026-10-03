@@ -25,8 +25,6 @@ const WebRTC = require("./routes/webrtc/index");
 const Realms = require("./routes/realms/index");
 const Media = require("./routes/media/index");
 
-const Storage = require("./reusables/hooks/storage");
-
 const { initSocketIO } = require("./socketIO/socketIO");
 const { consumeMessages } = require("./reusables/rabbitmq/consumer");
 const { connect_redis, listen_sub } = require("./reusables/redis/pubsub");

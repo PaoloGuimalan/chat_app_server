@@ -119,7 +119,7 @@ if (!TOKEN && !ENTITY) {
 
 // ─── firebase ────────────────────────────────────────────────────────────────
 
-// Same credentials the app server already uses for Storage. Note the
+// The FIREBASE_* credentials from the server's .env. Note the
 // JSON.parse on the private key: the env var holds a JSON object, not a raw
 // PEM, because PEM newlines don't survive a flat .env value.
 firebase.initializeApp({

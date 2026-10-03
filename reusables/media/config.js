@@ -5,7 +5,7 @@
  * Cached for CACHE_MS so an upload never waits on a query, and so an edit
  * takes effect within about a minute without a deploy. A missing row, a
  * malformed value or a failed query falls back to DEFAULTS rather than
- * blocking uploads - the same stance reusables/vars/uploads.js takes.
+ * blocking uploads.
  *
  * The defaults mirror user_service core/migrations/0003_seed_upload_variables.py.
  */

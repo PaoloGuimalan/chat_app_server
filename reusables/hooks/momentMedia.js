@@ -1,14 +1,12 @@
 /**
- * Vetting a Moment's media at CREATE time (not at upload - /posts/upload
+ * Vetting a Moment's media at CREATE time (not at upload - /media/uploads
  * stays generic, it takes every kind of file the app sends).
  *
  * Two tiers:
  *
- *  - EVERY moment: its media URL must be one of OUR uploads, made by the
- *    person creating the moment - under their folder in our storage, with a
- *    matching `files` record. Web and older app versions already upload this
- *    way (/posts/upload -> uploads/entries/<account id>/), so this changes
- *    nothing for them; it only stops a moment pointing at an arbitrary URL.
+ *  - EVERY moment: its media URL must be one of OUR uploads, made through
+ *    /media/uploads by the person creating the moment and confirmed - so a
+ *    moment can never point at an arbitrary URL.
  *
  *  - Moments encoded on the device (the app's editor; they carry a poster):
  *    the video must be what every player can stream - an MP4 with its header
@@ -19,7 +17,6 @@
  * The limits live in MOMENT_MEDIA_LIMITS so they are changed in one place.
  */
 const Axios = require("axios");
-const Storage = require("./storage");
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const { Mp4HeaderError, locateMoov, parseMoov } = require("./mp4Header");
 
@@ -55,10 +52,6 @@ const decode = (url) => {
   }
 };
 
-/** The public URL prefix of an account's upload folder in our storage. */
-const uploadFolderPrefix = (accountID) =>
-  `https://${Storage.bucket}.${Storage.cdnEndpoint}/uploads/entries/${accountID}/`;
-
 /**
  * The `files` record for `url`, if it is an upload of `accountID`'s - or a
  * MomentMediaError. Compared decoded, so a client that URI-encoded the name
@@ -69,30 +62,18 @@ const assertOwnUpload = async (url, accountID) => {
   const wanted = decode(url);
   const candidates = [...new Set([url, wanted, encodeURI(wanted)])];
 
-  // A direct upload (reusables/media/uploads.js) lives on the media domain,
-  // not under the folder prefix below - its record says whose it is.
-  const direct = await UploadedFiles.findOne({
+  // The upload's record says whose it is (reusables/media/uploads.js).
+  const record = await UploadedFiles.findOne({
     version: 2,
     "fileDetails.data": { $in: candidates },
   }).lean();
-  if (direct) {
-    if (
-      direct.ownerAccount !== String(accountID) ||
-      (direct.status !== "ready" && direct.status !== "attached")
-    ) {
-      throw new MomentMediaError("Media must be uploaded to ChatterLoop first");
-    }
-    return direct;
-  }
-
-  if (!wanted.startsWith(decode(uploadFolderPrefix(accountID)))) {
+  if (
+    !record ||
+    record.ownerAccount !== String(accountID) ||
+    (record.status !== "ready" && record.status !== "attached")
+  ) {
     throw new MomentMediaError("Media must be uploaded to ChatterLoop first");
   }
-  const record = await UploadedFiles.findOne({
-    "fileDetails.data": { $in: candidates },
-    foreignID: String(accountID),
-  }).lean();
-  if (!record) throw new MomentMediaError("Media must be uploaded to ChatterLoop first");
   return record;
 };
 
@@ -176,8 +157,8 @@ const vetEncodedVideo = async (url, accountID) => {
 /** A device-encoded moment's poster: our upload, a real JPEG/PNG. */
 const vetPoster = async (url, accountID) => {
   const record = await assertOwnUpload(url, accountID);
-  // fileType was sniffed from the bytes at upload (storage.js), not taken
-  // from the file name.
+  // fileType was sniffed from the bytes when the upload was confirmed
+  // (reusables/media/uploads.js), not taken from the file name.
   if (!MOMENT_MEDIA_LIMITS.posterTypes.includes(String(record.fileType))) {
     throw new MomentMediaError("Poster must be a JPEG or PNG image");
   }

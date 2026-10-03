@@ -1,8 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const multiparty = require("multiparty");
-const fs = require("fs/promises");
 const sse = require("sse-express");
 const {
   sseNotificationsWaiters,
@@ -23,7 +21,6 @@ const {
   resolveAttachable,
   attachRecords,
 } = require("../../reusables/media/uploads");
-const { limitFor } = require("../../reusables/media/config");
 
 // What a post (feed post, profile/cover photo, moment) may be made from.
 const POST_UPLOAD_PURPOSES = [
@@ -33,17 +30,6 @@ const POST_UPLOAD_PURPOSES = [
   "moment",
   "moment_poster",
 ];
-
-// /posts/upload's "action" -> the upload_limits feature it counts against.
-const LEGACY_ACTION_FEATURE = {
-  post: "post_media",
-  upload: "post_media",
-  entry: "diary",
-  profile: "avatar",
-  cover_photo: "cover",
-  moment: "moment",
-  moment_poster: "moment_poster",
-};
 const {
   jwtchecker,
   jwtssechecker,
@@ -75,10 +61,6 @@ const {
 } = require("../../reusables/models/posts");
 const { checkNotifID } = require("../../reusables/models/notifications");
 const {
-  uploadFirebaseMultiple,
-  saveFileRecordToDatabase,
-} = require("../../reusables/hooks/firebaseupload");
-const {
   GetListOfContacts,
   GetSenderDetails,
 } = require("../../reusables/models/users");
@@ -95,8 +77,6 @@ const {
 const pool = require("../../reusables/database/postgres");
 const { generateUUID } = require("../../reusables/hooks/transformers");
 
-const Storage = require("../../reusables/hooks/storage");
-const { MAX_UPLOAD_FILE_SIZE } = require("../../reusables/vars/uploads");
 const {
   interactionScoreBump,
   followerInteractionScoreBump,
@@ -349,145 +329,6 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
   });
 };
 
-router.post("/upload", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
-  const id = req.params.id;
-
-  const isMultipart = (req.headers["content-type"] || "").includes(
-    "multipart/form-data",
-  );
-
-  if (isMultipart) {
-    // New multipart path: used by post media, diary attachments (arbitrary
-    // file types are intentionally allowed here since diary attachments
-    // aren't restricted to image/video the way post media is client-side -
-    // enforcement of that narrower rule stays client-side, as it was before).
-    new multiparty.Form({ maxFilesSize: MAX_UPLOAD_FILE_SIZE }).parse(
-      req,
-      async (err, fields, files) => {
-        if (err) {
-          const isSizeErr = /maxFilesSize/i.test(err.message || "");
-          res.status(isSizeErr ? 413 : 400).send({
-            status: false,
-            message: isSizeErr
-              ? "File exceeds the maximum allowed size"
-              : "Error processing upload",
-            details: err.message,
-          });
-          return;
-        }
-
-        const mediaFiles = files.media || [];
-
-        if (mediaFiles.length === 0) {
-          res.status(400).send({ status: false, message: "No files provided" });
-          return;
-        }
-
-        try {
-          const captions = fields.captions
-            ? JSON.parse(fields.captions[0])
-            : [];
-          // Plain scalar, NOT JSON - unlike captions/referenceMediaTypes above,
-          // which are real arrays with one entry per file. The [0] is just
-          // multiparty handing every field back as an array, so JSON.parse-ing
-          // it threw a SyntaxError on any honest value ("post") and 400'd the
-          // whole upload. Absent means an older client: keep defaulting.
-          const action = fields.action?.[0] || "upload";
-
-          // This old path enforces the same per-feature caps as the new one.
-          const limit = await limitFor(LEGACY_ACTION_FEATURE[action] || "post_media");
-          if (limit && mediaFiles.some((file) => file.size > limit.maxBytes)) {
-            await Promise.all(
-              mediaFiles.map((file) => fs.unlink(file.path).catch(() => {})),
-            );
-            res.status(413).send({
-              status: false,
-              message: `Files here can be at most ${limit.maxMB}MB`,
-            });
-            return;
-          }
-          const referenceMediaTypes = fields.referenceMediaTypes
-            ? JSON.parse(fields.referenceMediaTypes[0])
-            : [];
-
-          const finaluploadedreferences = await Promise.all(
-            mediaFiles.map(async (file, i) => {
-              const buffer = await fs.readFile(file.path);
-              const attachment_id = `NTR_ATTCH_${makeID(20)}`;
-              const metadata = await Storage.upload(
-                id,
-                buffer,
-                `${makeID(10)}_${file.originalFilename}`,
-                {
-                  referenceIDs: [id, attachment_id],
-                  action: action,
-                  contentType: file.headers?.["content-type"],
-                  originalName: file.originalFilename,
-                },
-                `uploads/entries/${id}`,
-              );
-
-              return metadata;
-            }),
-          );
-
-          await Promise.all(
-            mediaFiles.map((file) => fs.unlink(file.path).catch(() => {})),
-          );
-
-          // file_id: mp.fileID,
-          // file_type: mp.fileType,
-          // file_name: mp.fileName,
-          // url: mp.fileDetails?.data ?? '',
-
-          res.send({ status: true, result: finaluploadedreferences });
-        } catch (ex) {
-          console.error(ex);
-          res.status(400).send({
-            status: false,
-            message: "Error processing request",
-            details: ex.message,
-          });
-        }
-      },
-    );
-    return;
-  }
-
-  // Legacy base64-JSON path - kept alive during rollout so older frontend
-  // builds keep working; remove once all callers are confirmed on multipart.
-  try {
-    const body = req.body;
-    const filereferencesraw = body.references;
-    const filereferences = filereferencesraw.map((mp) => ({
-      name: mp.name,
-      caption: mp.caption,
-      reference: mp.reference,
-      referenceMediaType: mp.referenceMediaType,
-      referenceID: id,
-    }));
-
-    const finaluploadedreferences = await Storage.uploadMultipleBase64(
-      filereferences,
-      {
-        referenceIDs: [id],
-        action: body.action ?? "upload",
-      },
-      `uploads/entries/${id}`,
-    );
-
-    res.send({ status: true, result: finaluploadedreferences });
-  } catch (ex) {
-    console.error(ex);
-    res.status(400).send({
-      status: false,
-      message: "Error processing request",
-      details: ex.message,
-    });
-  }
-});
-
 /**
  * The whole create-a-post pipeline, shared by /createpost, /moments/create and
  * /thoughts/create.
@@ -538,10 +379,9 @@ const createPostFromPayload = async ({
       referenceID: `${postID}_${makeID(20)}`,
     }));
 
-    // Files uploaded straight to storage must be the author's own, finished
-    // uploads; they are recorded as this post's once it exists. A moment's
-    // poster rides in `details`. Older uploads and links have no such record
-    // and still pass, until the old upload paths are retired.
+    // Every file must be the author's own, finished upload (/media/uploads);
+    // they are recorded as this post's once it exists. A moment's poster
+    // rides in `details`. A shared post's references are post ids instead.
     const ownUploads = decodeToken.content.isShared
       ? []
       : await resolveAttachable({
@@ -558,26 +398,8 @@ const createPostFromPayload = async ({
           });
         });
 
-    // References may already be CDN URLs if the client uploaded media
-    // up-front via POST /posts/upload (the new two-step flow) - in that case
-    // there's nothing left to upload here. Legacy clients that still embed
-    // base64 media directly in the signed payload fall through to the
-    // original inline-upload path for backward compatibility.
-    const isAlreadyUploaded = (ref) =>
-      typeof ref === "string" && /^https?:\/\//i.test(ref);
-
-    const finaluploadedreferences =
-      decodeToken.content.isShared ||
-      filereferences.every((mp) => isAlreadyUploaded(mp.reference))
-        ? filereferences
-        : await Storage.uploadMultipleBase64(
-            filereferences,
-            {
-              referenceIDs: [postID],
-              action: "post",
-            },
-            `uploads/posts/${id}/${postID}`,
-          );
+    // Already uploaded and checked above - nothing is uploaded here.
+    const finaluploadedreferences = filereferences;
 
     if (decodeToken.content.isShared) {
       finaluploadedreferences.forEach(async (mp) => {
@@ -663,14 +485,6 @@ const createPostFromPayload = async ({
           updateRankingScore(mp.reference, "share", false);
         }
 
-        // saveFileRecordToDatabase(
-        //   [mp.referenceID],
-        //   mp.reference,
-        //   "post",
-        //   mp.referenceMediaType,
-        //   "digitalocean",
-        //   mp.name,
-        // );
       });
     }
 

@@ -6,22 +6,6 @@ const jwt = require("jsonwebtoken");
 const Axios = require("axios");
 const sse = require("sse-express");
 const readable = require("stream").Readable;
-const firebase = require("firebase-admin");
-const fstorage = require("firebase-admin/storage");
-const {
-  FIREBASE_TYPE,
-  FIREBASE_PROJECT_ID,
-  FIREBASE_PRIVATE_KEY_ID,
-  FIREBASE_PRIVATE_KEY,
-  FIREBASE_CLIENT_EMAIL,
-  FIREBASE_CLIENT_ID,
-  FIREBASE_AUTH_URI,
-  FIREBASE_TOKEN_URI,
-  FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
-  FIREBASE_CLIENT_X509_CERT_URL,
-  FIREBASE_UNIVERSE_DOMAIN,
-  FIREBASE_STORAGE_BUCKET,
-} = require("../../reusables/vars/firebasevars");
 const {
   listen,
   addParticipant,
@@ -32,16 +16,6 @@ const {
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
-const Storage = require("../../reusables/hooks/storage");
-const {
-  MAX_UPLOAD_FILE_SIZE,
-  MAX_PROFILE_IMAGE_SIZE,
-  MAX_PROFILE_IMAGE_SIZE_MB,
-} = require("../../reusables/vars/uploads");
-const {
-  readProfileImage,
-  removeTempFiles,
-} = require("../../reusables/hooks/imageUpload");
 const {
   MediaUploadError,
   resolveMessageUploads,
@@ -49,33 +23,8 @@ const {
   attachRecords,
   attachmentFor,
   messageTypeFor,
-  cleanFileName,
-  kindOf,
 } = require("../../reusables/media/uploads");
-const { limitFor } = require("../../reusables/media/config");
-const multiparty = require("multiparty");
 const push = require("../../reusables/hooks/pushnotification");
-const fs = require("fs/promises");
-
-const firebaseAdminConfig = {
-  type: FIREBASE_TYPE,
-  project_id: FIREBASE_PROJECT_ID,
-  private_key_id: FIREBASE_PRIVATE_KEY_ID,
-  private_key: JSON.parse(FIREBASE_PRIVATE_KEY).privateKey,
-  client_email: FIREBASE_CLIENT_EMAIL,
-  client_id: FIREBASE_CLIENT_ID,
-  auth_uri: FIREBASE_AUTH_URI,
-  token_uri: FIREBASE_TOKEN_URI,
-  auth_provider_x509_cert_url: FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
-  client_x509_cert_url: FIREBASE_CLIENT_X509_CERT_URL,
-  universe_domain: FIREBASE_UNIVERSE_DOMAIN,
-};
-
-// const firebaseinit = firebase.initializeApp({
-//     credential: firebase.credential.cert(firebaseAdminConfig),
-//     storageBucket: FIREBASE_STORAGE_BUCKET
-// });
-// const storage = fstorage.getStorage(firebaseinit.storage().app)
 
 const UserAccount = require("../../schema/auth/useraccount");
 const UserVerification = require("../../schema/auth/userverification");
@@ -85,7 +34,6 @@ const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
 const UserGroups = require("../../schema/users/groups");
 const UserServers = require("../../schema/users/servers");
-const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserSessions = require("../../schema/auth/sessions");
 // Shared with the presence fan-out that developer_service triggers, so the
 // snapshot this file serves and the live pushes a client receives afterwards
@@ -109,10 +57,6 @@ const {
   POST_MESSAGE_PREVIEW,
 } = require("../../reusables/hooks/replyTargets");
 const { parseCommand } = require("../../reusables/hooks/commandParser");
-const {
-  base64ToArrayBuffer,
-  dataURLtoFile,
-} = require("../../reusables/hooks/base64toFile");
 const { format } = require("path");
 const {
   GetAllMessageCountInAConversation,
@@ -130,12 +74,6 @@ const {
   BroadcastCoordinates,
   ReachVoiceRecepients,
 } = require("../../reusables/hooks/sse");
-const {
-  storage,
-  uploadFirebaseMultiple,
-  uploadFirebase,
-  saveFileRecordToDatabase,
-} = require("../../reusables/hooks/firebaseupload");
 const {
   CountAllUnreadNotifications,
 } = require("../../reusables/models/notifications");
@@ -1823,6 +1761,15 @@ router.post(
   async (req, res) => {
     try {
       const decodedToken = jwt.verify(req.body.token, JWT_SECRET);
+      // Words only. A file becomes a message only through /sendFiles, which
+      // checks it is the sender's own upload - any other type set here would
+      // let an arbitrary link pose as one. (Posts go through /sendPost.)
+      if (String(decodedToken.messageType ?? "text").toLowerCase() !== "text") {
+        return res.status(400).send({
+          status: false,
+          message: "Files are sent through /u/sendFiles",
+        });
+      }
       const { pendingID } = await deliverMessage(req.params, decodedToken);
 
       res.send({
@@ -3439,7 +3386,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
 
 /**
  * Creates a page from its fields and its two images. `getImages(pageID)`
- * resolves { profile, cover } - file records, however they were stored.
+ * resolves { profile, cover } - the checked upload records.
  */
 const createPage = async (req, res, fields, getImages) => {
   const entityID = req.params.entity_id;
@@ -3491,129 +3438,52 @@ const createPage = async (req, res, fields, getImages) => {
     slug,
     false,
   );
-  attachRecords(
-    [profile, cover].filter((r) => r.version === 2),
-    { type: "realm_media", id: String(pageID) },
-  );
+  attachRecords([profile, cover], { type: "realm_media", id: String(pageID) });
 
   res.send({ status: true, message: `Page has been created` });
 };
 
+// JSON: the page's fields plus profileUploadID / coverUploadID - photos
+// already uploaded straight to storage through /media/uploads.
 router.post("/createpage", jwtchecker, async (req, res) => {
   const id = req.params.id;
-  const entityID = req.params.entity_id;
-
-  const sendError = (ex) => {
+  const body = req.body || {};
+  try {
+    await createPage(
+      req,
+      res,
+      {
+        otherUsers: Array.isArray(body.otherUsers) ? body.otherUsers : [],
+        pageName: body.pageName,
+        pageDescription: body.pageDescription,
+        email: body.email,
+        slug: body.slug,
+      },
+      async () => {
+        const [profile, cover] = await Promise.all([
+          resolveUploadByID({
+            accountID: id,
+            uploadID: body.profileUploadID,
+            purposes: ["avatar"],
+          }),
+          resolveUploadByID({
+            accountID: id,
+            uploadID: body.coverUploadID,
+            purposes: ["cover"],
+          }),
+        ]);
+        if (profile.kind !== "image" || cover.kind !== "image") {
+          throw new MediaUploadError("Only photos can be used here");
+        }
+        return { profile, cover };
+      },
+    );
+  } catch (ex) {
     res
       .status(ex.status || 500)
       .send({ status: false, message: ex.message || ex.toString() });
     console.log(ex);
-  };
-
-  // Images already uploaded straight to storage: JSON with their upload ids.
-  if (!(req.headers["content-type"] || "").includes("multipart/form-data")) {
-    const body = req.body || {};
-    try {
-      await createPage(
-        req,
-        res,
-        {
-          otherUsers: Array.isArray(body.otherUsers) ? body.otherUsers : [],
-          pageName: body.pageName,
-          pageDescription: body.pageDescription,
-          email: body.email,
-          slug: body.slug,
-        },
-        async () => {
-          const [profile, cover] = await Promise.all([
-            resolveUploadByID({
-              accountID: id,
-              uploadID: body.profileUploadID,
-              purposes: ["avatar"],
-            }),
-            resolveUploadByID({
-              accountID: id,
-              uploadID: body.coverUploadID,
-              purposes: ["cover"],
-            }),
-          ]);
-          if (profile.kind !== "image" || cover.kind !== "image") {
-            throw new MediaUploadError("Only photos can be used here");
-          }
-          return { profile, cover };
-        },
-      );
-    } catch (ex) {
-      sendError(ex);
-    }
-    return;
   }
-
-  // Two images (profile + cover), so the form as a whole may carry two
-  // images' worth; readProfileImage caps each one.
-  const form = new multiparty.Form({ maxFilesSize: 2 * MAX_PROFILE_IMAGE_SIZE });
-  form.parse(req, async (err, fields, files) => {
-    if (err) {
-      await removeTempFiles(files);
-      const isSizeErr = /maxFilesSize/i.test(err.message || "");
-      return res.status(isSizeErr ? 413 : 400).json({
-        status: false,
-        message: isSizeErr
-          ? `Images can be at most ${MAX_PROFILE_IMAGE_SIZE_MB}MB`
-          : "Error processing upload",
-      });
-    }
-
-    try {
-      await createPage(
-        req,
-        res,
-        {
-          otherUsers: fields.otherUsers ? JSON.parse(fields.otherUsers[0]) : [],
-          pageName: fields.pageName[0],
-          pageDescription: fields.pageDescription[0],
-          email: fields.email[0],
-          slug: fields.slug[0],
-        },
-        async (pageID) => {
-          const profileFile = files.profile?.[0];
-          const coverFile = files.cover_photo?.[0];
-          const profileImage = await readProfileImage(profileFile);
-          const coverImage = await readProfileImage(coverFile);
-
-          const profile = await Storage.upload(
-            entityID,
-            profileImage.buffer,
-            `${makeID(10)}_${profileFile.originalFilename}`,
-            {
-              referenceIDs: [entityID, id],
-              action: "profile",
-              contentType: profileImage.mime,
-              originalName: profileFile.originalFilename,
-            },
-            `uploads/pages/${pageID}`,
-          );
-          const cover = await Storage.upload(
-            entityID,
-            coverImage.buffer,
-            `${makeID(10)}_${coverFile.originalFilename}`,
-            {
-              referenceIDs: [entityID, id],
-              action: "cover_photo",
-              contentType: coverImage.mime,
-              originalName: coverFile.originalFilename,
-            },
-            `uploads/pages/${pageID}`,
-          );
-          return { profile, cover };
-        },
-      );
-    } catch (ex) {
-      sendError(ex);
-    } finally {
-      await removeTempFiles(files);
-    }
-  });
 });
 
 router.post("/seenNewMessages", jwtchecker, async (req, res) => {
@@ -3673,59 +3543,6 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     res.status(500).send({ status: false, message: "Error reading messages!" });
   }
 });
-
-const uploadMessage = async (
-  mp,
-  entityID,
-  conversationID,
-  receivers,
-  isReply,
-  replyingTo,
-  conversationType,
-  onComplete,
-) => {
-  try {
-    var messageID = await checkExistingMessageID(makeID(30));
-
-    // const publicUrl = await uploadFirebase(mp);
-    const publicUrl = await Storage.uploadBase64(
-      messageID,
-      mp.reference,
-      mp.name,
-      {
-        referenceIDs: [messageID, mp.conversationID],
-        action: "message",
-      },
-      `uploads/messages/${conversationID}`,
-    );
-
-    await saveFileMessage(
-      entityID,
-      messageID,
-      mp.pendingID,
-      mp.conversationID,
-      receivers,
-      publicUrl,
-      isReply,
-      replyingTo,
-      mp.type,
-      conversationType,
-      onComplete,
-    );
-
-    // await saveFileRecordToDatabase(
-    //   [messageID, mp.conversationID],
-    //   publicUrl,
-    //   "message",
-    //   mp.type,
-    //   "firebase",
-    //   mp.name,
-    // );
-  } catch (err) {
-    console.log(err);
-    onComplete(false);
-  }
-};
 
 const saveFileMessage = async (
   entityID,
@@ -3815,74 +3632,6 @@ const saveFileMessage = async (
     });
 };
 
-const uploadMessageFromFile = async (
-  file,
-  pendingID,
-  entityID,
-  conversationID,
-  receivers,
-  isReply,
-  replyingTo,
-  conversationType,
-  onComplete,
-) => {
-  try {
-    var messageID = await checkExistingMessageID(makeID(30));
-
-    const buffer = await fs.readFile(file.path);
-    const mimeType = file.headers["content-type"] || "application/octet-stream";
-    const metadata = await Storage.upload(
-      messageID,
-      buffer,
-      `${makeID(10)}_${file.originalFilename}`,
-      {
-        referenceIDs: [messageID, conversationID],
-        action: "message",
-        contentType: mimeType,
-        originalName: file.originalFilename,
-      },
-      `uploads/messages/${conversationID}`,
-    );
-
-    // Mirrors the client's existing type bucketing: images are tagged
-    // "image", everything else keeps its real mime type.
-    const messageType = mimeType.startsWith("image/") ? "image" : mimeType;
-
-    await saveFileMessage(
-      entityID,
-      messageID,
-      pendingID,
-      conversationID,
-      receivers,
-      metadata.fileDetails.data,
-      isReply,
-      replyingTo,
-      messageType,
-      conversationType,
-      onComplete,
-      {
-        fileId: metadata.fileID,
-        url: metadata.fileDetails.data,
-        name: cleanFileName(file.originalFilename, metadata.fileType),
-        mime: metadata.fileType,
-        kind: kindOf(metadata.fileType),
-        size: file.size,
-        status: "available",
-      },
-    );
-
-    fs.unlink(file.path).catch(() => {});
-  } catch (err) {
-    console.log(err);
-    onComplete(false);
-  }
-};
-
-/**
- * Sends files that were uploaded straight to storage (POST /media/uploads):
- * each upload becomes one message, under the message id reserved when it
- * was uploaded - the id its storage folder is already named after.
- */
 const sendUploadedFiles = async (params, body) => {
   const { id, entity_id } = params;
   const conversationID = String(body.conversationID || "");
@@ -3947,9 +3696,9 @@ const sendUploadedFiles = async (params, body) => {
 };
 
 /**
- * The shared end of every sendFiles path: unarchive the chat, bump its
- * score, answer, then send ONE push for the whole batch - after the
- * response, so an FCM round trip never delays it.
+ * The end of a sendFiles: unarchive the chat, bump its score, answer, then
+ * send ONE push for the whole batch - after the response, so an FCM round
+ * trip never delays it.
  */
 const finishFilesSend = async (
   req,
@@ -3986,202 +3735,23 @@ const finishFilesSend = async (
   });
 };
 
+// JSON: { conversationID, conversationType, uploadIDs, pendingIDs?, isReply?,
+// replyingTo?, purpose? } - files already uploaded straight to storage through
+// /media/uploads, each with the message id it reserved there.
 router.post("/sendFiles", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
-  const id = req.params.id;
-  const entity_id = req.params.entity_id;
-
-  // Files already uploaded straight to storage: JSON with their upload ids.
-  if (Array.isArray(req.body?.uploadIDs)) {
-    try {
-      const sent = await sendUploadedFiles(req.params, req.body);
-      await finishFilesSend(req, res, sent);
-    } catch (ex) {
-      console.log(ex);
-      if (!res.headersSent) {
-        res
-          .status(ex.status || 400)
-          .send({ status: false, message: ex.message || ex.toString() });
-      }
-    }
-    return;
-  }
-
-  const isMultipart = (req.headers["content-type"] || "").includes(
-    "multipart/form-data",
-  );
-
-  if (isMultipart) {
-    new multiparty.Form({ maxFilesSize: MAX_UPLOAD_FILE_SIZE }).parse(
-      req,
-      async (err, fields, files) => {
-        if (err) {
-          const isSizeErr = /maxFilesSize/i.test(err.message || "");
-          res.status(isSizeErr ? 413 : 400).send({
-            status: false,
-            message: isSizeErr
-              ? "File exceeds the maximum allowed size"
-              : "Error processing upload",
-            details: err.message,
-          });
-          return;
-        }
-
-        try {
-          const conversationID = fields.conversationID?.[0];
-          const isReply = fields.isReply?.[0] === "true";
-          // Stored as {type, id} like every reply - see
-          // sanitizeIncomingReplyingTo. "" when this is not a reply.
-          const replyingTo = sanitizeIncomingReplyingTo(
-            fields.replyingTo?.[0] || "",
-          );
-          const conversationType = normalizeConversationType(
-            fields.conversationType?.[0],
-          );
-          const pendingIDs = fields.pendingIDs
-            ? JSON.parse(fields.pendingIDs[0])
-            : [];
-          const attachedFiles = files.files || [];
-
-          if (!conversationID || attachedFiles.length === 0) {
-            res.status(400).send({
-              status: false,
-              message: "Missing conversationID or files",
-            });
-            return;
-          }
-
-          const messageLimit = await limitFor("message");
-          if (
-            messageLimit &&
-            attachedFiles.some((file) => file.size > messageLimit.maxBytes)
-          ) {
-            res.status(413).send({
-              status: false,
-              message: `Files here can be at most ${messageLimit.maxMB}MB`,
-            });
-            return;
-          }
-
-          const receiversfetch = await GetAllReceivers(conversationID);
-          const receivers = receiversfetch.users.map((mp) => mp.entityID);
-
-          await isRealmMember(conversationID, entity_id);
-
-          let settledFiles = 0;
-
-          await Promise.allSettled(
-            attachedFiles.map((file, i) =>
-              uploadMessageFromFile(
-                file,
-                pendingIDs[i] || null,
-                entity_id,
-                conversationID,
-                receivers,
-                isReply,
-                replyingTo,
-                conversationType,
-                (status) => {
-                  settledFiles += 1;
-                  if (attachedFiles.length === settledFiles) {
-                    receivers.map((rcvs) => {
-                      MessagesTrigger(
-                        rcvs,
-                        { conversationID, entityID: entity_id },
-                        false,
-                      );
-                    });
-                  }
-                },
-              ),
-            ),
-          );
-
-          await finishFilesSend(req, res, {
-            conversationID,
-            conversationType,
-            receivers,
-            count: attachedFiles.length,
-          });
-        } catch (ex) {
-          console.log(ex);
-          res
-            .status(400)
-            .send({ status: false, message: ex.message || ex.toString() });
-        }
-      },
-    );
-    return;
-  }
-
-  // Legacy signed-JWT base64 path - kept alive during rollout so older
-  // frontend builds keep working; remove once all callers are confirmed
-  // on multipart.
-  const token = req.body.token;
-
   try {
-    const decodeToken = jwt.verify(token, JWT_SECRET);
-
-    const conversationID = decodeToken.conversationID;
-    const receiversfetch = await GetAllReceivers(conversationID);
-    const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
-    // const receivers = decodeToken.receivers;
-    const files = decodeToken.files;
-    const isReply = decodeToken.isReply;
-    const replyingTo = sanitizeIncomingReplyingTo(decodeToken.replyingTo);
-    const conversationType = normalizeConversationType(
-      decodeToken.conversationType,
-    );
-
-    await isRealmMember(conversationID, entity_id);
-
-    let settledFiles = 0;
-
-    await Promise.allSettled(
-      files.map((mp) => {
-        uploadMessage(
-          mp,
-          entity_id,
-          conversationID,
-          receivers,
-          isReply,
-          replyingTo,
-          conversationType,
-          (status) => {
-            settledFiles += 1;
-            if (files.length === settledFiles) {
-              receivers.map((rcvs, i) => {
-                MessagesTrigger(
-                  rcvs,
-                  { conversationID, entityID: entity_id },
-                  false,
-                );
-              });
-            }
-          },
-        );
-      }),
-    );
-
-    await ChatHistory.updateMany(
-      {
-        conversationID: conversationID,
-      },
-      {
-        $set: {
-          isArchived: false,
-        },
-      },
-    );
-
-    bumpChatScore(conversationID, receivers, entity_id);
-
-    res.send({ status: true, message: "OK" });
+    if (!Array.isArray(req.body?.uploadIDs)) {
+      throw new MediaUploadError("Upload the files first (/media/uploads)");
+    }
+    const sent = await sendUploadedFiles(req.params, req.body);
+    await finishFilesSend(req, res, sent);
   } catch (ex) {
     console.log(ex);
-    res
-      .status(400)
-      .send({ status: false, message: ex.message || ex.toString() });
+    if (!res.headersSent) {
+      res
+        .status(ex.status || 400)
+        .send({ status: false, message: ex.message || ex.toString() });
+    }
   }
 });
 
