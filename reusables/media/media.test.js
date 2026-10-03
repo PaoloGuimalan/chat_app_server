@@ -167,7 +167,7 @@ test("our links are recognised through every host; others are not", () => {
   }
 });
 
-test("upload links sign the type, disposition and size", async () => {
+test("upload links sign the type, disposition and size, and carry no ACL", async () => {
   const target = await spaces.singleUploadTarget({
     key: "uploads/x/a.pdf",
     contentType: "application/pdf",
@@ -178,7 +178,8 @@ test("upload links sign the type, disposition and size", async () => {
   for (const header of ["content-type", "content-disposition", "content-length"]) {
     assert.ok(signed.includes(header), header);
   }
-  assert.equal(new URL(target.url).searchParams.get("x-amz-acl"), "public-read");
+  // Files go up private; the server publishes them once checked.
+  assert.equal(new URL(target.url).searchParams.get("x-amz-acl"), null);
   assert.equal(target.headers["Content-Type"], "application/pdf");
 });
 

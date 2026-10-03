@@ -44,6 +44,10 @@ const main = async () => {
     });
     const put = await fetch(target.url, { method: target.method, headers: target.headers, body });
     created.push(singleKey);
+    // Uploads land private; the server publishes them once checked.
+    const before = await fetch(storage.publicUrl(singleKey));
+    check("an uploaded file is private until published", before.status === 403, `status ${before.status}`);
+    await storage.makePublic(singleKey);
     const head = await storage.head(singleKey);
     check(
       "single PUT stored with the signed type",

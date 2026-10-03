@@ -74,6 +74,8 @@ const world = () => {
     parts.map((p) => ({ ...p, method: "PUT", url: `https://origin/part${p.n}`, headers: {} }));
   storage.completeMultipart = async () => {};
   storage.abortMultipart = async () => {};
+  const published = [];
+  storage.makePublic = async (key) => published.push(key);
   storage.head = async (key) => (bucket.has(key) ? { size: bucket.get(key).size } : null);
   storage.readStart = async (key, n) => bucket.get(key).bytes.subarray(0, n);
   storage.remove = async (key) => {
@@ -84,6 +86,7 @@ const world = () => {
   return {
     records,
     removed,
+    published,
     /** Puts bytes where a client would have uploaded them. */
     arrive: (key, bytes, size = bytes.length) => bucket.set(key, { bytes, size }),
     notMember: () => {
@@ -171,6 +174,32 @@ test("completing checks the stored bytes, then marks it ready", async () => {
   assert.equal(result.kind, "image");
   assert.equal(result.mime, "image/png");
   assert.equal(w.records[0].status, "ready");
+  // Made public only once it passed the checks.
+  assert.deepEqual(w.published, [w.records[0].key]);
+});
+
+test("a file that fails its checks is never made public", async () => {
+  const w = world();
+  const [upload] = await ask();
+  w.arrive(w.records[0].key, PNG, PNG.length + 1);
+  await uploads.completeUploads({ accountID: "acc1", uploads: [{ uploadID: upload.uploadID }] });
+  assert.deepEqual(w.published, []);
+});
+
+test("if publishing fails the upload stays pending, so it can be retried", async () => {
+  const w = world();
+  const [upload] = await ask();
+  w.arrive(w.records[0].key, PNG);
+  storage.makePublic = async () => {
+    throw new Error("Spaces hiccup");
+  };
+  const [result] = await uploads.completeUploads({
+    accountID: "acc1",
+    uploads: [{ uploadID: upload.uploadID }],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 503);
+  assert.equal(w.records[0].status, "pending");
 });
 
 test("a file that isn't what it claimed is deleted, not accepted", async () => {

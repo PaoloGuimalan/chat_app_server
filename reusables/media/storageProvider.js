@@ -15,6 +15,11 @@
  * one that doesn't needs a second class with these same methods, and nothing
  * outside this file changes.
  *
+ * Files are uploaded PRIVATE and made public by the server (makePublic) once
+ * it has checked them: an upload link can't reliably carry the ACL - Spaces
+ * ignores "x-amz-acl" as a presigned query parameter, which left uploads
+ * unreadable - and a file nobody has vetted shouldn't be public anyway.
+ *
  * Public links are built from STORAGE_PUBLIC_BASE_URL (our own media domain),
  * so a stored link never names the provider - a move is copying the files and
  * pointing the domain elsewhere. Uploads cannot go through that domain
@@ -33,6 +38,7 @@ require("dotenv").config();
 const {
   S3Client,
   PutObjectCommand,
+  PutObjectAclCommand,
   CreateMultipartUploadCommand,
   UploadPartCommand,
   CompleteMultipartUploadCommand,
@@ -125,7 +131,6 @@ class S3CompatibleStorage {
       ContentType: contentType,
       ContentDisposition: disposition,
       ContentLength: size,
-      ACL: "public-read",
     });
     const url = await getSignedUrl(this.client, command, {
       expiresIn: UPLOAD_LINK_SECONDS,
@@ -149,7 +154,6 @@ class S3CompatibleStorage {
         Key: key,
         ContentType: contentType,
         ContentDisposition: disposition,
-        ACL: "public-read",
       }),
     );
     return result.UploadId;
@@ -205,6 +209,13 @@ class S3CompatibleStorage {
       // Already completed or aborted - nothing left to clean up.
       if (!/NoSuchUpload/i.test(err.name || err.Code || "")) throw err;
     }
+  }
+
+  /** Makes a stored file publicly readable (after the server vetted it). */
+  async makePublic(key) {
+    await this.client.send(
+      new PutObjectAclCommand({ Bucket: this.bucket, Key: key, ACL: "public-read" }),
+    );
   }
 
   /** { size, contentType } of a stored file, or null if there is none. */

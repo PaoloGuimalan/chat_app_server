@@ -309,6 +309,14 @@ const completeOne = async (accountID, { uploadID, parts }) => {
     throw new MediaUploadError("The file isn't the type it claimed to be", 415);
   }
 
+  // Uploaded private; public only now that it has passed the checks. A
+  // failure leaves the record pending, so the client can simply retry.
+  try {
+    await storage.makePublic(record.key);
+  } catch (err) {
+    throw new MediaUploadError(`Couldn't publish the file: ${err.message || err}`, 503);
+  }
+
   record.status = "ready";
   record.completedAt = new Date();
   record.size = stored.size;
