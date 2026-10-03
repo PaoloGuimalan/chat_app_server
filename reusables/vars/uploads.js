@@ -54,8 +54,15 @@ function resolveMaxUploadMb() {
 const MAX_UPLOAD_FILE_SIZE_MB = resolveMaxUploadMb();
 const MAX_UPLOAD_FILE_SIZE = Math.floor(MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024);
 
+// Realm/page avatars and covers (reusables/hooks/imageUpload.js). Fixed for
+// now; moves into the per-feature limits table with the rest.
+const MAX_PROFILE_IMAGE_SIZE_MB = 10;
+const MAX_PROFILE_IMAGE_SIZE = MAX_PROFILE_IMAGE_SIZE_MB * 1024 * 1024;
+
 module.exports = {
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILE_SIZE_MB,
   DEFAULT_MAX_UPLOAD_FILE_SIZE_MB,
+  MAX_PROFILE_IMAGE_SIZE,
+  MAX_PROFILE_IMAGE_SIZE_MB,
 };

@@ -15,6 +15,7 @@ const UserMessage = require("../../schema/messages/message");
 const ChatHistory = require("../../schema/messages/chathistory");
 const Conversations = require("../../schema/messages/conversation");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
+const { publishRelease, urlOf } = require("../../reusables/media/release");
 const {
   requiresPermission,
 } = require("../../reusables/hooks/permissionChecker");
@@ -97,6 +98,18 @@ router.post("/deletemessage", jwtchecker, async (req, res) => {
     )
       .then(async (result) => {
         await SyncConversationLastMessage(decodedToken.conversationID);
+
+        // An unsent file message takes its file with it (release.js decides;
+        // a reported message keeps it). Text and system rows have no file.
+        if (!/^(text|notif|post)$/.test(String(targetMessage.messageType))) {
+          publishRelease([
+            {
+              target: { type: "message", id: String(decodedToken.messageID) },
+              urls: [targetMessage.attachment?.url, urlOf(targetMessage.content)],
+              context: { conversationID: String(decodedToken.conversationID) },
+            },
+          ]);
+        }
 
         const messageReceivers = await GetAllReceivers(
           decodedToken.conversationID,
@@ -842,6 +855,7 @@ router.get(
           content: 1,
           messageType: 1,
           messageDate: 1,
+          attachment: 1,
         })
         .lean();
 
@@ -855,6 +869,7 @@ router.get(
           kind: conversationFileKind(row.messageType),
           mimeType: row.messageType,
           content: row.content,
+          attachment: row.attachment || null,
           sentAt: row.messageDate,
         })),
         nextCursor:

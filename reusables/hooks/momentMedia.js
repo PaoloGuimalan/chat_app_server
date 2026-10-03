@@ -67,10 +67,27 @@ const uploadFolderPrefix = (accountID) =>
 const assertOwnUpload = async (url, accountID) => {
   if (typeof url !== "string" || !url) throw new MomentMediaError("Missing media");
   const wanted = decode(url);
+  const candidates = [...new Set([url, wanted, encodeURI(wanted)])];
+
+  // A direct upload (reusables/media/uploads.js) lives on the media domain,
+  // not under the folder prefix below - its record says whose it is.
+  const direct = await UploadedFiles.findOne({
+    version: 2,
+    "fileDetails.data": { $in: candidates },
+  }).lean();
+  if (direct) {
+    if (
+      direct.ownerAccount !== String(accountID) ||
+      (direct.status !== "ready" && direct.status !== "attached")
+    ) {
+      throw new MomentMediaError("Media must be uploaded to ChatterLoop first");
+    }
+    return direct;
+  }
+
   if (!wanted.startsWith(decode(uploadFolderPrefix(accountID)))) {
     throw new MomentMediaError("Media must be uploaded to ChatterLoop first");
   }
-  const candidates = [...new Set([url, wanted, encodeURI(wanted)])];
   const record = await UploadedFiles.findOne({
     "fileDetails.data": { $in: candidates },
     foreignID: String(accountID),

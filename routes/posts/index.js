@@ -20,6 +20,31 @@ const {
   vetPoster,
 } = require("../../reusables/hooks/momentMedia");
 const {
+  resolveAttachable,
+  attachRecords,
+} = require("../../reusables/media/uploads");
+const { limitFor } = require("../../reusables/media/config");
+
+// What a post (feed post, profile/cover photo, moment) may be made from.
+const POST_UPLOAD_PURPOSES = [
+  "post_media",
+  "avatar",
+  "cover",
+  "moment",
+  "moment_poster",
+];
+
+// /posts/upload's "action" -> the upload_limits feature it counts against.
+const LEGACY_ACTION_FEATURE = {
+  post: "post_media",
+  upload: "post_media",
+  entry: "diary",
+  profile: "avatar",
+  cover_photo: "cover",
+  moment: "moment",
+  moment_poster: "moment_poster",
+};
+const {
   jwtchecker,
   jwtssechecker,
   createJWT,
@@ -369,6 +394,19 @@ router.post("/upload", jwtchecker, async (req, res) => {
           // it threw a SyntaxError on any honest value ("post") and 400'd the
           // whole upload. Absent means an older client: keep defaulting.
           const action = fields.action?.[0] || "upload";
+
+          // This old path enforces the same per-feature caps as the new one.
+          const limit = await limitFor(LEGACY_ACTION_FEATURE[action] || "post_media");
+          if (limit && mediaFiles.some((file) => file.size > limit.maxBytes)) {
+            await Promise.all(
+              mediaFiles.map((file) => fs.unlink(file.path).catch(() => {})),
+            );
+            res.status(413).send({
+              status: false,
+              message: `Files here can be at most ${limit.maxMB}MB`,
+            });
+            return;
+          }
           const referenceMediaTypes = fields.referenceMediaTypes
             ? JSON.parse(fields.referenceMediaTypes[0])
             : [];
@@ -384,6 +422,8 @@ router.post("/upload", jwtchecker, async (req, res) => {
                 {
                   referenceIDs: [id, attachment_id],
                   action: action,
+                  contentType: file.headers?.["content-type"],
+                  originalName: file.originalFilename,
                 },
                 `uploads/entries/${id}`,
               );
@@ -497,6 +537,26 @@ const createPostFromPayload = async ({
       referenceMediaType: mp.referenceMediaType,
       referenceID: `${postID}_${makeID(20)}`,
     }));
+
+    // Files uploaded straight to storage must be the author's own, finished
+    // uploads; they are recorded as this post's once it exists. A moment's
+    // poster rides in `details`. Older uploads and links have no such record
+    // and still pass, until the old upload paths are retired.
+    const ownUploads = decodeToken.content.isShared
+      ? []
+      : await resolveAttachable({
+          urls: [
+            ...filereferences.map((mp) => mp.reference),
+            details?.poster?.url,
+          ],
+          accountID: id,
+          purposes: POST_UPLOAD_PURPOSES,
+        }).catch((err) => {
+          throw Object.assign(new Error(err.message), {
+            status: err.status || 400,
+            publicMessage: err.message,
+          });
+        });
 
     // References may already be CDN URLs if the client uploaded media
     // up-front via POST /posts/upload (the new two-step flow) - in that case
@@ -851,6 +911,8 @@ const createPostFromPayload = async ({
       // END: POST SCORE TABLE SAVE
 
       await client.query("COMMIT");
+
+      attachRecords(ownUploads, { type: "post", id: postID });
 
       createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
 

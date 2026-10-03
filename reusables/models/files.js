@@ -1,20 +1,18 @@
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const makeid = require("../hooks/makeID");
 
+// The first of `checkID` and fresh FILE_ ids that no file record uses yet.
+// Used to recurse without returning the result, so a collision resolved to
+// undefined. Throws if the lookup fails rather than handing back an id that
+// was never checked.
 const checkExistingFileID = async (checkID) => {
-    return await UploadedFiles.find({ fileID: checkID}).then((result) => {
-        if(result.length > 0){
-            checkExistingFileID(`FILE_${makeid(20)}`)
-        }
-        else{
-            return checkID;
-        }
-    }).catch((err) => {
-        console.log(err)
-        return false;
-    })
-}
+  let candidate = checkID;
+  while (await UploadedFiles.exists({ fileID: candidate })) {
+    candidate = `FILE_${makeid(20)}`;
+  }
+  return candidate;
+};
 
 module.exports = {
-    checkExistingFileID
-}
+  checkExistingFileID,
+};

@@ -33,7 +33,26 @@ const {
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 const Storage = require("../../reusables/hooks/storage");
-const { MAX_UPLOAD_FILE_SIZE } = require("../../reusables/vars/uploads");
+const {
+  MAX_UPLOAD_FILE_SIZE,
+  MAX_PROFILE_IMAGE_SIZE,
+  MAX_PROFILE_IMAGE_SIZE_MB,
+} = require("../../reusables/vars/uploads");
+const {
+  readProfileImage,
+  removeTempFiles,
+} = require("../../reusables/hooks/imageUpload");
+const {
+  MediaUploadError,
+  resolveMessageUploads,
+  resolveUploadByID,
+  attachRecords,
+  attachmentFor,
+  messageTypeFor,
+  cleanFileName,
+  kindOf,
+} = require("../../reusables/media/uploads");
+const { limitFor } = require("../../reusables/media/config");
 const multiparty = require("multiparty");
 const push = require("../../reusables/hooks/pushnotification");
 const fs = require("fs/promises");
@@ -1452,19 +1471,15 @@ router.get("/getContacts", jwtchecker, async (req, res) => {
     });
 });
 
+// Same as reusables/models/messages.js's: the first of `messageID` and fresh
+// ids that no message uses yet. The recursive version lost its result on a
+// collision and returned false on a failed lookup.
 const checkExistingMessageID = async (messageID) => {
-  return await UserMessage.find({ messageID: messageID })
-    .then((result) => {
-      if (result.length > 0) {
-        checkExistingMessageID(makeID(30));
-      } else {
-        return messageID;
-      }
-    })
-    .catch((err) => {
-      console.log(err);
-      return false;
-    });
+  let candidate = messageID;
+  while (await UserMessage.exists({ messageID: candidate })) {
+    candidate = makeID(30);
+  }
+  return candidate;
 };
 
 /**
@@ -3422,105 +3437,181 @@ router.post("/createconference", jwtchecker, async (req, res) => {
   }
 });
 
+/**
+ * Creates a page from its fields and its two images. `getImages(pageID)`
+ * resolves { profile, cover } - file records, however they were stored.
+ */
+const createPage = async (req, res, fields, getImages) => {
+  const entityID = req.params.entity_id;
+
+  const pageID = await checkGroupID(`${makeID(20)}`);
+  const otherUsers = fields.otherUsers || [];
+  const { pageName, pageDescription, email, slug } = fields;
+  const allReceivers = [entityID, ...otherUsers];
+  const userReceivers = allReceivers.map((alr, i) => ({
+    entityID: alr,
+  }));
+
+  const { rows } = await pool.query(
+    `
+    SELECT EXISTS (
+      SELECT 1 FROM user_account WHERE username = $1
+      UNION ALL
+      SELECT 1 FROM community_realm WHERE slug = $1
+    ) as slug_exists
+  `,
+    [slug],
+  );
+
+  const exists = rows[0]?.slug_exists ?? false;
+
+  if (exists) {
+    return res
+      .status(409)
+      .json({ status: false, error: "page username already taken" });
+  }
+
+  const { profile, cover } = await getImages(pageID);
+
+  if (!profile || !cover) throw new Error("Error occured during upload");
+
+  createRealmReusable(
+    entityID,
+    null,
+    pageID,
+    pageName,
+    profile.fileDetails.data,
+    cover.fileDetails.data,
+    pageDescription,
+    entityID,
+    userReceivers,
+    false,
+    "page",
+    email,
+    slug,
+    false,
+  );
+  attachRecords(
+    [profile, cover].filter((r) => r.version === 2),
+    { type: "realm_media", id: String(pageID) },
+  );
+
+  res.send({ status: true, message: `Page has been created` });
+};
+
 router.post("/createpage", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
   const id = req.params.id;
   const entityID = req.params.entity_id;
 
-  new multiparty.Form().parse(req, async (err, fields, files) => {
-    if (err) return res.status(500).json({ error: err.message });
+  const sendError = (ex) => {
+    res
+      .status(ex.status || 500)
+      .send({ status: false, message: ex.message || ex.toString() });
+    console.log(ex);
+  };
+
+  // Images already uploaded straight to storage: JSON with their upload ids.
+  if (!(req.headers["content-type"] || "").includes("multipart/form-data")) {
+    const body = req.body || {};
+    try {
+      await createPage(
+        req,
+        res,
+        {
+          otherUsers: Array.isArray(body.otherUsers) ? body.otherUsers : [],
+          pageName: body.pageName,
+          pageDescription: body.pageDescription,
+          email: body.email,
+          slug: body.slug,
+        },
+        async () => {
+          const [profile, cover] = await Promise.all([
+            resolveUploadByID({
+              accountID: id,
+              uploadID: body.profileUploadID,
+              purposes: ["avatar"],
+            }),
+            resolveUploadByID({
+              accountID: id,
+              uploadID: body.coverUploadID,
+              purposes: ["cover"],
+            }),
+          ]);
+          if (profile.kind !== "image" || cover.kind !== "image") {
+            throw new MediaUploadError("Only photos can be used here");
+          }
+          return { profile, cover };
+        },
+      );
+    } catch (ex) {
+      sendError(ex);
+    }
+    return;
+  }
+
+  // Two images (profile + cover), so the form as a whole may carry two
+  // images' worth; readProfileImage caps each one.
+  const form = new multiparty.Form({ maxFilesSize: 2 * MAX_PROFILE_IMAGE_SIZE });
+  form.parse(req, async (err, fields, files) => {
+    if (err) {
+      await removeTempFiles(files);
+      const isSizeErr = /maxFilesSize/i.test(err.message || "");
+      return res.status(isSizeErr ? 413 : 400).json({
+        status: false,
+        message: isSizeErr
+          ? `Images can be at most ${MAX_PROFILE_IMAGE_SIZE_MB}MB`
+          : "Error processing upload",
+      });
+    }
 
     try {
-      const decodeToken = fields;
-
-      const pageID = await checkGroupID(`${makeID(20)}`);
-      const otherUsers = decodeToken.otherUsers
-        ? JSON.parse(decodeToken.otherUsers[0])
-        : [];
-      const pageName = decodeToken.pageName[0];
-      const pageDescription = decodeToken.pageDescription[0];
-      const email = decodeToken.email[0];
-      const slug = decodeToken.slug[0];
-      const allReceivers = [entityID, ...otherUsers];
-      const userReceivers = allReceivers.map((alr, i) => ({
-        entityID: alr,
-      }));
-
-      const { rows } = await pool.query(
-        `
-        SELECT EXISTS (
-          SELECT 1 FROM user_account WHERE username = $1
-          UNION ALL
-          SELECT 1 FROM community_realm WHERE slug = $1
-        ) as slug_exists
-      `,
-        [slug],
-      );
-
-      const exists = rows[0]?.slug_exists ?? false;
-
-      if (exists) {
-        return res
-          .status(409)
-          .json({ status: false, error: "page username already taken" });
-      }
-
-      const profile = files.profile[0].path;
-      const cover_photo = files.cover_photo[0].path;
-      const profileBuffer = await fs.readFile(profile);
-      const coverPhotoBuffer = await fs.readFile(cover_photo);
-
-      // const finaluploadedreferences =
-      //   await uploadFirebaseMultiple(filereferences);
-
-      const profileUpload = await Storage.upload(
-        entityID,
-        profileBuffer,
-        `${makeID(10)}_${files.profile[0].originalFilename}`,
+      await createPage(
+        req,
+        res,
         {
-          referenceIDs: [entityID, id],
-          action: "profile",
+          otherUsers: fields.otherUsers ? JSON.parse(fields.otherUsers[0]) : [],
+          pageName: fields.pageName[0],
+          pageDescription: fields.pageDescription[0],
+          email: fields.email[0],
+          slug: fields.slug[0],
         },
-        `uploads/pages/${pageID}`,
-      );
-      const coverPhotoUpload = await Storage.upload(
-        entityID,
-        coverPhotoBuffer,
-        `${makeID(10)}_${files.cover_photo[0].originalFilename}`,
-        {
-          referenceIDs: [entityID, id],
-          action: "cover_photo",
+        async (pageID) => {
+          const profileFile = files.profile?.[0];
+          const coverFile = files.cover_photo?.[0];
+          const profileImage = await readProfileImage(profileFile);
+          const coverImage = await readProfileImage(coverFile);
+
+          const profile = await Storage.upload(
+            entityID,
+            profileImage.buffer,
+            `${makeID(10)}_${profileFile.originalFilename}`,
+            {
+              referenceIDs: [entityID, id],
+              action: "profile",
+              contentType: profileImage.mime,
+              originalName: profileFile.originalFilename,
+            },
+            `uploads/pages/${pageID}`,
+          );
+          const cover = await Storage.upload(
+            entityID,
+            coverImage.buffer,
+            `${makeID(10)}_${coverFile.originalFilename}`,
+            {
+              referenceIDs: [entityID, id],
+              action: "cover_photo",
+              contentType: coverImage.mime,
+              originalName: coverFile.originalFilename,
+            },
+            `uploads/pages/${pageID}`,
+          );
+          return { profile, cover };
         },
-        `uploads/pages/${pageID}`,
       );
-
-      if (coverPhotoUpload && profileUpload) {
-        createRealmReusable(
-          entityID,
-          null,
-          pageID,
-          pageName,
-          profileUpload.fileDetails.data,
-          coverPhotoUpload.fileDetails.data,
-          pageDescription,
-          entityID,
-          userReceivers,
-          false,
-          "page",
-          email,
-          slug,
-          false,
-        );
-
-        res.send({ status: true, message: `Page has been created` });
-      } else {
-        throw new Error("Error occured during upload");
-      }
     } catch (ex) {
-      res
-        .status(500)
-        .send({ status: false, message: ex.message || ex.toString() });
-      console.log(ex);
+      sendError(ex);
+    } finally {
+      await removeTempFiles(files);
     }
   });
 });
@@ -3582,21 +3673,6 @@ router.post("/seenNewMessages", jwtchecker, async (req, res) => {
     res.status(500).send({ status: false, message: "Error reading messages!" });
   }
 });
-
-const checkExistingFileID = async (checkID) => {
-  return await UploadedFiles.find({ fileID: checkID })
-    .then((result) => {
-      if (result.length > 0) {
-        checkExistingFileID(`FILE_${makeID(20)}`);
-      } else {
-        return checkID;
-      }
-    })
-    .catch((err) => {
-      console.log(err);
-      return false;
-    });
-};
 
 const uploadMessage = async (
   mp,
@@ -3663,6 +3739,8 @@ const saveFileMessage = async (
   messageType,
   conversationType,
   onComplete,
+  // { fileId, url, name, mime, kind, size, status } - see the message schema.
+  attachment = null,
 ) => {
   // const seeners = [entityID]; //Array
   const seeners = [entityID]; //Array
@@ -3689,6 +3767,7 @@ const saveFileMessage = async (
     isDeleted: false,
     messageType: messageType,
     conversationType: normalizedConversationType,
+    ...(attachment ? { attachment } : {}),
   };
 
   const newMessage = new UserMessage(payload);
@@ -3759,6 +3838,8 @@ const uploadMessageFromFile = async (
       {
         referenceIDs: [messageID, conversationID],
         action: "message",
+        contentType: mimeType,
+        originalName: file.originalFilename,
       },
       `uploads/messages/${conversationID}`,
     );
@@ -3779,6 +3860,15 @@ const uploadMessageFromFile = async (
       messageType,
       conversationType,
       onComplete,
+      {
+        fileId: metadata.fileID,
+        url: metadata.fileDetails.data,
+        name: cleanFileName(file.originalFilename, metadata.fileType),
+        mime: metadata.fileType,
+        kind: kindOf(metadata.fileType),
+        size: file.size,
+        status: "available",
+      },
     );
 
     fs.unlink(file.path).catch(() => {});
@@ -3788,10 +3878,134 @@ const uploadMessageFromFile = async (
   }
 };
 
+/**
+ * Sends files that were uploaded straight to storage (POST /media/uploads):
+ * each upload becomes one message, under the message id reserved when it
+ * was uploaded - the id its storage folder is already named after.
+ */
+const sendUploadedFiles = async (params, body) => {
+  const { id, entity_id } = params;
+  const conversationID = String(body.conversationID || "");
+  if (!conversationID) throw new MediaUploadError("Missing conversationID");
+  const isReply = body.isReply === true || body.isReply === "true";
+  const replyingTo = sanitizeIncomingReplyingTo(body.replyingTo || "");
+  const conversationType = normalizeConversationType(body.conversationType);
+  const pendingIDs = Array.isArray(body.pendingIDs) ? body.pendingIDs : [];
+
+  await isRealmMember(conversationID, entity_id);
+  const records = await resolveMessageUploads({
+    accountID: id,
+    conversationID,
+    uploadIDs: body.uploadIDs,
+  });
+
+  const receiversfetch = await GetAllReceivers(conversationID);
+  const receivers = receiversfetch.users.map((mp) => mp.entityID);
+
+  let settledFiles = 0;
+  await Promise.allSettled(
+    records.map(
+      (record, i) =>
+        new Promise((resolve) => {
+          saveFileMessage(
+            entity_id,
+            record.reservedMessageID,
+            pendingIDs[i] || null,
+            conversationID,
+            receivers,
+            record.fileDetails.data,
+            isReply,
+            replyingTo,
+            messageTypeFor(record),
+            conversationType,
+            (status) => {
+              if (status) {
+                attachRecords([record], {
+                  type: "message",
+                  id: record.reservedMessageID,
+                });
+              }
+              settledFiles += 1;
+              if (records.length === settledFiles) {
+                receivers.map((rcvs) => {
+                  MessagesTrigger(
+                    rcvs,
+                    { conversationID, entityID: entity_id },
+                    false,
+                  );
+                });
+              }
+              resolve(status);
+            },
+            attachmentFor(record),
+          );
+        }),
+    ),
+  );
+
+  return { conversationID, conversationType, receivers, count: records.length };
+};
+
+/**
+ * The shared end of every sendFiles path: unarchive the chat, bump its
+ * score, answer, then send ONE push for the whole batch - after the
+ * response, so an FCM round trip never delays it.
+ */
+const finishFilesSend = async (
+  req,
+  res,
+  { conversationID, conversationType, receivers, count },
+) => {
+  const entity_id = req.params.entity_id;
+
+  await ChatHistory.updateMany(
+    { conversationID: conversationID },
+    { $set: { isArchived: false } },
+  );
+
+  bumpChatScore(conversationID, receivers, entity_id);
+
+  res.send({ status: true, message: "OK" });
+
+  const senderDetails = await GetSenderDetails(entity_id);
+  const realmName =
+    conversationType === "single" ? null : await GetRealmName(conversationID);
+
+  push.sendMessage({
+    receivers: receivers.filter((r) => String(r) !== String(entity_id)),
+    conversationId: conversationID,
+    conversationName:
+      conversationType !== "single"
+        ? realmName
+        : senderDetails?.display_name || `@${req.params.username}`,
+    isGroup: conversationType !== "single",
+    senderId: entity_id,
+    senderName: senderDetails?.display_name || `@${req.params.username}`,
+    senderAvatarUrl: senderDetails?.profile || "",
+    body: count > 1 ? `Sent ${count} attachments` : "Sent an attachment",
+  });
+};
+
 router.post("/sendFiles", jwtchecker, async (req, res) => {
   const userID = req.params.userID;
   const id = req.params.id;
   const entity_id = req.params.entity_id;
+
+  // Files already uploaded straight to storage: JSON with their upload ids.
+  if (Array.isArray(req.body?.uploadIDs)) {
+    try {
+      const sent = await sendUploadedFiles(req.params, req.body);
+      await finishFilesSend(req, res, sent);
+    } catch (ex) {
+      console.log(ex);
+      if (!res.headersSent) {
+        res
+          .status(ex.status || 400)
+          .send({ status: false, message: ex.message || ex.toString() });
+      }
+    }
+    return;
+  }
 
   const isMultipart = (req.headers["content-type"] || "").includes(
     "multipart/form-data",
@@ -3837,6 +4051,18 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
             return;
           }
 
+          const messageLimit = await limitFor("message");
+          if (
+            messageLimit &&
+            attachedFiles.some((file) => file.size > messageLimit.maxBytes)
+          ) {
+            res.status(413).send({
+              status: false,
+              message: `Files here can be at most ${messageLimit.maxMB}MB`,
+            });
+            return;
+          }
+
           const receiversfetch = await GetAllReceivers(conversationID);
           const receivers = receiversfetch.users.map((mp) => mp.entityID);
 
@@ -3871,40 +4097,11 @@ router.post("/sendFiles", jwtchecker, async (req, res) => {
             ),
           );
 
-          await ChatHistory.updateMany(
-            { conversationID: conversationID },
-            { $set: { isArchived: false } },
-          );
-
-          bumpChatScore(conversationID, receivers, entity_id);
-
-          res.send({ status: true, message: "OK" });
-
-          // Push AFTER res.send, so an FCM round trip can never delay the
-          // upload response - and after Promise.allSettled, so a batch of
-          // files produces one notification rather than one per file.
-          const senderDetails = await GetSenderDetails(entity_id);
-          const realmName =
-            conversationType === "single"
-              ? null
-              : await GetRealmName(conversationID);
-
-          push.sendMessage({
-            receivers: receivers.filter((r) => String(r) !== String(entity_id)),
-            conversationId: conversationID,
-            conversationName:
-              conversationType !== "single"
-                ? realmName
-                : senderDetails?.display_name || `@${req.params.username}`,
-            isGroup: conversationType !== "single",
-            senderId: entity_id,
-            senderName:
-              senderDetails?.display_name || `@${req.params.username}`,
-            senderAvatarUrl: senderDetails?.profile || "",
-            body:
-              attachedFiles.length > 1
-                ? `Sent ${attachedFiles.length} attachments`
-                : "Sent an attachment",
+          await finishFilesSend(req, res, {
+            conversationID,
+            conversationType,
+            receivers,
+            count: attachedFiles.length,
           });
         } catch (ex) {
           console.log(ex);

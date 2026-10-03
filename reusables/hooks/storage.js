@@ -7,6 +7,8 @@ const {
 const makeid = require("./makeID");
 const { saveFileRecordToDatabase } = require("./firebaseupload");
 const fileTypeMime = require("file-type-mime");
+const { pickContentType, dispositionFor } = require("./contentType");
+
 
 class S3StorageProvider {
   constructor(config) {
@@ -41,17 +43,27 @@ class S3StorageProvider {
     }
   }
 
+  /**
+   * `details.contentType` is the type the client claimed (only used when the
+   * bytes don't identify themselves), `details.originalName` the name a
+   * download is saved under (`fileName` carries the random prefix).
+   */
   async upload(referenceID, fileBuffer, fileName, details, folder = "uploads") {
     const detectedType = fileTypeMime.parse(fileBuffer);
 
-    const mimeType = detectedType
-      ? detectedType.mime
-      : "application/octet-stream";
+    const mimeType = pickContentType(detectedType?.mime, details.contentType);
 
+    // Type and disposition were never set on this path - only uploadBase64
+    // set them - so these files were stored with a generic binary type.
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: `${folder}/${fileName}`, // Auto-creates "folders"
       Body: fileBuffer,
+      ContentType: mimeType,
+      ContentDisposition: dispositionFor(
+        mimeType,
+        details.originalName || fileName,
+      ),
       ACL: "public-read", // Optional: makes it accessible via CDN URL
     });
     await this.client.send(command);
@@ -93,23 +105,19 @@ class S3StorageProvider {
     const subtype = matches[2];
     const rawData = matches[3];
 
-    const mimeType = `${topType}/${subtype}`;
+    // Only ever claimed on this path - nothing sniffs the bytes.
+    const mimeType = pickContentType(null, `${topType}/${subtype}`);
     const buffer = Buffer.from(rawData, "base64");
 
     const fileName = customName.includes(".")
       ? `${makeid(10)}_${customName}`
       : `${makeid(10)}_${customName}.${subtype}`;
 
-    const isViewable = ["image", "video"].includes(topType);
-    const disposition = isViewable
-      ? "inline"
-      : `attachment; filename="${fileName}"`;
-
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: `${folder}/${fileName}`,
       Body: buffer,
-      ContentDisposition: disposition,
+      ContentDisposition: dispositionFor(mimeType, customName),
       ContentType: mimeType,
       ACL: "public-read",
     });

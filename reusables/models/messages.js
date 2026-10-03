@@ -20,19 +20,15 @@ const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 
+// The first of `messageID` and fresh ids that no message uses yet. Used to
+// recurse without returning the result (a collision resolved to undefined),
+// and to return false on a failed lookup - both then saved as the id.
 const checkExistingMessageID = async (messageID) => {
-  return await UserMessage.find({ messageID: messageID })
-    .then((result) => {
-      if (result.length > 0) {
-        checkExistingMessageID(makeid(30));
-      } else {
-        return messageID;
-      }
-    })
-    .catch((err) => {
-      console.log(err);
-      return false;
-    });
+  let candidate = messageID;
+  while (await UserMessage.exists({ messageID: candidate })) {
+    candidate = makeid(30);
+  }
+  return candidate;
 };
 
 const normalizeConversationType = (conversationType = "single") => {
@@ -633,6 +629,7 @@ const queueMessageTagging = async ({
 };
 
 module.exports = {
+  checkExistingMessageID,
   queueMessageTagging,
   GetMessageReceivers,
   AddNewMemberToContacts,

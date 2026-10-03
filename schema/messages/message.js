@@ -16,6 +16,12 @@ const usermessage = mongoose.Schema({
   messageType: { type: mongoose.Schema.Types.Mixed, require: true },
   conversationType: { type: mongoose.Schema.Types.Mixed, require: true },
   linkPreview: { type: mongoose.Schema.Types.Mixed, required: false },
+  // A file message's file: { fileId, url, name, mime, kind, size, status }.
+  // What clients show - the name never has to be read out of the URL.
+  // Written on send (reusables/media/uploads.js attachmentFor); older rows got
+  // it from scripts/backfillMessageAttachments.js. status "unavailable" means
+  // the file itself is gone (the old Firebase uploads).
+  attachment: { type: mongoose.Schema.Types.Mixed, required: false },
 });
 
 // One conversation, newest first - the order the chat and the shared-files

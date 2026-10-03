@@ -70,6 +70,9 @@ const QUEUES = {
   // envelope, never the definition - webhook_request holds credentials in
   // plain text, and a queue is not where those belong.
   RUN_COMMAND: "run_command",
+  // Files whose post/comment/message was deleted - worker_service
+  // (internal/services/media) decides and deletes; user_service publishes too.
+  MEDIA_RELEASE: "media_release",
 };
 
 let channelPromise = null;

@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1014.0",
+    "@aws-sdk/s3-request-presigner": "^3.1014.0",
     "@web-std/file": "^3.0.3",
     "amqplib": "^0.10.4",
     "atob": "^2.1.2",
