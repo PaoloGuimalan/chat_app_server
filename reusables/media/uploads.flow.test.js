@@ -72,7 +72,15 @@ const world = () => {
   storage.startMultipart = async () => "UPLOAD-1";
   storage.partTargets = async ({ parts }) =>
     parts.map((p) => ({ ...p, method: "PUT", url: `https://origin/part${p.n}`, headers: {} }));
-  storage.completeMultipart = async () => {};
+  // Parts storage holds, and the file joining them produces.
+  const storedParts = [];
+  const joins = [];
+  let joinedFile = null;
+  storage.listParts = async () => storedParts;
+  storage.completeMultipart = async ({ key, parts }) => {
+    joins.push(parts.map((p) => p.etag));
+    bucket.set(key, joinedFile);
+  };
   storage.abortMultipart = async () => {};
   const published = [];
   storage.makePublic = async (key) => published.push(key);
@@ -87,6 +95,11 @@ const world = () => {
     records,
     removed,
     published,
+    joins,
+    partArrives: (n) => storedParts.push({ n, etag: `"s${n}"`, size: 1 }),
+    joinsInto: (bytes, size) => {
+      joinedFile = { bytes, size };
+    },
     /** Puts bytes where a client would have uploaded them. */
     arrive: (key, bytes, size = bytes.length) => bucket.set(key, { bytes, size }),
     notMember: () => {
@@ -239,28 +252,49 @@ test("nothing arrived yet: not finished, nothing deleted", async () => {
   assert.equal(w.records[0].status, "pending");
 });
 
-test("a multipart upload needs every part's ETag", async () => {
-  const w = world();
+/** A 3-part video whose parts all arrived; `complete` sends what a browser
+ * sends when the bucket hides ETags - empty ones. */
+const bigVideo = async (w, arrived = [1, 2, 3]) => {
   const [upload] = await ask({
     files: [{ name: "big.mp4", size: 20 * MB, type: "video/mp4" }],
   });
-  const [result] = await uploads.completeUploads({
-    accountID: "acc1",
-    uploads: [{ uploadID: upload.uploadID, parts: [{ n: 1, etag: "a" }] }],
-  });
-  assert.equal(result.ok, false);
-  w.arrive(w.records[0].key, MP4, 20 * MB);
-  const [done] = await uploads.completeUploads({
-    accountID: "acc1",
-    uploads: [
-      {
-        uploadID: upload.uploadID,
-        parts: [1, 2, 3].map((n) => ({ n, etag: `e${n}` })),
-      },
-    ],
-  });
+  w.joinsInto(MP4, 20 * MB);
+  arrived.forEach(w.partArrives);
+  const complete = async () =>
+    (
+      await uploads.completeUploads({
+        accountID: "acc1",
+        uploads: [{ uploadID: upload.uploadID, parts: [1, 2, 3].map((n) => ({ n, etag: "" })) }],
+      })
+    )[0];
+  return complete;
+};
+
+test("a multipart upload is joined from the parts storage holds, not client ETags", async () => {
+  const w = world();
+  const complete = await bigVideo(w, [1]);
+  const early = await complete();
+  assert.equal(early.status, 409);
+  assert.match(early.message, /Parts 2, 3/);
+  assert.equal(w.records[0].status, "pending");
+  w.partArrives(3);
+  w.partArrives(2);
+  const done = await complete();
   assert.equal(done.ok, true);
   assert.equal(done.kind, "video");
+  assert.deepEqual(w.joins, [['"s1"', '"s2"', '"s3"']]);
+});
+
+test("a retried multipart completion doesn't join the parts twice", async () => {
+  const w = world();
+  const complete = await bigVideo(w);
+  storage.makePublic = async () => {
+    throw new Error("Spaces hiccup");
+  };
+  assert.equal((await complete()).status, 503);
+  storage.makePublic = async () => {};
+  assert.equal((await complete()).ok, true);
+  assert.equal(w.joins.length, 1);
 });
 
 test("someone else's upload can't be completed or used", async () => {

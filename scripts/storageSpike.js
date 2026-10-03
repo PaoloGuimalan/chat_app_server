@@ -9,10 +9,9 @@
  *   1. a presigned single PUT lands, with the signed type and disposition
  *   2. the file is served through STORAGE_PUBLIC_BASE_URL (the media domain)
  *   3. a body of the wrong size is refused by storage itself
- *   4. a 2-part multipart upload completes from presigned part links, with
- *      each part's ETag readable
- *   5. the CORS preflight for a browser upload is allowed and exposes ETag
- *      (run after scripts/storageCors.js --apply)
+ *   4. a 2-part multipart upload completes from presigned part links, joined
+ *      from the parts storage lists (as the server does)
+ *   5. the CORS preflight for a browser upload is allowed
  */
 require("dotenv").config();
 const { randomUUID } = require("crypto");
@@ -91,18 +90,17 @@ const main = async () => {
       disposition: dispositionFor("application/octet-stream", "spike-multipart.bin"),
     });
     const targets = await storage.partTargets({ key: multiKey, uploadId, parts });
-    const etags = [];
     for (const part of targets) {
-      const res = await fetch(part.url, { method: "PUT", body: Buffer.alloc(part.size, part.n) });
-      etags.push({ n: part.n, etag: res.headers.get("etag") });
+      await fetch(part.url, { method: "PUT", body: Buffer.alloc(part.size, part.n) });
     }
-    await storage.completeMultipart({ key: multiKey, uploadId, parts: etags });
+    const listed = await storage.listParts({ key: multiKey, uploadId });
+    await storage.completeMultipart({ key: multiKey, uploadId, parts: listed });
     created.push(multiKey);
     const multiHead = await storage.head(multiKey);
     check(
       "multipart upload completes from part links",
-      etags.every((e) => e.etag) && multiHead?.size === partSize + 1024,
-      `etags ${etags.map((e) => e.etag).join(", ")}, size ${multiHead?.size}`,
+      listed.length === 2 && multiHead?.size === partSize + 1024,
+      `parts listed ${listed.map((p) => `${p.n}:${p.size}`).join(", ")}, size ${multiHead?.size}`,
     );
 
     // 5. CORS preflight

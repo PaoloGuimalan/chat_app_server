@@ -271,25 +271,44 @@ const discard = async (record, reason) => {
   await record.save();
 };
 
-const completeOne = async (accountID, { uploadID, parts }) => {
+/**
+ * Joins a multipart upload's parts into the file, from the parts storage
+ * itself reports (see storage.listParts) - any ETags a client sends are
+ * ignored. Each part's size was signed into its link, so storage already
+ * refused a wrong one; the whole file's size is checked after.
+ */
+const joinParts = async (record) => {
+  const { uploadId, partCount } = record.multipart;
+  let stored;
+  try {
+    stored = await storage.listParts({ key: record.key, uploadId });
+  } catch (err) {
+    throw new MediaUploadError(`Couldn't read the parts: ${err.message || err}`, 409);
+  }
+  const byNumber = new Map(stored.map((p) => [p.n, p]));
+  const numbers = Array.from({ length: partCount }, (_, i) => i + 1);
+  const missing = numbers.filter((n) => !byNumber.has(n));
+  if (missing.length) {
+    throw new MediaUploadError(`Parts ${missing.join(", ")} haven't arrived yet`, 409);
+  }
+  try {
+    await storage.completeMultipart({
+      key: record.key,
+      uploadId,
+      parts: numbers.map((n) => byNumber.get(n)),
+    });
+  } catch (err) {
+    throw new MediaUploadError(`Couldn't join the parts: ${err.message || err}`, 409);
+  }
+};
+
+const completeOne = async (accountID, { uploadID }) => {
   const record = await ownPending(accountID, uploadID);
 
-  if (record.multipart?.uploadId) {
-    const count = record.multipart.partCount;
-    const given = Array.isArray(parts) ? parts : [];
-    const numbers = new Set(given.map((p) => Number(p?.n)));
-    if (given.length !== count || numbers.size !== count || given.some((p) => !p?.etag)) {
-      throw new MediaUploadError("Every part needs its ETag");
-    }
-    try {
-      await storage.completeMultipart({
-        key: record.key,
-        uploadId: record.multipart.uploadId,
-        parts: given.map((p) => ({ n: Number(p.n), etag: String(p.etag) })),
-      });
-    } catch (err) {
-      throw new MediaUploadError(`Couldn't join the parts: ${err.message || err}`, 409);
-    }
+  // A multipart file exists only once joined - so on a retry (say, publishing
+  // failed last time) it's already there and there is nothing left to join.
+  if (record.multipart?.uploadId && !(await storage.head(record.key))) {
+    await joinParts(record);
   }
 
   const stored = await storage.head(record.key);

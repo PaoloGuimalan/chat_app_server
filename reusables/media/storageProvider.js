@@ -4,7 +4,7 @@
  * Every operation the platform needs from a file store, and nothing else:
  *
  *   singleUploadTarget  a presigned PUT for a whole file
- *   startMultipart / partTargets / completeMultipart / abortMultipart
+ *   startMultipart / partTargets / listParts / completeMultipart / abortMultipart
  *   head / readStart / remove
  *   publicUrl / keyFromUrl
  *
@@ -43,6 +43,7 @@ const {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListPartsCommand,
   HeadObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
@@ -183,6 +184,32 @@ class S3CompatibleStorage {
         headers: {},
       })),
     );
+  }
+
+  /**
+   * The parts storage holds for an upload, as [{ n, etag, size }]. The server
+   * finishes uploads from this list rather than ETags reported by clients:
+   * a browser can only read a part's ETag if the bucket's CORS rule exposes
+   * it, and a rule edited in the provider's panel silently drops that.
+   */
+  async listParts({ key, uploadId }) {
+    const parts = [];
+    let marker;
+    do {
+      const result = await this.client.send(
+        new ListPartsCommand({
+          Bucket: this.bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumberMarker: marker,
+        }),
+      );
+      for (const p of result.Parts || []) {
+        parts.push({ n: p.PartNumber, etag: p.ETag, size: Number(p.Size) });
+      }
+      marker = result.IsTruncated ? result.NextPartNumberMarker : undefined;
+    } while (marker);
+    return parts;
   }
 
   /** `parts` is [{ n, etag }], any order. */

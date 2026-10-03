@@ -6,7 +6,8 @@
  *            -> uploads: [{ uploadID, name, fileUrl, messageID?, mode, ... }] where
  *               mode "single" carries { method, url, headers } and "multipart"
  *               { partSize, parts: [{ n, size, method, url, headers }] }
- *   POST   /media/uploads/complete           { uploads: [{ uploadID, parts?: [{n, etag}] }] }
+ *   POST   /media/uploads/complete           { uploads: [{ uploadID }] }  (parts are read from storage;
+ *                                             a `parts` list from older clients is ignored)
  *   POST   /media/uploads/:uploadID/parts    { parts?: [n] } - fresh part links
  *   DELETE /media/uploads/:uploadID          drop an upload nothing uses yet
  *

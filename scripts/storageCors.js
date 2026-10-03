@@ -9,8 +9,9 @@
  * being an identical rule) is added or replaced.
  *
  * Origins mirror the API's CORS list in index.js; override with
- * STORAGE_CORS_ORIGINS (comma-separated). ETag must be exposed: the browser
- * reads each part's ETag to finish a multipart upload.
+ * STORAGE_CORS_ORIGINS (comma-separated). ETag is exposed for good measure,
+ * but nothing depends on it any more: the server finishes multipart uploads
+ * from the parts storage lists (storage.listParts).
  */
 require("dotenv").config();
 const { GetBucketCorsCommand, PutBucketCorsCommand } = require("@aws-sdk/client-s3");
