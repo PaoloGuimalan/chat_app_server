@@ -137,27 +137,25 @@ const SaveConversation = (
     },
   };
 
-  return Conversation.findOne({ conversationID }).then(
-    (existingConversation) => {
-      if (existingConversation) {
-        existingConversation.conversationType =
-          normalizedPayload.conversationType;
-        existingConversation.senderType = normalizedPayload.senderType;
-        existingConversation.authorRealm = normalizedPayload.authorRealm;
-        existingConversation.last_message = normalizedPayload.last_message;
-
-        if (normalizedPayload.participant_ids.length > 0) {
-          existingConversation.participant_ids =
-            normalizedPayload.participant_ids;
-          existingConversation.markModified("participant_ids");
-        }
-
-        return existingConversation.save();
-      }
-
-      const newConversation = new Conversation(normalizedPayload);
-      return newConversation.save();
-    },
+  // One atomic update (an upsert for a conversation's first message) rather
+  // than read-modify-save. The save carried a version number, so two saves of
+  // the same conversation at once - several files sent together, or two
+  // people writing at the same moment - read the same version, and every one
+  // after the first failed with a VersionError.
+  const set = {
+    conversationType: normalizedPayload.conversationType,
+    senderType: normalizedPayload.senderType,
+    authorRealm: normalizedPayload.authorRealm,
+    // A new last message, seen by nobody yet.
+    last_message: { ...normalizedPayload.last_message, seeners: [] },
+  };
+  if (normalizedPayload.participant_ids.length > 0) {
+    set.participant_ids = normalizedPayload.participant_ids;
+  }
+  return Conversation.findOneAndUpdate(
+    { conversationID },
+    { $set: set },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 };
 

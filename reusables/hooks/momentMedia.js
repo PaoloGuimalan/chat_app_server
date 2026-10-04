@@ -172,5 +172,4 @@ module.exports = {
   readVideoHeader,
   vetEncodedVideo,
   vetPoster,
-  uploadFolderPrefix,
 };

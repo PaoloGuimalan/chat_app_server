@@ -3651,46 +3651,33 @@ const sendUploadedFiles = async (params, body) => {
   const receiversfetch = await GetAllReceivers(conversationID);
   const receivers = receiversfetch.users.map((mp) => mp.entityID);
 
-  let settledFiles = 0;
-  await Promise.allSettled(
-    records.map(
-      (record, i) =>
-        new Promise((resolve) => {
-          saveFileMessage(
-            entity_id,
-            record.reservedMessageID,
-            pendingIDs[i] || null,
-            conversationID,
-            receivers,
-            record.fileDetails.data,
-            isReply,
-            replyingTo,
-            messageTypeFor(record),
-            conversationType,
-            (status) => {
-              if (status) {
-                attachRecords([record], {
-                  type: "message",
-                  id: record.reservedMessageID,
-                });
-              }
-              settledFiles += 1;
-              if (records.length === settledFiles) {
-                receivers.map((rcvs) => {
-                  MessagesTrigger(
-                    rcvs,
-                    { conversationID, entityID: entity_id },
-                    false,
-                  );
-                });
-              }
-              resolve(status);
-            },
-            attachmentFor(record),
-          );
-        }),
-    ),
-  );
+  // One after another, in the order they were picked, so each message's date
+  // and the conversation's last message follow that order - saved all at
+  // once, whichever happened to finish last became the chat's last message.
+  for (const [i, record] of records.entries()) {
+    const saved = await new Promise((resolve) =>
+      saveFileMessage(
+        entity_id,
+        record.reservedMessageID,
+        pendingIDs[i] || null,
+        conversationID,
+        receivers,
+        record.fileDetails.data,
+        isReply,
+        replyingTo,
+        messageTypeFor(record),
+        conversationType,
+        resolve,
+        attachmentFor(record),
+      ),
+    );
+    if (saved) {
+      attachRecords([record], { type: "message", id: record.reservedMessageID });
+    }
+  }
+  receivers.map((rcvs) => {
+    MessagesTrigger(rcvs, { conversationID, entityID: entity_id }, false);
+  });
 
   return { conversationID, conversationType, receivers, count: records.length };
 };
