@@ -887,6 +887,42 @@ router.get(
   },
 );
 
+// Who a typing ping is from, cached briefly per entity.
+//
+// The clients draw the typer's avatar and name ("Maya is typing...") from the
+// broadcast itself: the conversation list has no member list to look them up
+// in, and a group thread's member list can lag behind. A typing ping fires
+// every few seconds per person while they type, so the lookup is cached
+// rather than run against Postgres on every one - a renamed account or a new
+// picture shows up on its next ping after the entry expires.
+const TYPING_IDENTITY_TTL_MS = 2 * 60 * 1000;
+const typingIdentityCache = new Map();
+
+const getTypingIdentity = async (entityID) => {
+  const cached = typingIdentityCache.get(entityID);
+  if (cached && cached.expires > Date.now()) return cached.value;
+
+  const details = await GetSenderDetails(entityID).catch(() => null);
+  const value = {
+    displayName: details?.display_name || null,
+    profile: details?.profile || null,
+    entityType: details?.entity_type || null,
+  };
+  typingIdentityCache.set(entityID, {
+    value,
+    expires: Date.now() + TYPING_IDENTITY_TTL_MS,
+  });
+  // Bounded the cheap way: identities are tiny and short-lived, so sweeping
+  // the expired ones when the map grows large is simpler than an LRU.
+  if (typingIdentityCache.size > 5000) {
+    const now = Date.now();
+    for (const [key, entry] of typingIdentityCache) {
+      if (entry.expires <= now) typingIdentityCache.delete(key);
+    }
+  }
+  return value;
+};
+
 router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
   const token = req.body.token;
   const userID = req.params.userID;
@@ -895,7 +931,10 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
 
   try {
     const decodedToken = jwt.verify(token, JWT_SECRET);
-    const receiversfetch = await GetAllReceivers(decodedToken.conversationID);
+    const [receiversfetch, identity] = await Promise.all([
+      GetAllReceivers(decodedToken.conversationID),
+      getTypingIdentity(entity_id),
+    ]);
     const receivers = receiversfetch.users.map((mp) => mp.entityID); //Array decodedToken.receivers
     // const receivers = decodedToken.receivers;
 
@@ -904,8 +943,16 @@ router.post("/istypingbroadcast", jwtchecker, async (req, res) => {
     receivers.map((mp) => {
       if (mp !== entity_id) {
         BroadcastIsTypingStatus(mp, {
+          // `userID` is the ACCOUNT id and stays for older clients; the rest
+          // is new. `entityID` is the acting entity (a page typing as itself
+          // is not its owner), which is what clients key typers and match
+          // members by.
           userID: userID,
+          entityID: entity_id,
           conversationID: decodedToken.conversationID,
+          displayName: identity.displayName,
+          profile: identity.profile,
+          entityType: identity.entityType,
         });
       }
     });
