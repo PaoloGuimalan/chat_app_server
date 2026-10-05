@@ -398,6 +398,20 @@ const createPostFromPayload = async ({
           });
         });
 
+    // A share's references are the shared post's id. A deleted or archived
+    // post is gone from every screen, so it is not there to pass on - the
+    // same rule the share-as-moment route applies before it gets here.
+    if (decodeToken.content.isShared) {
+      for (const mp of filereferences) {
+        const { rows } = await pool.query(
+          `SELECT 1 FROM newsfeed_post
+           WHERE post_id = $1 AND deleted_at IS NULL AND is_archived = FALSE`,
+          [mp.reference],
+        );
+        if (rows.length === 0) throw badRequest("That post can't be shared");
+      }
+    }
+
     // Already uploaded and checked above - nothing is uploaded here.
     const finaluploadedreferences = filereferences;
 
