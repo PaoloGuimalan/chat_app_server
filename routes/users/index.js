@@ -92,6 +92,9 @@ const {
   paramsFor,
 } = require("../../reusables/models/notificationactions");
 const {
+  fetchGroupedNotificationSection,
+} = require("../../reusables/models/notificationgroups");
+const {
   createJWT,
   jwtchecker,
   jwtssechecker,
@@ -797,6 +800,10 @@ const NOTIF_CONNECTION_TYPES = [
   // approve/decline. Belongs in Connections, not Activity - it is the same
   // relationship lifecycle as a contact request.
   "follow_request",
+  // An invite into a group, server, conference or page (Django
+  // community/invites.py). Carries its own STORED Accept/Decline, addressed to
+  // the invite's token - an answerable request like the two above.
+  "realm_invite",
 ];
 const NOTIF_SYSTEM_TYPES = ["system"];
 
@@ -1110,6 +1117,117 @@ router.get(
   "/v2/notifications/system",
   jwtchecker,
   notificationSectionRoute("system"),
+);
+
+// GROUPED: the same three sections, as rows the way the reader sees them -
+// "Maya and 4 others reacted to your post" is one row that expands to the
+// five. See reusables/models/notificationgroups.js for what may group, and how
+// rows with BUTTONS group safely (Connections: one row per person, each
+// request answered on its own row inside it).
+//
+// New paths rather than a flag on the old ones: app builds already in the
+// field call /v2/notifications/* and parse `items`, and they keep getting
+// exactly that.
+const groupedNotificationSection = async (entity_id, section, page, range) => {
+  const data = await fetchGroupedNotificationSection(
+    UserNotifications,
+    notificationSectionMatch(entity_id, section),
+    page,
+    range,
+  );
+  return data;
+};
+
+const attachGroupedSenders = (data, senderMap) => ({
+  groups: data.groups.map((group) => ({
+    ...group,
+    items: attachNotificationSenders(group.items, senderMap),
+  })),
+  total: data.total,
+  unread: data.unread,
+  next: data.next,
+});
+
+router.get(
+  "/v2/notifications/grouped/overview",
+  jwtchecker,
+  async (req, res) => {
+    const entity_id = req.params.entity_id;
+    const previewRange = parseInt(req.headers["range"]) || 8;
+
+    try {
+      const [activity, connections, system] = await Promise.all(
+        ["activity", "connections", "system"].map((section) =>
+          groupedNotificationSection(entity_id, section, 1, previewRange),
+        ),
+      );
+      const senderMap = await enrichNotificationSenders(
+        [activity, connections, system].map((data) =>
+          data.groups.flatMap((group) => group.items),
+        ),
+      );
+
+      const encodedResult = jwt.sign(
+        {
+          activity: attachGroupedSenders(activity, senderMap),
+          connections: attachGroupedSenders(connections, senderMap),
+          system: attachGroupedSenders(system, senderMap),
+        },
+        JWT_SECRET,
+        { expiresIn: 60 * 60 * 24 * 7 },
+      );
+      res.send({ status: true, result: encodedResult });
+    } catch (err) {
+      console.log(err);
+      res.send({
+        status: false,
+        message: "Error retrieving notifications overview",
+      });
+    }
+  },
+);
+
+const groupedNotificationSectionRoute = (section) => async (req, res) => {
+  const entity_id = req.params.entity_id;
+  const page = parseInt(req.headers["page"]) || 1;
+  const range = parseInt(req.headers["range"]) || 20;
+
+  try {
+    const data = await groupedNotificationSection(
+      entity_id,
+      section,
+      page,
+      range,
+    );
+    const senderMap = await enrichNotificationSenders([
+      data.groups.flatMap((group) => group.items),
+    ]);
+    const encodedResult = jwt.sign(
+      attachGroupedSenders(data, senderMap),
+      JWT_SECRET,
+      { expiresIn: 60 * 60 * 24 * 7 },
+    );
+    res.send({ status: true, result: encodedResult });
+  } catch (err) {
+    console.log(err);
+    res.send({ status: false, message: "Error retrieving notifications" });
+  }
+};
+
+router.get(
+  "/v2/notifications/grouped/activity",
+  jwtchecker,
+  groupedNotificationSectionRoute("activity"),
+);
+router.get(
+  "/v2/notifications/grouped/connections",
+  jwtchecker,
+  groupedNotificationSectionRoute("connections"),
+);
+router.get(
+  "/v2/notifications/grouped/system",
+  jwtchecker,
+  groupedNotificationSectionRoute("system"),
 );
 
 // NOTE: marking read stays on the existing POST /u/readnotifications. It
