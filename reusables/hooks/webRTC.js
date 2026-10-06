@@ -623,6 +623,10 @@ async function joinRoom(
     .filter(([participantClientId]) => participantClientId !== clientId)
     .map(([participantClientId, participantData]) => ({
       clientId: participantClientId,
+      // Who it is, as the server knows it - the acting entity from their
+      // token, a page included. participant-joined already carries it; the
+      // username is only what the client sent.
+      entityID: participantData?.entityID || null,
       username: participantData?.username || participantData?.entityID || "",
       ...(allStatuses[participantClientId] || {
         muted: false,
