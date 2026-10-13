@@ -79,6 +79,7 @@ const keyFor = ({ purpose, accountID, context, messageID, folderID, name }) => {
     return `uploads/messages/${context.conversationID}/${messageID}/${name}`;
   }
   if (purpose === "comment") return `uploads/comments/${accountID}/${folderID}/${name}`;
+  if (purpose === "notes") return `uploads/notes/${accountID}/${folderID}/${name}`;
   if ((purpose === "avatar" || purpose === "cover") && context.realmID) {
     return `uploads/realms/${context.realmID}/${folderID}/${name}`;
   }

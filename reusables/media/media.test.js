@@ -16,6 +16,15 @@ const uploads = require("./uploads");
 
 const MB = 1024 * 1024;
 
+test("Notes files use the existing public ACL completion operation", async () => {
+  const storage = new S3CompatibleStorage({ bucket: "test", endpoint: "https://origin.example", publicBaseUrl: "https://media.example" });
+  let command;
+  storage.client.send = async (value) => { command = value; };
+  await storage.makePublic("uploads/notes/account/file.pdf");
+  assert.equal(command.input.Key, "uploads/notes/account/file.pdf");
+  assert.equal(command.input.ACL, "public-read");
+});
+
 // ---- config ----
 
 test("stored limits override defaults feature by feature", () => {

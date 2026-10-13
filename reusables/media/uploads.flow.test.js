@@ -7,7 +7,6 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-
 const pg = require("../database/postgres");
 const UploadedFiles = require("../../schema/posts/uploadedfiles");
 const UserMessage = require("../../schema/messages/message");
@@ -116,6 +115,19 @@ const ask = (overrides) =>
     files: [{ name: "photo.png", size: PNG.length, type: "image/png" }],
     ...overrides,
   });
+
+test("Notes use the existing confirmed bucket URL flow", async () => {
+  const w = world();
+  const [upload] = await ask({ purpose: "notes" });
+  assert.equal(w.records[0].ownerEntity, "ent1");
+  w.arrive(w.records[0].key, PNG);
+  const [complete] = await uploads.completeUploads({ accountID: "acc1", uploads: [{ uploadID: upload.uploadID }] });
+  assert.equal(complete.ok, true);
+  assert.equal(w.records[0].status, "ready");
+  assert.deepEqual(w.published, [w.records[0].key]);
+  assert.equal(complete.fileUrl, upload.fileUrl);
+});
+
 
 test("a post photo: one signed PUT, a pending record, the media-domain link", async () => {
   const w = world();
