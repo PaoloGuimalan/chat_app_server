@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const UserAccount = require("../../schema/auth/useraccount");
 const UserSessions = require("../../schema/auth/sessions");
 const pool = require("../database/postgres");
-const { decryptNonce } = require("./crypto");
+const { decryptNonce, matchesDeviceHash } = require("./crypto");
 const { isUniqueNonce } = require("../redis/pubsub");
 const message = require("../../schema/messages/message");
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -51,6 +51,12 @@ const jwtchecker = async (req, res, next) => {
         console.log(err);
         res.send({ status: false, message: err.message });
       } else {
+        if (!matchesDeviceHash(decode.hash, deviceToken)) {
+          return res.status(401).send({
+            status: false,
+            message: "Device not recognized. Try logging in again.",
+          });
+        }
         const id = decode.userID;
         const { rows } = await pool.query(
           "SELECT id, username, entity_id FROM user_account WHERE id = $1",
@@ -133,6 +139,13 @@ const jwtssechecker = (req, res, next) => {
         if (err) {
           res.sse(type, { status: false, auth: false, message: err.message });
         } else {
+          if (!matchesDeviceHash(decode.hash, deviceToken)) {
+            return res.sse(type, {
+              status: false,
+              auth: false,
+              message: "Device not recognized. Try logging in again.",
+            });
+          }
           const id = decode.userID;
           const { rows } = await pool.query(
             "SELECT id, username, entity_id FROM user_account WHERE id = $1",

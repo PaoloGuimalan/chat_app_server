@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
+const { matchesDeviceHash } = require("../../reusables/hooks/crypto");
 const { requiresPermission } = require("../../reusables/hooks/permissionChecker");
 const { publish_pub, publish } = require("../../reusables/redis/pubsub");
 const {
@@ -339,7 +340,7 @@ router.post("/close-producer", jwtchecker, async (req, res) => {
 });
 
 // Lightweight leave endpoint for browser close (keepalive fetch).
-// Only validates the JWT token — no nonce required since leave is idempotent
+// Validates the JWT and its device binding — no nonce required since leave is idempotent
 // and replaying it has no harmful effect.
 router.post("/leave-room-keepalive", async (req, res) => {
   const token = req.headers["x-access-token"];
@@ -354,6 +355,9 @@ router.post("/leave-room-keepalive", async (req, res) => {
   let entityID;
   try {
     const decoded = jwt.verify(token, AUTHENTICATION_SECRET);
+    if (!matchesDeviceHash(decoded.hash, req.headers["device-token"])) {
+      return res.status(401).send({ status: false, message: "Device not recognized. Try logging in again." });
+    }
     entityID = decoded.entityID;
   } catch (err) {
     res.status(401).send({ status: false, message: "Invalid token" });

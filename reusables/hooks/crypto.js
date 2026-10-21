@@ -30,6 +30,15 @@ function decryptNonce(receivedNonce) {
   }
 }
 
+function matchesDeviceHash(hash, deviceToken) {
+  if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) ||
+      typeof deviceToken !== "string" || !deviceToken) return false;
+
+  const actual = crypto.createHash("sha256").update(deviceToken, "utf8").digest();
+  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), actual);
+}
+
 module.exports = {
   decryptNonce,
+  matchesDeviceHash,
 };

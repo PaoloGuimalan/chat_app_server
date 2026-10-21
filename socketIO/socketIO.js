@@ -1,6 +1,7 @@
 const socketIO = require("socket.io");
 const jwt = require("jsonwebtoken");
 const { BroadcastCoordinates } = require("../reusables/hooks/sse");
+const { matchesDeviceHash } = require("../reusables/hooks/crypto");
 
 const AUTHENTICATION_SECRET = process.env.AUTHENTICATION_SECRET;
 
@@ -19,6 +20,9 @@ const requireCallAuth = (socket, next) => {
   jwt.verify(token, AUTHENTICATION_SECRET, (err, decoded) => {
     if (err) {
       return next(new Error("Invalid or expired token"));
+    }
+    if (!matchesDeviceHash(decoded.hash, socket.handshake.auth.deviceToken)) {
+      return next(new Error("Device not recognized. Try logging in again."));
     }
     socket.entity_id = decoded.entity;
     socket.userID = decoded.userID;
