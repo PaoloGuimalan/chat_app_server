@@ -2,7 +2,7 @@ const socketIO = require("socket.io");
 const jwt = require("jsonwebtoken");
 const { BroadcastCoordinates } = require("../reusables/hooks/sse");
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const AUTHENTICATION_SECRET = process.env.AUTHENTICATION_SECRET;
 
 // The /call namespace previously accepted connections with zero
 // authentication - anyone could connect and emit signaling events for any
@@ -16,7 +16,7 @@ const requireCallAuth = (socket, next) => {
     return next(new Error("Authentication required"));
   }
 
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, AUTHENTICATION_SECRET, (err, decoded) => {
     if (err) {
       return next(new Error("Invalid or expired token"));
     }

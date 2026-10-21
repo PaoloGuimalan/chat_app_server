@@ -7,6 +7,8 @@ const { decryptNonce } = require("./crypto");
 const { isUniqueNonce } = require("../redis/pubsub");
 const message = require("../../schema/messages/message");
 const JWT_SECRET = process.env.JWT_SECRET;
+// Server-only login/session key; JWT_SECRET remains the client envelope key.
+const AUTHENTICATION_SECRET = process.env.AUTHENTICATION_SECRET;
 
 const jwtchecker = async (req, res, next) => {
   const token = req.headers["x-access-token"];
@@ -44,7 +46,7 @@ const jwtchecker = async (req, res, next) => {
   }
 
   if (token) {
-    jwt.verify(token, JWT_SECRET, async (err, decode) => {
+    jwt.verify(token, AUTHENTICATION_SECRET, async (err, decode) => {
       if (err) {
         console.log(err);
         res.send({ status: false, message: err.message });
@@ -127,7 +129,7 @@ const jwtssechecker = (req, res, next) => {
     }
 
     if (token) {
-      jwt.verify(token, JWT_SECRET, async (err, decode) => {
+      jwt.verify(token, AUTHENTICATION_SECRET, async (err, decode) => {
         if (err) {
           res.sse(type, { status: false, auth: false, message: err.message });
         } else {

@@ -349,11 +349,11 @@ router.post("/leave-room-keepalive", async (req, res) => {
   }
 
   const jwt = require("jsonwebtoken");
-  const JWT_SECRET = process.env.JWT_SECRET;
+  const AUTHENTICATION_SECRET = process.env.AUTHENTICATION_SECRET;
 
   let entityID;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, AUTHENTICATION_SECRET);
     entityID = decoded.entityID;
   } catch (err) {
     res.status(401).send({ status: false, message: "Invalid token" });
