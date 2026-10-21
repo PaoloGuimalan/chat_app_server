@@ -79,10 +79,13 @@ const REPLIED_MESSAGE_LOOKUP = Object.freeze({
     pipeline: [
       {
         $match: {
+          // Keep the nonempty-id guard on the foreign field. Combining a
+          // variable-only guard with equality inside $expr made this lookup
+          // scan messages instead of using the existing messageID index.
           $expr: {
             $and: [
-              { $gt: ["$$repliedID", ""] },
               { $eq: ["$messageID", "$$repliedID"] },
+              { $gt: ["$messageID", ""] },
             ],
           },
         },

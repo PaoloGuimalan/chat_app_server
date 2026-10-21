@@ -14,4 +14,6 @@ const sessions = mongoose.Schema({
   lastSeen: { type: Date, default: null },
 });
 
+sessions.index({ deviceToken: 1, entityID: 1 });
+
 module.exports = mongoose.model("UserSessions", sessions, "sessions");

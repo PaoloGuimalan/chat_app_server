@@ -45,7 +45,6 @@ const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { queueCommand } = require("../../reusables/hooks/queueCommand");
 const {
-  REPLIED_MESSAGE_LOOKUP,
   LEGACY_REPLYING_TO_EXPR,
   legacyReplyingTo,
   hydrateReplyTargets,
@@ -59,7 +58,7 @@ const {
 const { parseCommand } = require("../../reusables/hooks/commandParser");
 const { format } = require("path");
 const {
-  GetAllMessageCountInAConversation,
+  GetConversationMessages,
 } = require("../../reusables/models/conversation");
 const {
   sseNotificationsWaiters,
@@ -2560,10 +2559,6 @@ router.get(
     const conversationID = req.params.conversationID;
     const page = req.headers["page"];
     const range = req.headers["range"];
-    const totalmessages = await GetAllMessageCountInAConversation(
-      entity_id,
-      conversationID,
-    );
 
     try {
       // isRealmMember covers both realm-backed (group/channel) conversations
@@ -2580,116 +2575,8 @@ router.get(
       });
     }
 
-    await UserMessage.aggregate([
-      {
-        $match: {
-          conversationID: conversationID,
-        },
-      },
-      // --- START OF NEW CODE: Filter out messages older than cleared_at ---
-      {
-        $lookup: {
-          from: "chat_history", // Matches your chat history collection name
-          let: { msg_conv_id: "$conversationID" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$conversationID", "$$msg_conv_id"] },
-                    { $eq: ["$entityID", entity_id] }, // 'userID' of the requesting user
-                  ],
-                },
-              },
-            },
-          ],
-          as: "historySetting",
-        },
-      },
-      {
-        $unwind: {
-          path: "$historySetting",
-          preserveNullAndEmptyArrays: true, // Keep messages if they never cleared history
-        },
-      },
-      {
-        $match: {
-          $expr: {
-            $gt: [
-              "$messageDate",
-              {
-                $ifNull: [
-                  // Safely handles the date if it is stored as a string or a real Date object
-                  {
-                    $cond: {
-                      if: {
-                        $eq: [
-                          { $type: "$historySetting.cleared_at" },
-                          "string",
-                        ],
-                      },
-                      then: {
-                        $dateFromString: {
-                          dateString: "$historySetting.cleared_at",
-                        },
-                      },
-                      else: "$historySetting.cleared_at",
-                    },
-                  },
-                  new Date(0),
-                ],
-              },
-            ],
-          },
-        },
-      },
-      // --- END OF NEW CODE ---
-      // `replyedmessage`: the quoted message, for either stored replyingTo
-      // shape (bare id, or {type: "message", id}).
-      REPLIED_MESSAGE_LOOKUP,
-      {
-        $project: {
-          "reactionsWithInfo._id": 0,
-          "reactionsWithInfo.birthdate": 0,
-          "reactionsWithInfo.gender": 0,
-          "reactionsWithInfo.email": 0,
-          "reactionsWithInfo.password": 0,
-          "reactionsWithInfo.dateCreated": 0,
-        },
-      },
-      {
-        // messageDate, NOT _id.
-        //
-        // An ObjectId is a 4-byte timestamp at ONE-SECOND resolution, then
-        // five random bytes fixed per PROCESS, then a counter. Two documents
-        // written in the same second by the same process order by the counter
-        // - fine. Written in the same second by DIFFERENT processes they order
-        // by those random bytes, which is arbitrary and, worse, stable:
-        // whichever process drew the lower value always sorts first.
-        //
-        // Node writes a message and worker_service writes a command's reply
-        // ~70ms later, so the two land in the same second nearly every time,
-        // and the reply rendered above the command. It looked intermittent
-        // only because a pair straddling a second boundary sorted correctly on
-        // the timestamp bytes.
-        //
-        // messageDate is millisecond-resolution and written by whoever created
-        // the message, so it orders across processes. _id stays as a tie-break
-        // so the sort is total and $skip/$limit paging cannot shift rows
-        // between pages.
-        $sort: {
-          messageDate: -1,
-          _id: -1,
-        },
-      },
-      {
-        $skip: (parseInt(page) - 1) * parseInt(range),
-      },
-      {
-        $limit: parseInt(range),
-      },
-    ])
-      .then(async (result) => {
+    await GetConversationMessages(entity_id, conversationID, page, range)
+      .then(async ({ messages: result, total: totalmessages }) => {
         const message = result.reverse();
         const flattenedUsersInReactions = message
           .map((mp) => {

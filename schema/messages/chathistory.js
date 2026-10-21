@@ -8,4 +8,7 @@ const chathistory = mongoose.Schema({
   isRestricted: { type: Boolean, default: false },
 });
 
+// Nonunique to retain existing history records and their behavior.
+chathistory.index({ entityID: 1, conversationID: 1 });
+
 module.exports = mongoose.model("ChatHistory", chathistory, "chat_history");
