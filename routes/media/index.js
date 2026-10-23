@@ -16,6 +16,7 @@
 const express = require("express");
 const { jwtchecker } = require("../../reusables/hooks/jwthelper");
 const { getMediaConfig } = require("../../reusables/media/config");
+const { getReservedProfilePaths } = require("../../reusables/routing/profilePaths");
 const {
   createUploads,
   completeUploads,
@@ -37,7 +38,8 @@ const sendError = (res, err) => {
 router.get("/config", async (req, res) => {
   const { limits, transfer } = await getMediaConfig();
   res.set("Cache-Control", "public, max-age=60");
-  res.send({ status: true, limits, transfer });
+  const paths = await getReservedProfilePaths();
+  res.send({ status: true, limits, transfer, reserved_profile_paths: [...paths] });
 });
 
 router.post("/uploads", jwtchecker, async (req, res) => {

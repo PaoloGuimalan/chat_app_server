@@ -57,6 +57,7 @@ const {
 } = require("../../reusables/hooks/replyTargets");
 const { parseCommand } = require("../../reusables/hooks/commandParser");
 const { format } = require("path");
+const { validateProfilePath } = require("../../reusables/routing/profilePaths");
 const {
   GetConversationMessages,
 } = require("../../reusables/models/conversation");
@@ -2952,6 +2953,7 @@ const createRealmReusable = async (
   expires_at = null,
 ) => {
   // const userID = userIDpass; entityID
+  await validateProfilePath(slug, "slug");
   const profile = realmProfile || "N/A";
 
   const client = await pool.getPool();
@@ -3394,6 +3396,7 @@ router.post("/createconference", jwtchecker, async (req, res) => {
  * resolves { profile, cover } - the checked upload records.
  */
 const createPage = async (req, res, fields, getImages) => {
+  await validateProfilePath(fields.slug, "slug");
   const entityID = req.params.entity_id;
 
   const pageID = await checkGroupID(`${makeID(20)}`);
@@ -3427,7 +3430,7 @@ const createPage = async (req, res, fields, getImages) => {
 
   if (!profile || !cover) throw new Error("Error occured during upload");
 
-  createRealmReusable(
+  await createRealmReusable(
     entityID,
     null,
     pageID,
@@ -3486,7 +3489,7 @@ router.post("/createpage", jwtchecker, async (req, res) => {
   } catch (ex) {
     res
       .status(ex.status || 500)
-      .send({ status: false, message: ex.message || ex.toString() });
+      .send({ status: false, message: ex.message || ex.toString(), ...(ex.code ? { code: ex.code, field: ex.field } : {}) });
     console.log(ex);
   }
 });
