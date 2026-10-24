@@ -6,6 +6,7 @@ const { publish, QUEUES } = require("../rabbitmq/workqueue");
 const { isModerationServiceOnline } = require("../redis/pubsub");
 const cassandra = require("cassandra-driver");
 const { query: cassandraQuery } = require("../database/cassandra");
+const { communityAudienceSQL, communityScopeSQL } = require("./communityPosts");
 
 const checkPostIDExisting = async (currentID) => {
   const { rows } = await pool.query(
@@ -244,7 +245,7 @@ const queueContentTagging = async ({ postID, entityID, caption, references }) =>
  * (reusables/hooks/replyTargets.js) both embed this rather than keeping copies.
  * Deletion is NOT part of it; callers decide what a deleted post means.
  */
-const postVisibleToSQL = (postAlias, viewerParam) => `(
+const ordinaryPostVisibleToSQL = (postAlias, viewerParam) => `(
   ${postAlias}.privacy_status = 'public'
   OR ${postAlias}.entity_id = ${viewerParam}
   OR (
@@ -267,6 +268,14 @@ const postVisibleToSQL = (postAlias, viewerParam) => `(
       WHERE pp.post_id = ${postAlias}.post_id
         AND pp.allowed_entity_id = ${viewerParam}
     )
+  )
+)`;
+
+const postVisibleToSQL = (postAlias, viewerParam) => `(
+  ${communityAudienceSQL(postAlias, viewerParam)}
+  OR (
+    NOT EXISTS (${communityScopeSQL(postAlias)})
+    AND ${ordinaryPostVisibleToSQL(postAlias, viewerParam)}
   )
 )`;
 

@@ -75,7 +75,16 @@ const {
   stop_listen,
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const {
+  loadPostCommunity,
+  parseAnonymousFlag,
+  resolveCommunityDestination,
+  validateCommunityInteraction,
+  validateCommunityShare,
+  validateAnonymousUploads,
+} = require("../../reusables/models/communityPosts");
 const { generateUUID } = require("../../reusables/hooks/transformers");
+const { authorizedPostStream } = require("../../reusables/hooks/postActivityStream");
 
 const {
   interactionScoreBump,
@@ -254,7 +263,14 @@ router.get("/userposts/:profileUserID", jwtchecker, async (req, res) => {
     });
 });
 
-const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
+const notifyTaggedUser = async (
+  entityID,
+  username,
+  postID,
+  tagged_users,
+  community = null,
+  isAnonymous = false,
+) => {
   // entityID is the ACTING entity - the realm's entity when posting as a page
   // - whereas `username` comes from req.params.username, which jwtchecker
   // fills from the USER token and so always names the human behind the page.
@@ -263,12 +279,14 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
   // GetSenderDetails resolves whichever the entity actually is, returning the
   // username for a user and the slug for a realm. `username` stays only as a
   // fallback for an entity that resolves to neither.
-  const senderDetails = await GetSenderDetails(entityID);
+  const senderDetails = isAnonymous ? null : await GetSenderDetails(entityID);
   const handle = senderDetails?.handle || username;
 
   // Built once and reused for the stored notification, the SSE broadcast and
   // the push, so the three can't disagree about who did the tagging.
-  const details = `@${handle} tagged you on a post.`;
+  const details = community
+    ? `${isAnonymous ? "An anonymous member" : `@${handle}`} tagged you in a community post.`
+    : `@${handle} tagged you on a post.`;
 
   tagged_users.map(async (mp) => {
     const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
@@ -282,7 +300,7 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
       target: { type: "post", supportingID: postID, anchor: null },
       referenceStatus: false,
       toUserID: mp,
-      fromUserID: entityID,
+      fromUserID: community?.entity_id || entityID,
       content: {
         headline: `You were tagged`,
         details,
@@ -300,7 +318,20 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
     newNotif
       .save()
       .then(async () => {
-        SendTagPostNotification(details, mp);
+        if (community) {
+          publish(`events_${mp}`, "notifications", {
+            status: true,
+            auth: true,
+            message: details,
+            result: {
+              post_id: postID,
+              community_entity_id: community.entity_id,
+              is_anonymous: isAnonymous,
+            },
+          });
+        } else {
+          SendTagPostNotification(details, mp);
+        }
       })
       .catch((err) => {
         console.log(err);
@@ -323,7 +354,8 @@ const notifyTaggedUser = async (entityID, username, postID, tagged_users) => {
     // A tag is about who tagged you, so the thumbnail is their avatar. The
     // post's own image would arguably suit better, but only postID is in
     // scope here and fetching it would cost an extra query on this path.
-    senderAvatarUrl: senderDetails?.profile || "",
+    senderAvatarUrl: community ? "" : senderDetails?.profile || "",
+    communityPostID: community ? postID : "",
     // No route: mobile has no post screen yet, so this falls back to the
     // notifications list - which is where the tag is actionable anyway.
   });
@@ -368,8 +400,20 @@ const createPostFromPayload = async ({
     : null;
 
   try {
+    const isAnonymous = parseAnonymousFlag(decodeToken.is_anonymous);
+    let community = await resolveCommunityDestination(
+      pool,
+      entityID,
+      decodeToken,
+      kind,
+    );
+    decodeToken.tagging = normalizeTagging(decodeToken.tagging);
+
     const filereferencesraw = decodeToken.content.references;
     const content_type = decodeToken.type.contentType;
+    if (community && ["profile", "cover_photo"].includes(content_type)) {
+      throw badRequest("Profile photos cannot be posted in a community");
+    }
     const otherEntityID = decodeToken.otherEntityID;
     const filereferences = filereferencesraw.map((mp) => ({
       name: mp.name || `${postID}_${makeID(20)}`,
@@ -385,22 +429,25 @@ const createPostFromPayload = async ({
     const ownUploads = decodeToken.content.isShared
       ? []
       : await resolveAttachable({
-          urls: [
-            ...filereferences.map((mp) => mp.reference),
-            details?.poster?.url,
-          ],
-          accountID: id,
-          purposes: POST_UPLOAD_PURPOSES,
-        }).catch((err) => {
-          throw Object.assign(new Error(err.message), {
-            status: err.status || 400,
-            publicMessage: err.message,
-          });
+        urls: [
+          ...filereferences.map((mp) => mp.reference),
+          details?.poster?.url,
+        ],
+        accountID: id,
+        purposes: POST_UPLOAD_PURPOSES,
+      }).catch((err) => {
+        throw Object.assign(new Error(err.message), {
+          status: err.status || 400,
+          publicMessage: err.message,
         });
+      });
 
     // A share's references are the shared post's id. A deleted or archived
     // post is gone from every screen, so it is not there to pass on - the
     // same rule the share-as-moment route applies before it gets here.
+    if (isAnonymous && ownUploads.length) {
+      validateAnonymousUploads(ownUploads, community);
+    }
     if (decodeToken.content.isShared) {
       for (const mp of filereferences) {
         const { rows } = await pool.query(
@@ -408,99 +455,19 @@ const createPostFromPayload = async ({
            WHERE post_id = $1 AND deleted_at IS NULL AND is_archived = FALSE`,
           [mp.reference],
         );
-        if (rows.length === 0) throw badRequest("That post can't be shared");
+        if (
+          rows.length === 0 ||
+          !(await CanEntityViewPost(mp.reference, entityID))
+        ) {
+          throw badRequest("That post can't be shared");
+        }
+        const sourceCommunity = await loadPostCommunity(pool, mp.reference, entityID);
+        validateCommunityShare(sourceCommunity, community);
       }
     }
 
     // Already uploaded and checked above - nothing is uploaded here.
     const finaluploadedreferences = filereferences;
-
-    if (decodeToken.content.isShared) {
-      finaluploadedreferences.forEach(async (mp) => {
-        const { rows: query_post_user } = await pool.query(
-          `SELECT 
-              ua.username,
-              ua.id,
-              ua.entity_id AS "entityID" 
-          FROM 
-              newsfeed_post np 
-          JOIN 
-              user_account ua  
-          ON 
-              np.entity_id  = ua.entity_id 
-          WHERE
-              np.post_id = $1
-        `,
-          [mp.reference],
-        );
-
-        if (query_post_user.length > 0) {
-          const post_user = query_post_user[0].entityID;
-
-          if (post_user !== entityID) {
-            interactionScoreBump(entityID, post_user, "SHARE", false);
-            followerInteractionScoreBump(
-              entityID,
-              otherEntityID,
-              "SHARE",
-              false,
-            );
-
-            const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
-            // entityID is the ACTING entity; `username` is always the human
-            // behind it (jwtchecker sets it from the user row), so sharing as
-            // a page credited the owner instead of the page.
-            const sharerDetails = await GetSenderDetails(entityID);
-            // A moment can be a share too ("Share a post" in Create Moment).
-            const shareDetails =
-              kind === POST_KINDS.MOMENT
-                ? `@${sharerDetails?.handle || username} shared your post to their Moment.`
-                : `@${sharerDetails?.handle || username} shared your post.`;
-
-            const notifParams = {
-              notificationID: awaitNotifID,
-              referenceID: postID,
-              // See the tag notification above - stated rather than inferred.
-              target: { type: "post", supportingID: postID, anchor: null },
-              referenceStatus: false,
-              toUserID: post_user,
-              fromUserID: entityID,
-              content: {
-                headline: `Shared post`,
-                details: shareDetails,
-              },
-              date: {
-                date: dateGetter(),
-                time: timeGetter(),
-              },
-              type: "shared_post_notification",
-              isRead: false,
-            };
-
-            const newNotif = new UserNotifications(notifParams);
-            newNotif
-              .save()
-              .then(() => {
-                publish(`events_${post_user}`, `notifications`, {
-                  status: true,
-                  auth: true,
-                  message: shareDetails,
-                  result: "", //encodedResult
-                });
-              })
-              .catch((err) => {
-                console.log(err);
-              });
-          }
-
-          // shares_count is NOT incremented here any more: the worker's
-          // UpdateRankingScore moves the counter itself as part of
-          // recomputing the score, so doing both counts every share twice.
-          updateRankingScore(mp.reference, "share", false);
-        }
-
-      });
-    }
 
     // A private profile's posts default to connections-only. Resolved here,
     // against user_account.is_private, rather than taken from the signed
@@ -511,23 +478,25 @@ const createPostFromPayload = async ({
     // but hidden until a close-friends list exists); anything else it is sent
     // gets the same profile-derived default as a missing choice.
     const requestedPrivacy = decodeToken.privacy?.status;
-    const resolvedPrivacyStatus = await ResolvePostPrivacyStatus(
-      entityID,
-      isEphemeralKind(kind) && !EPHEMERAL_AUDIENCES.includes(requestedPrivacy)
-        ? undefined
-        : requestedPrivacy,
-    );
+    const resolvedPrivacyStatus = community
+      ? "public"
+      : await ResolvePostPrivacyStatus(
+        entityID,
+        isEphemeralKind(kind) && !EPHEMERAL_AUDIENCES.includes(requestedPrivacy)
+          ? undefined
+          : requestedPrivacy,
+      );
 
     // Prepare main post insert
     const postInsertQuery = `
     INSERT INTO newsfeed_post (
       post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
       is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived,
-      expires_at, details
+      expires_at, details, is_anonymous
     ) VALUES (
       $1, $2, $3, $4, $5, $6, to_timestamp($7),
       $8, $9, $10, $11, $12, $13, $14,
-      $15, $16
+      $15, $16, $17
     );
   `;
     const postValues = [
@@ -542,11 +511,12 @@ const createPostFromPayload = async ({
       decodeToken.type.fileType,
       decodeToken.content.data,
       decodeToken.type.contentType,
-      decodeToken.tagging.isTagged,
+      decodeToken.tagging.isTagged || Boolean(community),
       resolvedPrivacyStatus,
       false,
       expiresAt,
       details ? JSON.stringify(details) : null,
+      isAnonymous,
     ];
 
     // A CHECKED-OUT client, not the pool. This was `await pool.getPool()`,
@@ -558,6 +528,17 @@ const createPostFromPayload = async ({
 
     try {
       await client.query("BEGIN");
+      community = await resolveCommunityDestination(client, entityID, decodeToken, kind);
+
+      const { rows: invalidTags } = await client.query(
+        `SELECT 1 FROM community_realm
+         WHERE (entity_id = ANY($1::text[]) OR entity_id = $2) AND type = 'community'
+         LIMIT 1`,
+        [decodeToken.tagging.users, entityID],
+      );
+      if (invalidTags.length) {
+        throw badRequest("Select a community using the post destination");
+      }
 
       // One live thought per entity: posting a new one ends the current one
       // (expires_at = now, row kept - it is history, not garbage).
@@ -590,6 +571,13 @@ const createPostFromPayload = async ({
       }
 
       await client.query(postInsertQuery, postValues);
+      if (community) {
+        await client.query(
+          `INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
+           VALUES ($1, $2, $3)`,
+          [generateUUID(), postID, community.entity_id],
+        );
+      }
 
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
@@ -740,6 +728,91 @@ const createPostFromPayload = async ({
 
       await client.query("COMMIT");
 
+      if (decodeToken.content.isShared) {
+        finaluploadedreferences.forEach(async (mp) => {
+          // The worker increments shares_count while recalculating the score.
+          // Count every committed share, including page and community sources.
+          updateRankingScore(mp.reference, "share", false);
+
+          // Community shares must not reveal the actor through notifications
+          // or social affinity updates.
+          if (
+            community ||
+            await loadPostCommunity(pool, mp.reference, entityID)
+          ) {
+            return;
+          }
+          const { rows: query_post_user } = await pool.query(
+            `SELECT ua.username, ua.id, ua.entity_id AS "entityID"
+             FROM newsfeed_post np
+             JOIN user_account ua ON np.entity_id = ua.entity_id
+             WHERE np.post_id = $1`,
+            [mp.reference],
+          );
+
+          if (query_post_user.length > 0) {
+            const post_user = query_post_user[0].entityID;
+
+            if (post_user !== entityID) {
+              interactionScoreBump(entityID, post_user, "SHARE", false);
+              followerInteractionScoreBump(
+                entityID,
+                otherEntityID,
+                "SHARE",
+                false,
+              );
+
+              const awaitNotifID = await checkNotifID(`NTF_${makeID(20)}`);
+              // entityID is the ACTING entity; `username` is always the human
+              // behind it (jwtchecker sets it from the user row), so sharing as
+              // a page credited the owner instead of the page.
+              const sharerDetails = await GetSenderDetails(entityID);
+              // A moment can be a share too ("Share a post" in Create Moment).
+              const shareDetails =
+              kind === POST_KINDS.MOMENT
+                ? `@${sharerDetails?.handle || username} shared your post to their Moment.`
+                : `@${sharerDetails?.handle || username} shared your post.`;
+
+              const notifParams = {
+                notificationID: awaitNotifID,
+                referenceID: postID,
+                // See the tag notification above - stated rather than inferred.
+                target: { type: "post", supportingID: postID, anchor: null },
+                referenceStatus: false,
+                toUserID: post_user,
+                fromUserID: entityID,
+                content: {
+                  headline: `Shared post`,
+                  details: shareDetails,
+                },
+                date: {
+                  date: dateGetter(),
+                  time: timeGetter(),
+                },
+                type: "shared_post_notification",
+                isRead: false,
+              };
+
+              const newNotif = new UserNotifications(notifParams);
+              newNotif
+                .save()
+                .then(() => {
+                  publish(`events_${post_user}`, `notifications`, {
+                    status: true,
+                    auth: true,
+                    message: shareDetails,
+                    result: "", //encodedResult
+                  });
+                })
+                .catch((err) => {
+                  console.log(err);
+                });
+            }
+          }
+        });
+      }
+
+
       attachRecords(ownUploads, { type: "post", id: postID });
 
       createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
@@ -790,16 +863,23 @@ const createPostFromPayload = async ({
         SELECT entity_id AS "entityID"
         FROM user_account
         WHERE entity_id = ANY($1)
+          AND ($2::text IS NULL OR EXISTS (
+            SELECT 1 FROM community_member m
+            WHERE m.entity_id = user_account.entity_id AND m.realm_id = $2
+          ))
       `;
 
         const { rows: userRows } = await client.query(userQuery, [
           taggedUsernames,
+          community?.realm_id || null,
         ]);
         notifyTaggedUser(
           entityID,
           username,
           postID,
           userRows.map((mp) => mp.entityID),
+          community,
+          isAnonymous,
         );
       }
 
@@ -807,7 +887,7 @@ const createPostFromPayload = async ({
     } catch (err) {
       await client.query("ROLLBACK");
       console.error("Transaction error:", err);
-      err.status = 500;
+      if (!err.status) err.status = 500;
       throw err;
     } finally {
       // client.release(); // very important!
@@ -1018,6 +1098,8 @@ router.post(
             contentType: POST_KINDS.MOMENT,
           },
           tagging: normalizeTagging(payload.tagging),
+          community_entity_id: payload.community_entity_id,
+          is_anonymous: payload.is_anonymous,
           privacy: payload.privacy,
           otherEntityID: null,
         },
@@ -1076,6 +1158,8 @@ router.post(
           content: { references: [], data: text, isShared: false },
           type: { fileType: "text", contentType: POST_KINDS.THOUGHT },
           tagging: { isTagged: false, users: [] },
+          community_entity_id: payload.community_entity_id,
+          is_anonymous: payload.is_anonymous,
           privacy: payload.privacy,
         },
       });
@@ -1244,10 +1328,18 @@ router.get(
 
     const redis_event = postActivityChannel(postID);
 
-    listen(redis_event, res);
+    const stream = authorizedPostStream(
+      res,
+      () => CanEntityViewPost(postID, entity_id),
+      async () => {
+        await stop_listen(redis_event, stream);
+        res.end();
+      },
+    );
+    listen(redis_event, stream);
 
     req.on("close", () => {
-      stop_listen(redis_event, res);
+      stream.close();
     });
   },
 );
@@ -1293,15 +1385,17 @@ router.post("/commenttypingbroadcast", jwtchecker, async (req, res) => {
 
     // Names the typer rather than saying "someone" - the indicator shows a
     // handle, and a page typing as itself should read as the page.
-    const typer = await GetSenderDetails(entity_id);
+    const community = await loadPostCommunity(pool, postID, entity_id);
+    const isAnonymous = validateCommunityInteraction(community, req.body.is_anonymous);
+    const typer = isAnonymous ? null : await GetSenderDetails(entity_id);
 
-    BroadcastCommentTyping(postID, entity_id, typer, parentID);
+    BroadcastCommentTyping(postID, entity_id, typer, parentID, isAnonymous);
 
     res.send({ status: true, message: "OK" });
   } catch (ex) {
     console.log(ex);
     res
-      .status(400)
+      .status(ex.status || 400)
       .send({ status: false, message: ex.message || ex.toString() });
   }
 });

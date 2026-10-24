@@ -7,6 +7,7 @@ const { createJWTwExp } = require("./jwthelper");
 const { CountAllUnreadNotifications } = require("../models/notifications");
 const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { notificationAudienceMatch } = require("../models/communityNotifications");
 
 const SSENotificationsTrigger = async (type, ids, details) => {
   // const sseWithUserID = sseNotificationsWaiters[ids.sendFromUser];
@@ -56,12 +57,11 @@ const NotificicationTrigger = async (id, details) => {
 const SendTagPostNotification = async (details, userID) => {
   // const sseWithUserID = sseNotificationsWaiters[userID];
   const UnreadNotificationsTotal = await CountAllUnreadNotifications(userID);
+  const match = await notificationAudienceMatch(pool, { toUserID: userID }, userID);
 
   await UserNotifications.aggregate([
     {
-      $match: {
-        toUserID: userID,
-      },
+      $match: match,
     },
     {
       $lookup: {
@@ -198,8 +198,8 @@ const ReachCallRecepients = (rcp, decodedToken) => {
   const message =
     decodedToken.conversationType == "single"
       ? `${decodedToken.callDisplayName} wants to have a ${
-          decodedToken.callType == "audio" ? "call" : "video call"
-        }`
+        decodedToken.callType == "audio" ? "call" : "video call"
+      }`
       : `${decodedToken.caller.name} is calling in ${decodedToken.callDisplayName}`;
 
   const encodedResult = createJWTwExp({
@@ -360,11 +360,12 @@ const BroadcastPostActivity = (postID, eventType, body) => {
  * Deliberately fire-and-forget and deliberately not persisted. A typing ping
  * that arrives late is worse than one that never arrives, so nothing retries.
  */
-const BroadcastCommentTyping = (postID, entityID, entity, parentID) => {
+const BroadcastCommentTyping = (postID, entityID, entity, parentID, isAnonymous = false) => {
   BroadcastPostActivity(postID, "typing", {
     // Normalised to null so "" and undefined cannot read as a thread id.
     parent_id: parentID ? String(parentID) : null,
-    entity: {
+    ...(isAnonymous ? { is_anonymous: true, actor: null } : {}),
+    entity: isAnonymous ? null : {
       entity_id: String(entityID),
       handle: entity?.handle ?? null,
       name: entity?.display_name ?? null,

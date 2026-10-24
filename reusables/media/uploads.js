@@ -28,6 +28,8 @@ const { checkExistingFileID } = require("../models/files");
 const { checkExistingMessageID } = require("../models/messages");
 const { isRealmMember } = require("../models/realms");
 const { hasPermission } = require("../hooks/permissionChecker");
+const pool = require("../database/postgres");
+const { parseAnonymousFlag, resolveCommunityDestination } = require("../models/communityPosts");
 const makeID = require("../hooks/makeID");
 const { cleanFileName, kindOf } = require("./fileNames");
 const dateGetter = require("../hooks/getDate");
@@ -75,6 +77,9 @@ const typesAgree = (declared, detected) => {
 };
 
 const keyFor = ({ purpose, accountID, context, messageID, folderID, name }) => {
+  if (context.is_anonymous) {
+    return `uploads/communities/${context.community_entity_id}/${folderID}/${name}`;
+  }
   if (MESSAGE_PURPOSES.has(purpose)) {
     return `uploads/messages/${context.conversationID}/${messageID}/${name}`;
   }
@@ -88,6 +93,12 @@ const keyFor = ({ purpose, accountID, context, messageID, folderID, name }) => {
 
 /** Throws unless the caller may upload into this context. */
 const assertContext = async ({ purpose, entityID, context }) => {
+  if (context.community_entity_id || context.is_anonymous) {
+    if (!["post_media", "comment"].includes(purpose) || context.realmID || context.conversationID) {
+      throw new MediaUploadError("Community media is only available for posts and comments");
+    }
+    await resolveCommunityDestination(pool, entityID, context, "feed");
+  }
   if (MESSAGE_PURPOSES.has(purpose)) {
     if (!context.conversationID) throw new MediaUploadError("Missing conversation");
     try {
@@ -109,12 +120,15 @@ const assertContext = async ({ purpose, entityID, context }) => {
 
 const cleanContext = (raw) => {
   const context = {};
-  for (const field of ["conversationID", "realmID"]) {
+  for (const field of ["conversationID", "realmID", "community_entity_id"]) {
     const value = raw?.[field];
     if (value === undefined || value === null || value === "") continue;
     // Both name a storage folder.
     if (!/^[\w-]{1,150}$/.test(String(value))) throw new MediaUploadError(`Invalid ${field}`);
     context[field] = String(value);
+  }
+  if (raw?.is_anonymous !== undefined) {
+    context.is_anonymous = parseAnonymousFlag(raw.is_anonymous);
   }
   return context;
 };
@@ -187,14 +201,14 @@ const createUploads = async ({ accountID, entityID, purpose, files, context: raw
       const multipart =
         plan.mode === "multipart"
           ? {
-              uploadId: await storage.startMultipart({
-                key,
-                contentType,
-                disposition: dispositionFor(contentType, name),
-              }),
-              partSize: plan.partSize,
-              partCount: plan.parts.length,
-            }
+            uploadId: await storage.startMultipart({
+              key,
+              contentType,
+              disposition: dispositionFor(contentType, name),
+            }),
+            partSize: plan.partSize,
+            partCount: plan.parts.length,
+          }
           : undefined;
 
       const record = await UploadedFiles.create({
@@ -367,11 +381,11 @@ const completeUploads = async ({ accountID, uploads }) => {
     result.status === "fulfilled"
       ? { ok: true, ...result.value }
       : {
-          ok: false,
-          uploadID: uploads[i]?.uploadID,
-          status: result.reason?.status || 500,
-          message: result.reason?.message || "Couldn't finish the upload",
-        },
+        ok: false,
+        uploadID: uploads[i]?.uploadID,
+        status: result.reason?.status || 500,
+        message: result.reason?.message || "Couldn't finish the upload",
+      },
   );
 };
 

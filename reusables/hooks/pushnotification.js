@@ -86,6 +86,7 @@ class PushNotification {
     // open, so it counts as online - and would never hear its phone ring.
     // The app drops whichever of the push and the live event comes second.
     allDevices = false,
+    communityPostID = "",
   }) {
     const receivers = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
       .filter(Boolean)
@@ -117,6 +118,7 @@ class PushNotification {
       os_rendered: !!osRendered,
       ttl_seconds: Math.max(0, Math.floor(Number(ttlSeconds) || 0)),
       all_devices: !!allDevices,
+      ...(communityPostID ? { community_post_id: String(communityPostID) } : {}),
       data: stringData,
     });
   }
@@ -279,9 +281,11 @@ class PushNotification {
     imageUrl = "",
     senderAvatarUrl = "",
     osRendered = false,
+    communityPostID = "",
   }) {
     return this.send({
       entityIDs: receivers,
+      communityPostID,
       channelId: CHANNEL_ACTIVITY,
       osRendered,
       title,

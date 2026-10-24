@@ -11,7 +11,31 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const Conversation = require("../../schema/messages/conversation");
-const { SaveConversation } = require("./messages");
+const { SaveConversation, AddNewMemberToContacts } = require("./messages");
+const pool = require("../database/postgres");
+
+test.beforeEach((t) => {
+  t.mock.method(pool, "query", async () => ({ rows: [] }));
+});
+
+test("a community participant cannot create or update a conversation", async (t) => {
+  t.mock.method(pool, "query", async () => ({ rows: [{ type: "community" }] }));
+  t.mock.method(Conversation, "findOneAndUpdate", () => assert.fail("must not write a conversation"));
+  await assert.rejects(
+    SaveConversation("ordinary-group", "group", "user", null, ["community-entity"]),
+    /Communities do not support messaging/,
+  );
+});
+
+test("adding a community entity to an ordinary group is rejected before membership insertion", async (t) => {
+  const queries = [];
+  t.mock.method(pool, "query", async (sql, params) => {
+    queries.push(sql);
+    return { rows: params[0].includes("community-entity") ? [{ type: "community" }] : [] };
+  });
+  await assert.rejects(AddNewMemberToContacts("ordinary-group", "community-entity", "actor"), /messaging/);
+  assert.equal(queries.some((sql) => sql.includes("INSERT")), false);
+});
 
 const capture = () => {
   const calls = [];

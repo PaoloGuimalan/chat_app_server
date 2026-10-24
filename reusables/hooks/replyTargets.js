@@ -289,6 +289,7 @@ const loadPostTargets = async (postIDs, viewerEntityID, depth = 0) => {
       p.entity_id,
       p.on_feed,
       p.caption,
+      p.is_anonymous,
       p.file_type,
       p.details -> 'poster' ->> 'url' AS poster_url,
       p.is_archived,
@@ -351,13 +352,13 @@ const postTargetCard = (target, row, handles, viewerEntityID) => {
   const kind = row.on_feed;
   const type =
     kind === POST_KINDS.MOMENT || kind === POST_KINDS.THOUGHT ? kind : "post";
-  const author = authorCard(row.entity_id, handles);
+  const author = row.is_anonymous ? null : authorCard(row.entity_id, handles);
   const isAuthor = String(row.entity_id) === String(viewerEntityID);
 
   // Archiving hides a post from everyone but its author - same as the
   // preview page does.
   if (!row.can_view || (row.is_archived && !isAuthor)) {
-    return { type, id: target.id, status: "unavailable", author };
+    return { type, id: target.id, status: "unavailable", author: null };
   }
 
   const expiresAt = row.expires_at ? new Date(row.expires_at).toISOString() : null;
@@ -408,7 +409,14 @@ const postTargetCard = (target, row, handles, viewerEntityID) => {
     };
   }
 
-  return { type, id: target.id, status: "active", author, content };
+  return {
+    type,
+    id: target.id,
+    status: "active",
+    author,
+    content,
+    ...(row.is_anonymous ? { is_anonymous: true } : {}),
+  };
 };
 
 // The card for a message reply, from the $lookup the route already ran.
@@ -432,12 +440,12 @@ const messageTargetCard = (target, repliedMessage, handles) => {
     messageType === POST_MESSAGE_TYPE
       ? { message_type: messageType, text: POST_MESSAGE_PREVIEW }
       : messageType === "text" || messageType === "notif"
-      ? {
+        ? {
           message_type: messageType,
           text: clip(repliedMessage.content) || replyPreviewLabel(repliedMessage.replyingTo) || "",
           ...(attachedType ? { attached_type: attachedType } : {}),
         }
-      : { message_type: messageType, url: repliedMessage.content || null };
+        : { message_type: messageType, url: repliedMessage.content || null };
 
   return { ...target, status: "active", author, content };
 };

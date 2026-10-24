@@ -116,6 +116,19 @@ const ask = (overrides) =>
     ...overrides,
   });
 
+test("anonymous community media URLs contain no account or posting identity", async () => {
+  const w = world();
+  const query = pg.query;
+  pg.query = async (sql, params) => sql.includes("FOR SHARE OF r, m")
+    ? { rows: [{ entity_id: "community", realm_id: "realm", is_private: true }] }
+    : query(sql, params);
+  const [upload] = await ask({ context: { community_entity_id: "community", is_anonymous: true } });
+  assert.match(upload.fileUrl, /\/uploads\/communities\/community\/[0-9a-f-]{36}\/photo\.png$/);
+  assert.equal(upload.fileUrl.includes("acc1"), false);
+  assert.equal(w.records[0].ownerAccount, "acc1");
+  assert.equal(w.records[0].ownerEntity, "ent1");
+});
+
 test("Notes use the existing confirmed bucket URL flow", async () => {
   const w = world();
   const [upload] = await ask({ purpose: "notes" });

@@ -1,8 +1,10 @@
 const pool = require("../database/postgres");
 const { AddNewMemberToContacts } = require("./messages");
 const Conversations = require("../../schema/messages/conversation");
+const { assertMessagingTarget, canUseMessaging } = require("./realmCapabilities");
 
-const isRealmMember = async (realm_id, entity_id) => {
+const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) => {
+  if (forMessaging) await assertMessagingTarget(pool, realm_id, entity_id);
   const { rows: realm_row } = await pool.query(
     `SELECT * FROM community_realm WHERE realm_id = $1`,
     [realm_id],
@@ -10,6 +12,9 @@ const isRealmMember = async (realm_id, entity_id) => {
 
   if (realm_row.length > 0) {
     const realm = realm_row[0];
+    if (forMessaging && !canUseMessaging(realm.type)) {
+      throw new Error("Communities do not support messaging");
+    }
 
     if (realm.type === "conference" && !realm.is_private) {
       await AddNewMemberToContacts(realm_id, entity_id, entity_id);
@@ -52,6 +57,12 @@ const isRealmMember = async (realm_id, entity_id) => {
 
   if (connectionRows.rows.length === 0 && mongoConversation === null) {
     throw new Error("You do not have access to this conversation");
+  }
+  if (forMessaging && mongoConversation) {
+    if (!canUseMessaging(mongoConversation.conversationType)) {
+      throw new Error("Communities do not support messaging");
+    }
+    await assertMessagingTarget(pool, ...(mongoConversation.participant_ids || []));
   }
 };
 

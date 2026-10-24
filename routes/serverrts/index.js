@@ -7,6 +7,7 @@ const timeGetter = require("../../reusables/hooks/getTime");
 const makeID = require("../../reusables/hooks/makeID");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const router = express.Router();
+const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
 const {
   LEGACY_REPLYING_TO_EXPR,
 } = require("../../reusables/hooks/replyTargets");
@@ -650,6 +651,7 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const serverID = decodedToken.serverID;
     const memberstoadd = decodedToken.memberstoadd;
+    await assertMessagingTarget(pool, entityID, ...memberstoadd.map((member) => member.entityID));
 
     const isrealmpub = await isRealmPublic(serverID);
 

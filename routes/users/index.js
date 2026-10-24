@@ -1,6 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
+const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
+const {
+  notificationAudienceMatch,
+  authorizedNotificationStream,
+} = require("../../reusables/models/communityNotifications");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const Axios = require("axios");
@@ -140,6 +145,7 @@ const {
 const {
   POST_KINDS,
   postVisibleToSQL,
+  CanEntityViewPost,
   updateRankingScore,
   logPostShare,
 } = require("../../reusables/models/posts");
@@ -703,12 +709,11 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
   const page = req.headers["page"];
   const range = req.headers["range"];
   const UnreadNotificationsTotal = await CountAllUnreadNotifications(entity_id);
+  const match = await notificationAudienceMatch(pool, { toUserID: entity_id }, entity_id);
 
   await UserNotifications.aggregate([
     {
-      $match: {
-        toUserID: entity_id,
-      },
+      $match: match,
     },
     {
       $facet: {
@@ -909,7 +914,8 @@ const notificationSectionMatch = (entity_id, section, audienceContext) => {
 // already-read because its single document is shared by every recipient and
 // could never track per-viewer state; a directly-addressed one is stored
 // unread and /readnotifications flips it as usual.
-const fetchNotificationSection = async (match, page, range) => {
+const fetchNotificationSection = async (match, page, range, viewerID) => {
+  match = await notificationAudienceMatch(pool, match, viewerID || match.toUserID);
   const result_raw = await UserNotifications.aggregate([
     { $match: match },
     {
@@ -1014,16 +1020,19 @@ router.get("/v2/notifications/overview", jwtchecker, async (req, res) => {
         notificationSectionMatch(entity_id, "activity"),
         1,
         previewRange,
+        entity_id,
       ),
       fetchNotificationSection(
         notificationSectionMatch(entity_id, "connections"),
         1,
         previewRange,
+        entity_id,
       ),
       fetchNotificationSection(
         notificationSectionMatch(entity_id, "system"),
         1,
         previewRange,
+        entity_id,
       ),
     ]);
 
@@ -1080,6 +1089,7 @@ const notificationSectionRoute = (section) => async (req, res) => {
       notificationSectionMatch(entity_id, section),
       page,
       range,
+      entity_id,
     );
     const senderMap = await enrichNotificationSenders([data.items]);
 
@@ -1131,7 +1141,7 @@ router.get(
 const groupedNotificationSection = async (entity_id, section, page, range) => {
   const data = await fetchGroupedNotificationSection(
     UserNotifications,
-    notificationSectionMatch(entity_id, section),
+    await notificationAudienceMatch(pool, notificationSectionMatch(entity_id, section), entity_id),
     page,
     range,
   );
@@ -1975,9 +1985,9 @@ router.post(
         ...(Array.isArray(decodedToken.targets) ? decodedToken.targets : []),
         ...(Array.isArray(decodedToken.conversationIDs)
           ? decodedToken.conversationIDs.map((id) => ({
-              kind: "conversation",
-              id,
-            }))
+            kind: "conversation",
+            id,
+          }))
           : []),
       ];
       const seen = new Set();
@@ -2079,23 +2089,23 @@ router.post(
             req.params,
             hasNote
               ? {
-                  pendingID: null,
-                  conversationID,
-                  conversationType,
-                  content: note,
-                  messageType: "text",
-                  isReply: true,
-                  replyingTo: { type: targetType, id: postID },
-                }
+                pendingID: null,
+                conversationID,
+                conversationType,
+                content: note,
+                messageType: "text",
+                isReply: true,
+                replyingTo: { type: targetType, id: postID },
+              }
               : {
-                  pendingID: null,
-                  conversationID,
-                  conversationType,
-                  content: postID,
-                  messageType: POST_MESSAGE_TYPE,
-                  isReply: false,
-                  replyingTo: "",
-                },
+                pendingID: null,
+                conversationID,
+                conversationType,
+                content: postID,
+                messageType: POST_MESSAGE_TYPE,
+                isReply: false,
+                replyingTo: "",
+              },
           );
           results.push({ ...target, conversationID, status: true, messageID });
         } catch (err) {
@@ -2708,6 +2718,8 @@ const sendMessageInitForGC = async (
   message,
   type,
 ) => {
+  if (type === "community") return;
+  await assertMessagingTarget(pool, convID, entityID, ...recs);
   const messageID = await checkExistingMessageID(makeID(30));
   const conversationID = convID;
   const sender = entityID;
@@ -2823,6 +2835,7 @@ router.post(
       const groupName = decodeToken.groupName;
       const privacy = decodeToken.privacy;
       const allReceivers = [entity_id, ...otherUsers];
+      await assertMessagingTarget(client, ...allReceivers);
       const userReceivers = allReceivers.map((alr, i) => ({
         entityID: alr,
       }));
@@ -2963,6 +2976,7 @@ const createRealmReusable = async (
     const privacy = privacyprop;
 
     const allReceivers = userReceivers.map((mp) => mp.entityID);
+    await assertMessagingTarget(client, ...allReceivers);
 
     // Members are ENTITIES - a page can be a member of a group/server/channel
     // just as a person can (community_member.entity_id FKs entity_entity).
@@ -3099,7 +3113,7 @@ const createRealmReusable = async (
       console.log("Failed to broadcast realm creation:", publishErr);
     }
 
-    if (type !== "server" && type !== "voice" && type !== "page") {
+    if (!["server", "voice", "page", "community"].includes(type)) {
       // Optional-chained: this used to index [0] unguarded, so it threw
       // whenever the creator wasn't in `rows` - which was ALWAYS the case
       // when creating while acting as a page, since the old lookup only
@@ -3137,6 +3151,9 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const memberstoadd = decodedToken.otherUsers;
     const privacy = decodedToken.privacy;
     const type = decodedToken.type; // channel or voice
+    if (!["channel", "voice"].includes(type)) {
+      return res.status(400).send({ status: false, message: "Choose a text or voice channel" });
+    }
     const groupName = decodedToken.groupName;
 
     const allReceivers = [entityID, ...memberstoadd];
@@ -3318,13 +3335,13 @@ router.post("/createconference", jwtchecker, async (req, res) => {
     );
     const inviteAccounts = inviteEmailList.length
       ? await pool.query(
-          `
+        `
             SELECT id, email, entity_id
             FROM user_account
             WHERE LOWER(email) = ANY($1::text[])
           `,
-          [inviteEmailList],
-        )
+        [inviteEmailList],
+      )
       : { rows: [] };
     const inviteAccountMap = new Map(
       inviteAccounts.rows.map((mp) => [
@@ -4013,7 +4030,8 @@ router.get(
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
     const redis_event = `events_${entity_id}`;
 
-    listen(redis_event, res);
+    const stream = authorizedNotificationStream(res, (postID) => CanEntityViewPost(postID, entity_id));
+    listen(redis_event, stream);
 
     const activeMetaData = {
       _id: entity_id,
@@ -4032,7 +4050,7 @@ router.get(
     });
 
     req.on("close", () => {
-      stop_listen(redis_event, res);
+      stop_listen(redis_event, stream);
       const disconnectMetaData = {
         _id: entity_id,
         sessionStatus: false,

@@ -19,6 +19,7 @@ const {
 const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
+const { assertMessagingTarget } = require("./realmCapabilities");
 
 // The first of `messageID` and fresh ids that no message uses yet. Used to
 // recurse without returning the result (a collision resolved to undefined),
@@ -59,6 +60,7 @@ const AddNewMemberToContacts = async (
   entityID,
   added_by_id = null,
 ) => {
+  await assertMessagingTarget(pool, contactID, entityID, added_by_id);
   const member_id = uuidv4(); // generate a unique UUID for member_id
   const date_joined = new Date(); // current timestamp
 
@@ -104,7 +106,7 @@ const AddNewMemberToAllMessages = async (conversationID, userID) => {
   return true;
 };
 
-const SaveConversation = (
+const SaveConversation = async (
   conversationID,
   conversationType = "single",
   senderType = "user",
@@ -117,9 +119,13 @@ const SaveConversation = (
   messageType = "text",
   isDeleted = false,
 ) => {
+  if (conversationType === "community") {
+    return Promise.reject(new Error("Communities do not support messaging"));
+  }
   if (!conversationID) {
     return Promise.reject(new Error("conversationID is required"));
   }
+  await assertMessagingTarget(pool, conversationID, sender, ...participant_ids);
 
   const normalizedPayload = {
     conversationID,
@@ -178,9 +184,10 @@ const NotificationMessageForConversations = async (
   // notif document (and a conversation document) typed "channel". That is fixed
   // where it belongs, at the call site, by selecting the channel's real type.
   const assertedType = normalizeConversationType(convType);
-  if (assertedType === "voice" || assertedType === "page") {
+  if (["voice", "page", "community"].includes(assertedType)) {
     return;
   }
+  await assertMessagingTarget(pool, convID);
 
   const messageID = await checkExistingMessageID(makeid(30));
   const conversationID = convID;
@@ -336,6 +343,7 @@ const SyncConversationParticipants = async (conversationID) => {
   if (!conversationID) {
     throw new Error("conversationID is required");
   }
+  await assertMessagingTarget(pool, conversationID);
 
   const existingConversation = await Conversation.findOne({
     conversationID,
@@ -344,6 +352,7 @@ const SyncConversationParticipants = async (conversationID) => {
   if (!existingConversation) {
     return null;
   }
+  await assertMessagingTarget(pool, ...(existingConversation.participant_ids || []));
 
   const receiversfetch = await GetAllReceivers(conversationID);
   const participantIDs = [
@@ -360,6 +369,7 @@ const SyncConversationParticipants = async (conversationID) => {
 };
 
 const GetAllReceivers = async (contactID) => {
+  await assertMessagingTarget(pool, contactID);
   // BOTS are the third entity kind and are resolved here like any other
   // participant. This is the linchpin for bots in chat: `username` is what
   // /sendMessage builds its mention map from, so without the bot_bot join a
@@ -387,6 +397,7 @@ const GetAllReceivers = async (contactID) => {
   );
 
   if (rows_connections.length > 0) {
+    await assertMessagingTarget(pool, ...rows_connections.map((member) => member.entity_id));
     return {
       users: rows_connections.map((mp) => ({
         userID: mp.id,
@@ -411,6 +422,7 @@ const GetAllReceivers = async (contactID) => {
   );
 
   if (rows_members.length > 0) {
+    await assertMessagingTarget(pool, ...rows_members.map((member) => member.entity_id));
     return {
       users: rows_members.map((mp) => ({
         userID: mp.id,
@@ -423,6 +435,7 @@ const GetAllReceivers = async (contactID) => {
   const conversation = await Conversation.findOne({
     conversationID: contactID,
   });
+  await assertMessagingTarget(pool, ...(conversation?.participant_ids || []));
 
   const { rows: receiversFromChatHistory } = await pool.query(
     `SELECT 
@@ -463,6 +476,7 @@ const AddNewMemberToChannels = async (
     const decodedToken = token;
     const conversationID = decodedToken.conversationID;
     const memberstoadd = decodedToken.memberstoadd;
+    await assertMessagingTarget(pool, conversationID, entityID, ...memberstoadd.map((member) => member.entityID));
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = [
       ...decodedToken.receivers,

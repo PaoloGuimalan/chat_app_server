@@ -43,6 +43,7 @@ const {
   formatToDesiredStructure,
 } = require("../../reusables/hooks/transformers");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
 const { listCommands } = require("../../reusables/hooks/commandResolver");
 const {
   GetUsersWithConnectionIDs,
@@ -979,6 +980,7 @@ router.post("/addnewmember", jwtchecker, async (req, res) => {
     const decodedToken = jwt.verify(token, JWT_SECRET);
     const conversationID = decodedToken.conversationID;
     const memberstoadd = decodedToken.memberstoadd;
+    await assertMessagingTarget(pool, conversationID, entityID, ...memberstoadd.map((member) => member.entityID));
     const receiversfetch = await GetAllReceivers(conversationID);
     const receivers = [
       ...decodedToken.receivers,
@@ -1579,91 +1581,91 @@ router.get("/conversations", jwtchecker, async (req, res) => {
     const unreadByConversation =
       paginatedConversationIDs.length > 0
         ? await UserMessage.aggregate([
-            {
-              $match: {
-                conversationID: { $in: paginatedConversationIDs },
-              },
+          {
+            $match: {
+              conversationID: { $in: paginatedConversationIDs },
             },
-            {
-              $lookup: {
-                from: "chat_history",
-                let: { msg_conv_id: "$conversationID" },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $and: [
-                          { $eq: ["$conversationID", "$$msg_conv_id"] },
-                          { $eq: ["$entityID", entity_id] },
-                        ],
-                      },
+          },
+          {
+            $lookup: {
+              from: "chat_history",
+              let: { msg_conv_id: "$conversationID" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $eq: ["$conversationID", "$$msg_conv_id"] },
+                        { $eq: ["$entityID", entity_id] },
+                      ],
                     },
                   },
-                  // Same duplicate chat_history guard as /conversations above
-                  // - without it, a conversation with a duplicate row would
-                  // fan every one of its messages out into 2+ copies here,
-                  // doubling (or worse) its unread count.
-                  { $limit: 1 },
-                ],
-                as: "historySetting",
-              },
-            },
-            {
-              $unwind: {
-                path: "$historySetting",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    {
-                      $gt: [
-                        "$messageDate",
-                        {
-                          $ifNull: [
-                            {
-                              $cond: {
-                                if: {
-                                  $eq: [
-                                    { $type: "$historySetting.cleared_at" },
-                                    "string",
-                                  ],
-                                },
-                                then: {
-                                  $dateFromString: {
-                                    dateString: "$historySetting.cleared_at",
-                                  },
-                                },
-                                else: "$historySetting.cleared_at",
-                              },
-                            },
-                            new Date(0),
-                          ],
-                        },
-                      ],
-                    },
-                    {
-                      $ne: [
-                        { $ifNull: ["$historySetting.isArchived", false] },
-                        true,
-                      ],
-                    },
-                    {
-                      $not: [{ $in: [entity_id, "$seeners"] }],
-                    },
-                  ],
                 },
+                // Same duplicate chat_history guard as /conversations above
+                // - without it, a conversation with a duplicate row would
+                // fan every one of its messages out into 2+ copies here,
+                // doubling (or worse) its unread count.
+                { $limit: 1 },
+              ],
+              as: "historySetting",
+            },
+          },
+          {
+            $unwind: {
+              path: "$historySetting",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  {
+                    $gt: [
+                      "$messageDate",
+                      {
+                        $ifNull: [
+                          {
+                            $cond: {
+                              if: {
+                                $eq: [
+                                  { $type: "$historySetting.cleared_at" },
+                                  "string",
+                                ],
+                              },
+                              then: {
+                                $dateFromString: {
+                                  dateString: "$historySetting.cleared_at",
+                                },
+                              },
+                              else: "$historySetting.cleared_at",
+                            },
+                          },
+                          new Date(0),
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    $ne: [
+                      { $ifNull: ["$historySetting.isArchived", false] },
+                      true,
+                    ],
+                  },
+                  {
+                    $not: [{ $in: [entity_id, "$seeners"] }],
+                  },
+                ],
               },
             },
-            {
-              $group: {
-                _id: "$conversationID",
-                unread: { $sum: 1 },
-              },
+          },
+          {
+            $group: {
+              _id: "$conversationID",
+              unread: { $sum: 1 },
             },
-          ])
+          },
+        ])
         : [];
 
     const unreadMap = unreadByConversation.reduce((acc, current) => {

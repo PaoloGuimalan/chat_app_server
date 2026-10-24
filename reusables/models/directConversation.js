@@ -15,6 +15,8 @@
 const Conversations = require("../../schema/messages/conversation");
 const makeid = require("../hooks/makeID");
 const { ConnectionCheck } = require("./users");
+const pool = require("../database/postgres");
+const { assertMessagingTarget } = require("./realmCapabilities");
 
 const freshConversationID = async () => {
   for (;;) {
@@ -35,6 +37,7 @@ const findOrCreateDirectConversation = async (entityID, otherEntityID) => {
   if (String(entityID) === String(otherEntityID)) {
     throw new Error("Cannot initialize a direct conversation with yourself.");
   }
+  await assertMessagingTarget(pool, entityID, otherEntityID);
 
   const connection = await ConnectionCheck(entityID, otherEntityID);
   if (connection) {

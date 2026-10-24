@@ -46,6 +46,8 @@ const uploadedfiles = mongoose.Schema({
   attachedTo: [{ _id: false, type: { type: String }, id: { type: String } }],
   // Where it belongs, checked at upload time.
   context: {
+    community_entity_id: { type: String },
+    is_anonymous: { type: Boolean },
     conversationID: { type: String },
     realmID: { type: String },
   },

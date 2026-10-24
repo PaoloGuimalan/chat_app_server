@@ -91,7 +91,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     const account_ids = req.body.account_ids;
     const realm_id = req.body.realm_id;
 
-    await isRealmMember(realm_id, entityID);
+    await isRealmMember(realm_id, entityID, { forMessaging: false });
 
     // Handles for whoever is being removed, person OR page. This used to select
     // FROM user_account, which has no row for a page - so removing a page
@@ -275,11 +275,14 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       [account_ids, realm_id],
     );
 
-    await SyncConversationParticipants(realm_id);
+    if (realm.type !== "community") {
+      await SyncConversationParticipants(realm_id);
+    }
 
     if (
       realm.type !== "page" &&
       realm.type !== "server" &&
+      realm.type !== "community" &&
       realm.type !== "voice"
     ) {
       users.map((mp) => {
