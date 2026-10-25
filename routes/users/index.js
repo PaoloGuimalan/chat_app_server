@@ -966,6 +966,7 @@ const enrichNotificationSenders = async (itemsPerSection) => {
     `SELECT
        e.id AS entity_id,
        e.type,
+       r.type AS realm_type,
        COALESCE(u.username, r.slug, b.handle) AS handle,
        COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), r.name, b.name) AS display_name,
        COALESCE(u.profile, r.profile, b.profile) AS profile,
@@ -983,6 +984,7 @@ const enrichNotificationSenders = async (itemsPerSection) => {
     senderMap.set(String(row.entity_id), {
       entity_id: row.entity_id,
       type: row.type,
+      realm_type: row.realm_type || null,
       display_name: row.display_name,
       handle: row.handle,
       profile:
