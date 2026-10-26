@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const Conversation = require("../../schema/messages/conversation");
-const { publish, QUEUES } = require("../rabbitmq/workqueue");
+const { publish, publishRequired, QUEUES } = require("../rabbitmq/workqueue");
 
 // Channel ids and sound names must match the mobile app exactly
 // (chatterloop_app/lib/core/notifications/notification_renderer.dart). The _v2
@@ -87,6 +87,7 @@ class PushNotification {
     // The app drops whichever of the push and the live event comes second.
     allDevices = false,
     communityPostID = "",
+    required = false,
   }) {
     const receivers = (Array.isArray(entityIDs) ? entityIDs : [entityIDs])
       .filter(Boolean)
@@ -107,7 +108,8 @@ class PushNotification {
         .map(([key, value]) => [key, String(value)]),
     );
 
-    return publish(QUEUES.SEND_PUSH, {
+    const enqueue = required ? publishRequired : publish;
+    return enqueue(QUEUES.SEND_PUSH, {
       entity_ids: receivers,
       tokens: tokens || [],
       channel: channelId,

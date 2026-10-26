@@ -199,33 +199,56 @@ const storedList = (field) => ({
 /// Every branch builds the same shape in the same field order - a document
 /// key compares field by field, in order - and the default is the row's own
 /// _id, so anything not provably groupable is a group of one.
-const groupKeyExpression = (specs = GROUP_SPECS) => ({
+const communityOf = (communities) => ({
+  $ifNull: [
+    "$community_entity_id",
+    communities.length ? {
+      $switch: {
+        branches: communities.map((community) => ({
+          case: { $eq: ["$fromUserID", String(community.entity_id)] },
+          then: String(community.entity_id),
+        })),
+        default: null,
+      },
+    } : null,
+  ],
+});
+
+const groupKeyExpression = (specs = GROUP_SPECS, communities = []) => ({
   $switch: {
-    branches: specs.map((spec) => {
-      const thing = thingOf(spec);
-      const conditions = [{ $eq: ["$type", spec.type] }, present(thing)];
-      if (spec.headline) {
-        conditions.push({ $eq: ["$content.headline", spec.headline] });
-      }
-      if (spec.by === "targetAnchor") {
-        conditions.push(present("$target.anchor"));
-      }
-      return {
-        case: { $and: conditions },
+    branches: [
+      {
+        case: present(communityOf(communities)),
         then: {
-          // A family keys on its name, so its types share one row.
-          type: spec.family || "$type",
-          headline: spec.headline && !spec.family ? "$content.headline" : null,
-          thing,
-          anchor: spec.by === "targetAnchor" ? "$target.anchor" : null,
-          // Stored buttons and destinations are part of WHAT the row does, so
-          // they are part of the key - unless every button stays on its own
-          // row (memberActions). See the header.
-          actions: spec.memberActions ? null : storedList("$actions"),
-          redirects: spec.memberActions ? null : storedList("$redirects"),
+          type: "community", headline: null,
+          thing: { $ifNull: ["$community_entity_id", "$fromUserID"] },
+          anchor: null, actions: null, redirects: null,
         },
-      };
-    }),
+      },
+      ...specs.map((spec) => {
+        const thing = thingOf(spec);
+        const conditions = [{ $eq: ["$type", spec.type] }, present(thing)];
+        if (spec.headline) {
+          conditions.push({ $eq: ["$content.headline", spec.headline] });
+        }
+        if (spec.by === "targetAnchor") {
+          conditions.push(present("$target.anchor"));
+        }
+        return {
+          case: { $and: conditions },
+          then: {
+            // A family keys on its name, so its types share one row.
+            type: spec.family || "$type",
+            headline: spec.headline && !spec.family ? "$content.headline" : null,
+            thing,
+            anchor: spec.by === "targetAnchor" ? "$target.anchor" : null,
+            // Stored buttons and destinations remain part of ordinary keys.
+            actions: spec.memberActions ? null : storedList("$actions"),
+            redirects: spec.memberActions ? null : storedList("$redirects"),
+          },
+        };
+      }),
+    ],
     default: { single: "$_id" },
   },
 });
@@ -234,6 +257,7 @@ const groupKeyExpression = (specs = GROUP_SPECS) => ({
 /// to label a group. Null for a group of one.
 const specFor = (doc, specs = GROUP_SPECS) => {
   if (!doc) return null;
+  if (doc.community_entity_id) return { family: "community", by: "community", memberActions: true };
   for (const spec of specs) {
     if (doc.type !== spec.type) continue;
     if (spec.headline && doc.content?.headline !== spec.headline) continue;
@@ -254,6 +278,7 @@ const joinPhrases = (phrases) =>
 const groupSentence = (items, specs = GROUP_SPECS) => {
   const spec = specFor(items[0], specs);
   if (!spec) return null;
+  if (spec.family === "community") return `had activity in ${items.find((item) => item.community_name)?.community_name || "your community"}`;
   if (!spec.family) return spec.action;
   const phrases = [];
   for (const item of items) {
@@ -293,13 +318,14 @@ const fetchGroupedNotificationSection = async (
   match,
   page,
   range,
+  communities = [],
 ) => {
   const skip = (parseInt(page) - 1) * parseInt(range);
   const result = await UserNotifications.aggregate(
     [
       { $match: match },
       { $sort: { _id: -1 } },
-      { $addFields: { _groupKey: groupKeyExpression() } },
+      { $addFields: { _groupKey: groupKeyExpression(GROUP_SPECS, communities) } },
       {
         $group: {
           _id: "$_groupKey",
@@ -352,6 +378,7 @@ const fetchGroupedNotificationSection = async (
       .filter(Boolean);
     return {
       key: groupIdOf(row._id),
+      ...(row._id?.type === "community" ? { family: "community", community_entity_id: row._id.thing } : {}),
       count: row.count,
       unread: row.unread,
       actorCount: row.actorCount,

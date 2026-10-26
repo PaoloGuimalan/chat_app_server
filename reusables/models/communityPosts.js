@@ -45,6 +45,23 @@ const resolveCommunityDestination = async (client, entityID, payload, kind) => {
   return rows[0];
 };
 
+// Only the authenticated realm-media route calls the trusted post helper.
+// This resolves its author from the realm row instead of accepting an author
+// identity from a request, and locks that row while its photo/post are updated.
+const loadCommunityMediaRealm = async (client, realmID, lock = false) => {
+  const { rows } = await client.query(
+    `SELECT r.realm_id, r.entity_id, r.is_private, r.profile, r.cover_photo
+     FROM community_realm r
+     WHERE r.realm_id = $1 AND r.type = 'community' AND r.is_active = TRUE
+     ${lock ? "FOR UPDATE OF r" : ""}`,
+    [realmID],
+  );
+  if (rows.length !== 1) {
+    throw communityError("Community not available", 404);
+  }
+  return rows[0];
+};
+
 const loadPostCommunity = async (client, postID, viewerID) => {
   const { rows } = await client.query(
     `SELECT r.entity_id, r.realm_id, r.is_private, r.is_active,
@@ -120,6 +137,7 @@ module.exports = {
   communityAudienceSQL,
   communityScopeSQL,
   loadPostCommunity,
+  loadCommunityMediaRealm,
   parseAnonymousFlag,
   resolveCommunityDestination,
   validateCommunityInteraction,

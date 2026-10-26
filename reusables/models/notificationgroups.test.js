@@ -125,6 +125,26 @@ test("reactions on different posts do not", () => {
   assert.notEqual(keyOf(reaction("p1")), keyOf(reaction("p2")));
 });
 
+test("all activity in one community shares a group while row targets remain independent", () => {
+  const a = reaction("first-post", { community_entity_id: "garden", fromUserID: "maya", community_name: "Garden Club" });
+  const b = notification({ type: "community_activity", community_entity_id: "garden", fromUserID: "garden", is_anonymous: true, target: { type: "post", supportingID: "second-post", anchor: "comment" } });
+  assert.equal(keyOf(a), keyOf(b));
+  assert.notEqual(keyOf(a), keyOf({ ...b, community_entity_id: "other-community" }));
+  assert.notEqual(keyOf(a), keyOf(reaction("first-post")));
+  assert.equal(groupSentence([a, b]), "had activity in Garden Club");
+  assert.equal(b.target.supportingID, "second-post");
+  assert.equal(b.target.anchor, "comment");
+});
+
+test("legacy community senders join the same community group before pagination", () => {
+  const communities = [{ entity_id: "garden", name: "Garden Club" }];
+  const expression = groupKeyExpression(GROUP_SPECS, communities);
+  const legacy = notification({ type: "post_comment", fromUserID: "garden", target: { supportingID: "old-post" } });
+  const current = reaction("new-post", { community_entity_id: "garden", fromUserID: "maya" });
+  assert.deepEqual(evaluate(expression, legacy), evaluate(expression, current));
+  assert.notDeepEqual(evaluate(expression, legacy), evaluate(expression, reaction("old-post")));
+});
+
 test("different types on the same post do not", () => {
   const comment = notification({
     type: "post_comment",

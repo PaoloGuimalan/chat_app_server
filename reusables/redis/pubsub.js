@@ -66,7 +66,8 @@ async function listen(channel, response_holder) {
   }
 }
 
-async function publish(channel, event, message) {
+async function publish(channel, event, message, { required = false } = {}) {
+  if (required && !publisher) throw new Error("Redis publisher is not connected");
   if (publisher) {
     const logDetails = {
       logType: null,

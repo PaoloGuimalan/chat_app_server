@@ -19,6 +19,7 @@ const {
 } = require("../../reusables/models/users");
 const { publish } = require("../../reusables/redis/pubsub");
 const { hasPermission } = require("../../reusables/hooks/permissionChecker");
+const { createCommunityMediaPost } = require("../posts");
 const router = express.Router();
 
 const REALM_MEDIA_COLUMN = { profile: "profile", cover_photo: "cover_photo" };
@@ -48,13 +49,13 @@ const applyRealmMedia = async (realm_id, media_type, upload) => {
   return url;
 };
 
-// { realm_id, media_type, uploadID } - the photo already uploaded straight to
+// { realm_id, media_type, uploadID, caption? } - the photo already uploaded straight to
 // storage through /media/uploads.
 router.post("/upload-media", jwtchecker, async (req, res) => {
   const id = req.params.id;
   const entityID = req.params.entity_id;
   try {
-    const { realm_id, media_type, uploadID } = req.body || {};
+    const { realm_id, media_type, uploadID, caption } = req.body || {};
     if (!REALM_MEDIA_COLUMN[media_type]) throw new MediaUploadError("Media type mismatch");
     if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
       throw new MediaUploadError("You do not have permission to make this action.", 403);
@@ -66,6 +67,26 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
       realmID: realm_id,
     });
     if (upload.kind !== "image") throw new MediaUploadError("Only photos can be used here");
+    const { rows: realms } = await pool.query(
+      `SELECT type FROM community_realm WHERE realm_id = $1`,
+      [realm_id],
+    );
+    if (!realms.length) throw new MediaUploadError("Realm not available", 404);
+    if (realms[0].type === "community") {
+      const { postID } = await createCommunityMediaPost({
+        params: req.params,
+        realmID: realm_id,
+        mediaType: media_type,
+        upload,
+        caption,
+      });
+      res.send({
+        status: true,
+        message: "Upload successful!",
+        details: { media_type, url: upload.fileDetails.data, post_id: postID },
+      });
+      return;
+    }
     const url = await applyRealmMedia(realm_id, media_type, upload);
     res.send({ status: true, message: `Upload successful!`, details: { media_type, url } });
   } catch (ex) {

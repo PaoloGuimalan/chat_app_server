@@ -5,6 +5,7 @@ const { assertMessagingTarget } = require("../../reusables/models/realmCapabilit
 const {
   notificationAudienceMatch,
   authorizedNotificationStream,
+  normalizeCommunityNotifications,
 } = require("../../reusables/models/communityNotifications");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
@@ -736,6 +737,7 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       const result = result_raw[0].data;
       const total = result_raw[0].total;
       const next = total - range * page > 0;
+      await normalizeCommunityNotifications(pool, result);
       const userIDs = result.map((mp) => mp.fromUserID);
       const uniqueIDs = [...new Set(userIDs)];
 
@@ -951,6 +953,7 @@ const fetchNotificationSection = async (match, page, range, viewerID) => {
 // reusables/models/messages.js.
 const enrichNotificationSenders = async (itemsPerSection) => {
   const allItems = itemsPerSection.flat();
+  await normalizeCommunityNotifications(pool, allItems);
   const uniqueIDs = [
     ...new Set(allItems.map((mp) => mp.fromUserID).filter(Boolean)),
   ];
@@ -1141,11 +1144,13 @@ router.get(
 // field call /v2/notifications/* and parse `items`, and they keep getting
 // exactly that.
 const groupedNotificationSection = async (entity_id, section, page, range) => {
+  const { rows: communities } = await pool.query("SELECT entity_id, name FROM community_realm WHERE type = 'community'");
   const data = await fetchGroupedNotificationSection(
     UserNotifications,
     await notificationAudienceMatch(pool, notificationSectionMatch(entity_id, section), entity_id),
     page,
     range,
+    communities,
   );
   return data;
 };
@@ -1153,6 +1158,15 @@ const groupedNotificationSection = async (entity_id, section, page, range) => {
 const attachGroupedSenders = (data, senderMap) => ({
   groups: data.groups.map((group) => ({
     ...group,
+    // Identity is projected from current activity before this step. Historical
+    // Mongo senders can no longer determine how many people the header names.
+    ...(group.family === "community" ? {
+      actorCount: new Set(group.items.map((item) => item.fromUserID).filter(Boolean).map(String)).size,
+      actorCountIsSample: group.count > group.items.length,
+    } : {}),
+    ...(group.family === "community" && group.count > 1 ? {
+      action: `had activity in ${group.items.find((item) => item.community_name)?.community_name || "your community"}`,
+    } : {}),
     items: attachNotificationSenders(group.items, senderMap),
   })),
   total: data.total,

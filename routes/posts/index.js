@@ -21,6 +21,9 @@ const {
   resolveAttachable,
   attachRecords,
 } = require("../../reusables/media/uploads");
+const { publishRelease } = require("../../reusables/media/release");
+const { notifyCommunityMediaUpdate } = require("../../reusables/models/communityMediaNotifications");
+const { publishRequired, QUEUES } = require("../../reusables/rabbitmq/workqueue");
 
 // What a post (feed post, profile/cover photo, moment) may be made from.
 const POST_UPLOAD_PURPOSES = [
@@ -77,6 +80,7 @@ const {
 const pool = require("../../reusables/database/postgres");
 const {
   loadPostCommunity,
+  loadCommunityMediaRealm,
   parseAnonymousFlag,
   resolveCommunityDestination,
   validateCommunityInteraction,
@@ -386,11 +390,12 @@ const createPostFromPayload = async ({
   decodeToken,
   kind,
   details = null,
+  trustedCommunityMedia = null,
 }) => {
   const userID = params.userID;
   const username = params.username;
   const id = params.id;
-  const entityID = params.entity_id;
+  let entityID = params.entity_id;
   const postID = await checkPostIDExisting(makeID(30));
   const currentTimestampInSeconds = Math.floor(Date.now() / 1000);
   // Fixed from the same clock as date_posted, so expires_at - date_posted is
@@ -401,17 +406,27 @@ const createPostFromPayload = async ({
 
   try {
     const isAnonymous = parseAnonymousFlag(decodeToken.is_anonymous);
-    let community = await resolveCommunityDestination(
-      pool,
-      entityID,
-      decodeToken,
-      kind,
-    );
+    let community = trustedCommunityMedia
+      ? await loadCommunityMediaRealm(pool, trustedCommunityMedia.realmID)
+      : await resolveCommunityDestination(
+          pool,
+          entityID,
+          decodeToken,
+          kind,
+        );
+    if (trustedCommunityMedia) {
+      entityID = community.entity_id;
+      details = { community_media_update: true };
+    }
     decodeToken.tagging = normalizeTagging(decodeToken.tagging);
 
     const filereferencesraw = decodeToken.content.references;
     const content_type = decodeToken.type.contentType;
-    if (community && ["profile", "cover_photo"].includes(content_type)) {
+    if (
+      community &&
+      !trustedCommunityMedia &&
+      ["profile", "cover_photo"].includes(content_type)
+    ) {
       throw badRequest("Profile photos cannot be posted in a community");
     }
     const otherEntityID = decodeToken.otherEntityID;
@@ -426,7 +441,9 @@ const createPostFromPayload = async ({
     // Every file must be the author's own, finished upload (/media/uploads);
     // they are recorded as this post's once it exists. A moment's poster
     // rides in `details`. A shared post's references are post ids instead.
-    const ownUploads = decodeToken.content.isShared
+    const ownUploads = trustedCommunityMedia
+      ? [trustedCommunityMedia.upload]
+      : decodeToken.content.isShared
       ? []
       : await resolveAttachable({
         urls: [
@@ -525,16 +542,44 @@ const createPostFromPayload = async ({
     // transaction, and ROLLBACK undid nothing. The one-live-thought rule below
     // depends on it being real: its advisory lock is transaction-scoped.
     const client = await pool.getPool().connect();
+    let committed = false;
 
     try {
       await client.query("BEGIN");
-      community = await resolveCommunityDestination(client, entityID, decodeToken, kind);
+      community = trustedCommunityMedia
+        ? await loadCommunityMediaRealm(client, trustedCommunityMedia.realmID, true)
+        : await resolveCommunityDestination(client, entityID, decodeToken, kind);
+
+      if (trustedCommunityMedia) {
+        // The realm lock serializes retries for the same upload. A completed
+        // request must not publish a second post or rewind a newer photo.
+        // Its delivery can be incomplete, so replay the idempotent fanout and
+        // stable notification IDs rather than treating persistence as delivery.
+        const { rows: existing } = await client.query(
+          `SELECT p.post_id FROM newsfeed_post p
+           JOIN newsfeed_postreference ref ON ref.post_id = p.post_id
+           JOIN newsfeed_posttag t ON t.post_id = p.post_id AND t.entity_id = $1
+           WHERE p.entity_id = $1 AND p.content_type = $2 AND ref.reference = $3
+             AND p.on_feed = 'feed' AND p.from_system = TRUE
+             AND p.details->>'community_media_update' = 'true'
+           LIMIT 1`,
+          [entityID, content_type, trustedCommunityMedia.upload.fileDetails.data],
+        );
+        if (existing.length) {
+          await client.query("COMMIT");
+          committed = true;
+          await deliverCommunityMediaPost({
+            community, postID: existing[0].post_id, mediaType: content_type,
+          });
+          return { postID: existing[0].post_id, expiresAt: null };
+        }
+      }
 
       const { rows: invalidTags } = await client.query(
         `SELECT 1 FROM community_realm
          WHERE (entity_id = ANY($1::text[]) OR entity_id = $2) AND type = 'community'
          LIMIT 1`,
-        [decodeToken.tagging.users, entityID],
+        [decodeToken.tagging.users, trustedCommunityMedia ? null : entityID],
       );
       if (invalidTags.length) {
         throw badRequest("Select a community using the post destination");
@@ -582,7 +627,7 @@ const createPostFromPayload = async ({
       // Batch insert post references
       if (finaluploadedreferences.length > 0) {
         if (content_type === "profile") {
-          await pool.query(
+          await client.query(
             `WITH target_record AS (
               SELECT type FROM entity_entity WHERE id = $1
             )
@@ -601,7 +646,7 @@ const createPostFromPayload = async ({
         }
 
         if (content_type === "cover_photo") {
-          await pool.query(
+          await client.query(
             `WITH target_record AS (
               SELECT type FROM entity_entity WHERE id = $1
             )
@@ -727,6 +772,7 @@ const createPostFromPayload = async ({
       // END: POST SCORE TABLE SAVE
 
       await client.query("COMMIT");
+      committed = true;
 
       if (decodeToken.content.isShared) {
         finaluploadedreferences.forEach(async (mp) => {
@@ -814,6 +860,14 @@ const createPostFromPayload = async ({
 
 
       attachRecords(ownUploads, { type: "post", id: postID });
+      if (trustedCommunityMedia) {
+        const target = { type: "realm_media", id: String(community.realm_id) };
+        attachRecords(ownUploads, target);
+        const previous = community[content_type];
+        if (previous && previous !== finaluploadedreferences[0].reference) {
+          publishRelease([{ target, urls: [previous] }]);
+        }
+      }
 
       createPostScore(postID, new Date(currentTimestampInSeconds * 1000));
 
@@ -825,11 +879,15 @@ const createPostFromPayload = async ({
       // The follower query moved into the worker, which resolves it from
       // current_entity_id - same filter, same ORDER BY, same 500 cap - so
       // GetFollowerIDs is no longer called on this path.
-      bulkFanoutToCache(
-        entityID,
-        { id: postID, author_id: entityID },
-        "fanout",
-      );
+      if (trustedCommunityMedia) {
+        await deliverCommunityMediaPost({ community, postID, mediaType: content_type });
+      } else {
+        bulkFanoutToCache(
+          entityID,
+          { id: postID, author_id: entityID },
+          "fanout",
+        );
+      }
 
       // Moderation and interest tagging. Skips silently when the moderation
       // service is offline - its scour picks the post up later - so a post
@@ -885,7 +943,7 @@ const createPostFromPayload = async ({
 
       return { postID, expiresAt };
     } catch (err) {
-      await client.query("ROLLBACK");
+      if (!committed) await client.query("ROLLBACK");
       console.error("Transaction error:", err);
       if (!err.status) err.status = 500;
       throw err;
@@ -899,6 +957,47 @@ const createPostFromPayload = async ({
       ex.status = 400;
     }
     throw ex;
+  }
+};
+
+// Internal entry point: public create APIs never pass trustedCommunityMedia.
+// The caller has checked realm.media.update and resolved this account's upload
+// for the selected realm/purpose. Build every authorship-sensitive field here.
+const createCommunityMediaPost = ({ params, realmID, mediaType, upload, caption = "" }) =>
+  createPostFromPayload({
+    params,
+    kind: POST_KINDS.FEED,
+    trustedCommunityMedia: { realmID, upload },
+    decodeToken: {
+      content: {
+        isShared: false,
+        data: typeof caption === "string" ? caption : "",
+        references: [{
+          reference: upload.fileDetails.data,
+          referenceMediaType: "image",
+          name: upload.name,
+        }],
+      },
+      type: { fileType: "media", contentType: mediaType },
+      tagging: { isTagged: false, users: [] },
+      is_anonymous: false,
+    },
+  });
+
+const deliverCommunityMediaPost = async ({ community, postID, mediaType }) => {
+  try {
+    // The worker derives the original post timestamp and current membership
+    // from SQL, so replayed feed-index writes keep the same durable row keys.
+    await publishRequired(QUEUES.BULK_FANOUT_TO_CACHE, {
+      current_entity_id: String(community.entity_id),
+      post_data: { id: String(postID), author_id: String(community.entity_id) },
+      type: "fanout",
+    });
+    await notifyCommunityMediaUpdate({ community, postID, mediaType });
+  } catch (cause) {
+    throw Object.assign(new Error(
+      "Photo saved, but community delivery is incomplete. Retry this upload.",
+    ), { status: 503, cause });
   }
 };
 
@@ -1335,6 +1434,7 @@ router.get(
         await stop_listen(redis_event, stream);
         res.end();
       },
+      entity_id,
     );
     listen(redis_event, stream);
 
@@ -1401,3 +1501,4 @@ router.post("/commenttypingbroadcast", jwtchecker, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.createCommunityMediaPost = createCommunityMediaPost;

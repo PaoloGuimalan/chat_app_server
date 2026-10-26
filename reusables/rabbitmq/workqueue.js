@@ -148,4 +148,46 @@ async function publish(queue, payload) {
   }
 }
 
-module.exports = { publish, QUEUES };
+// Required deliveries use broker confirms and report failure to their caller.
+// Ordinary ranking/affinity publishers above retain their best-effort contract.
+let confirmedChannelPromise = null;
+let confirmedQueues = new Set();
+
+function resetConfirmed() {
+  confirmedChannelPromise = null;
+  confirmedQueues = new Set();
+}
+
+async function publishRequired(queue, payload) {
+  if (!URL) throw new Error("RabbitMQ is not configured");
+  try {
+    if (!confirmedChannelPromise) {
+      confirmedChannelPromise = (async () => {
+        const connection = await amqp.connect(URL);
+        connection.on("error", resetConfirmed);
+        connection.on("close", resetConfirmed);
+        const channel = await connection.createConfirmChannel();
+        channel.on("error", resetConfirmed);
+        channel.on("close", resetConfirmed);
+        return channel;
+      })();
+    }
+    const channel = await confirmedChannelPromise;
+    if (!confirmedQueues.has(queue)) {
+      await channel.assertQueue(queue, { durable: true });
+      confirmedQueues.add(queue);
+    }
+    await new Promise((resolve, reject) => {
+      channel.sendToQueue(queue, Buffer.from(JSON.stringify(payload)), {
+        persistent: true,
+        contentType: "application/json",
+      }, (err) => err ? reject(err) : resolve());
+    });
+    return true;
+  } catch (err) {
+    resetConfirmed();
+    throw err;
+  }
+}
+
+module.exports = { publish, publishRequired, QUEUES };

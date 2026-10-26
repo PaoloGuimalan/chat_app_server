@@ -322,8 +322,10 @@ const POST_ACTIVITY_EVENT = "post_activity";
 
 const postActivityChannel = (postID) => `post_${postID}`;
 
-const BroadcastPostActivity = (postID, eventType, body) => {
+const BroadcastPostActivity = (postID, eventType, body, senderEntityID) => {
   publish(postActivityChannel(postID), POST_ACTIVITY_EVENT, {
+    // authorizedPostStream consumes this before any SSE frame is written.
+    ...(senderEntityID ? { _sender_entity_id: String(senderEntityID) } : {}),
     status: true,
     auth: true,
     message: eventType,
@@ -371,7 +373,7 @@ const BroadcastCommentTyping = (postID, entityID, entity, parentID, isAnonymous 
       name: entity?.display_name ?? null,
       type: entity?.entity_type ?? null,
     },
-  });
+  }, entityID);
 };
 
 module.exports = {
