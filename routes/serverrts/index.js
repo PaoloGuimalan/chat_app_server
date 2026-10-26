@@ -823,22 +823,47 @@ router.post("/addnewmembertoserver", jwtchecker, async (req, res) => {
 });
 
 router.get("/getservermembers/:serverID", jwtchecker, async (req, res) => {
-  const userID = req.params.userID;
+  const entityID = req.params.entity_id;
   const serverID = req.params.serverID;
 
-  const result = await GetServerMembers(serverID, true);
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.is_private,
+        (r.entity_id = $2 OR EXISTS (
+          SELECT 1 FROM community_member m
+          WHERE m.realm_id = r.id AND m.entity_id = $2
+        )) AS has_access
+       FROM community_realm r
+       WHERE r.realm_id = $1 AND r.type = 'server' AND r.is_active = true`,
+      [serverID, entityID],
+    );
+    if (!rows.length || (rows[0].is_private && !rows[0].has_access)) {
+      return res.status(403).send({
+        status: false,
+        message: "You do not have access to this realm",
+      });
+    }
 
-  const encodedResult = jwt.sign(
-    {
-      members: result,
-    },
-    JWT_SECRET,
-    {
-      expiresIn: 60 * 60 * 24 * 7,
-    },
-  );
+    const result = await GetServerMembers(serverID, true);
 
-  res.send({ status: true, result: encodedResult });
+    const encodedResult = jwt.sign(
+      {
+        members: result,
+      },
+      JWT_SECRET,
+      {
+        expiresIn: 60 * 60 * 24 * 7,
+      },
+    );
+
+    res.send({ status: true, result: encodedResult });
+  } catch (error) {
+    console.error("Could not load server members:", error);
+    res.status(500).send({
+      status: false,
+      message: "Could not load server members",
+    });
+  }
 });
 
 router.put("/update-member-realm-role", jwtchecker, async (req, res) => {

@@ -42,6 +42,23 @@ const resolveCommunityDestination = async (client, entityID, payload, kind) => {
   if (rows.length !== 1) {
     throw communityError("Join this community before posting in it", 403);
   }
+  const tagged = payload.tagging?.users;
+  if (Array.isArray(tagged) && tagged.length) {
+    const entityIds = [...new Set(tagged)];
+    const { rows: members } = await client.query(
+      `SELECT m.entity_id FROM community_member m
+       JOIN community_realm r ON r.id = m.realm_id
+       WHERE r.entity_id = $1 AND m.entity_id = ANY($2::text[])
+       FOR SHARE OF m`,
+      [rows[0].entity_id, entityIds],
+    );
+    const allowed = new Set(members.map((member) => member.entity_id));
+    if (entityIds.some((id) => !allowed.has(id))) {
+      throw communityError(
+        "Everyone tagged must be a member of the selected community",
+      );
+    }
+  }
   return rows[0];
 };
 
@@ -85,7 +102,8 @@ const validateCommunityInteraction = (community, requestedAnonymity) => {
   const anonymous = parseAnonymousFlag(requestedAnonymity);
   if (
     community &&
-    (community.is_active === false || (community.is_private && !community.is_member))
+    (community.is_active === false ||
+      (community.is_private && !community.is_member))
   ) {
     throw communityError("Join this community before interacting", 403);
   }
@@ -101,14 +119,21 @@ const validateCommunityShare = (source, destination) => {
     (!source.is_active ||
       (source.is_private && source.entity_id !== destination?.entity_id))
   ) {
-    throw communityError("This post cannot be shared outside its community", 403);
+    throw communityError(
+      "This post cannot be shared outside its community",
+      403,
+    );
   }
 };
 
 const validateAnonymousUploads = (records, community) => {
-  const prefix = community ? `uploads/communities/${community.entity_id}/` : null;
+  const prefix = community
+    ? `uploads/communities/${community.entity_id}/`
+    : null;
   if (!prefix || records.some((record) => !record.key?.startsWith(prefix))) {
-    throw communityError("Upload anonymous media for this community before attaching it");
+    throw communityError(
+      "Upload anonymous media for this community before attaching it",
+    );
   }
 };
 
