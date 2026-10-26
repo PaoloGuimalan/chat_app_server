@@ -83,7 +83,10 @@ const loadPostCommunity = async (client, postID, viewerID) => {
 
 const validateCommunityInteraction = (community, requestedAnonymity) => {
   const anonymous = parseAnonymousFlag(requestedAnonymity);
-  if (community && !community.is_member) {
+  if (
+    community &&
+    (community.is_active === false || (community.is_private && !community.is_member))
+  ) {
     throw communityError("Join this community before interacting", 403);
   }
   if (anonymous && !community) {

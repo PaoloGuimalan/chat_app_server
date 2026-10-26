@@ -115,10 +115,12 @@ const normalizeCommunityNotifications = async (client, items) => {
     const subject = anonymous
       ? "An anonymous member"
       : activity.handle ? `@${activity.handle}` : "A member";
+    const postLabel = String(item.toUserID) === String(destination?.post_author_id)
+      ? "your post" : "a post";
     item.content = {
       ...item.content,
       details: current
-        ? `${subject} ${verb} in your community.`
+        ? `${subject} ${verb} on ${postLabel} in the community.`
         : "New activity in your community.",
     };
   }

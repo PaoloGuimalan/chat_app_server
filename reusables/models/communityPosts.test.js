@@ -50,13 +50,16 @@ test("community destination must be a single scalar entity ID", async () => {
   }
 });
 
-test("anonymous interactions require community membership", () => {
+test("private interactions require membership; public readers can interact", () => {
   assert.throws(
-    () => communities.validateCommunityInteraction({ is_member: false }, true),
+    () => communities.validateCommunityInteraction({ is_private: true, is_member: false }, true),
     { status: 403 },
   );
   assert.throws(() => communities.validateCommunityInteraction(null, true), { status: 400 });
   assert.equal(communities.validateCommunityInteraction({ is_member: true }, true), true);
+  assert.equal(communities.validateCommunityInteraction({ is_private: false, is_member: false }, true), true);
+  assert.equal(communities.validateCommunityInteraction({ is_private: false, is_member: false }, false), false);
+  assert.throws(() => communities.validateCommunityInteraction({ is_active: false, is_member: true }, false), { status: 403 });
 });
 
 test("community sharing cannot move a private post outside its destination", () => {

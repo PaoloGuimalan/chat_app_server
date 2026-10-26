@@ -19,7 +19,7 @@ test("private community notices are filtered before notification pagination and 
 });
 
 test("current named activity uses its actor while anonymized and deleted notices mask stale identities", async () => {
-  const destinations = [{ post_id: "post", community_entity_id: "garden", community_name: "Garden Club" }];
+  const destinations = [{ post_id: "post", post_author_id: "owner", community_entity_id: "garden", community_name: "Garden Club" }];
   const activities = [
     { kind: "comment", reference_id: "named", post_id: "post", actor_id: "named-actor", is_anonymous: false, live: true, handle: "maya" },
     { kind: "post_reaction", reference_id: "anonymous", post_id: "post", actor_id: "secret-actor", is_anonymous: true, live: true, handle: "secret" },
@@ -31,12 +31,16 @@ test("current named activity uses its actor while anonymized and deleted notices
     { type: "comment_reaction", referenceID: "deleted", fromUserID: "deleted-actor", community_entity_id: "garden", content: { details: "@deleted reacted" }, target: { type: "post", supportingID: "post" } },
     { type: "follow", referenceID: "ordinary", fromUserID: "ordinary" },
   ];
+  items[0].toUserID = "owner";
+  items[1].toUserID = "owner";
   await normalizeCommunityNotifications(client, items);
   assert.equal(items[0].fromUserID, "named-actor");
   assert.equal(items[0].community_entity_id, "garden");
   assert.equal(items[0].community_name, "Garden Club");
   assert.equal(items[0].is_anonymous, false);
   assert.equal(items[0].target.anchor, "named");
+  assert.equal(items[0].content.details, "@maya commented on your post in the community.");
+  assert.equal(items[1].content.details, "An anonymous member reacted on your post in the community.");
   for (const item of items.slice(1, 3)) {
     assert.equal(item.fromUserID, "garden");
     assert.equal(item.is_anonymous, true);
