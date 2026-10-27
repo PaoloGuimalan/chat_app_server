@@ -1,13 +1,21 @@
 // Community identity is independent of the sender. Both current actor-sender
 // rows and legacy community-sender rows are checked before Mongo pagination.
-const MANAGEMENT_NOTIFICATION_TYPES = ["community_join_request", "community_admin_activity", "community_admin_inbox"];
-const isCommunityManagementNotification = (item) => MANAGEMENT_NOTIFICATION_TYPES.includes(item?.type);
+const MANAGEMENT_NOTIFICATION_TYPES = [
+  "community_join_request",
+  "community_admin_activity",
+  "community_admin_inbox",
+];
+const isCommunityManagementNotification = (item) =>
+  MANAGEMENT_NOTIFICATION_TYPES.includes(item?.type);
 
-const managementPermission = (...args) => require("../hooks/permissionChecker").hasPermission(...args);
+const managementPermission = (...args) =>
+  require("../hooks/permissionChecker").hasPermission(...args);
 
 const hasManagementPermission = async (viewerID, realmID, checkPermission) => {
   try {
-    return Boolean(await checkPermission(viewerID, "realm.request.approve", realmID));
+    return Boolean(
+      await checkPermission(viewerID, "realm.request.approve", realmID),
+    );
   } catch {
     return false;
   }
@@ -18,9 +26,15 @@ const notificationReadMatch = (viewerID, summaries = []) => {
     throw new TypeError("Invalid community notification read snapshots");
   }
   const snapshots = summaries.map((item) => {
-    if (!item || typeof item.notificationID !== "string" || !item.notificationID ||
-        item.notificationID.length > 200 || (item.activity_revision !== undefined &&
-          (!Number.isSafeInteger(item.activity_revision) || item.activity_revision < 0))) {
+    if (
+      !item ||
+      typeof item.notificationID !== "string" ||
+      !item.notificationID ||
+      item.notificationID.length > 200 ||
+      (item.activity_revision !== undefined &&
+        (!Number.isSafeInteger(item.activity_revision) ||
+          item.activity_revision < 0))
+    ) {
       throw new TypeError("Invalid community notification read snapshot");
     }
     return {
@@ -39,18 +53,39 @@ const notificationReadMatch = (viewerID, summaries = []) => {
 // Replacing the single preview slot keeps its ObjectId. Rank the saved batch
 // date so a newly delivered preview appears at the correct position.
 const notificationSortStages = (keepTime = false) => {
-  const created = { $convert: { input: "$_id", to: "date", onError: null, onNull: null } };
+  const created = {
+    $convert: { input: "$_id", to: "date", onError: null, onNull: null },
+  };
   return [
-    { $addFields: { _notificationSort: { $convert: {
-      input: { $cond: [{ $eq: ["$type", "community_admin_activity"] }, "$date.date", "$_id"] },
-      to: "date", onError: created, onNull: created,
-    } } } },
+    {
+      $addFields: {
+        _notificationSort: {
+          $convert: {
+            input: {
+              $cond: [
+                { $eq: ["$type", "community_admin_activity"] },
+                "$date.date",
+                "$_id",
+              ],
+            },
+            to: "date",
+            onError: created,
+            onNull: created,
+          },
+        },
+      },
+    },
     { $sort: { _notificationSort: -1, _id: -1 } },
     ...(keepTime ? [] : [{ $project: { _notificationSort: 0 } }]),
   ];
 };
 
-const notificationAudienceMatch = async (client, match, viewerID, checkPermission = managementPermission) => {
+const notificationAudienceMatch = async (
+  client,
+  match,
+  viewerID,
+  checkPermission = managementPermission,
+) => {
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id,
             (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
@@ -60,10 +95,15 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
      WHERE r.type = 'community'`,
     [viewerID],
   );
-  const blocked = rows.filter((row) => !row.member_allowed).map((row) => String(row.entity_id));
+  const blocked = rows
+    .filter((row) => !row.member_allowed)
+    .map((row) => String(row.entity_id));
   const managed = [];
   for (const row of rows) {
-    if (row.management_allowed && await hasManagementPermission(viewerID, row.id, checkPermission)) {
+    if (
+      row.management_allowed &&
+      (await hasManagementPermission(viewerID, row.id, checkPermission))
+    ) {
       managed.push(String(row.entity_id));
     }
   }
@@ -71,23 +111,34 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
     $and: [
       match,
       { type: { $nin: ["community_join_request", "community_admin_inbox"] } },
-      { $or: [
-        { type: { $ne: "community_admin_activity" } },
-        { "content.headline": "Community activity preview", isRead: false },
-      ] },
-      ...(blocked.length ? [
-        { fromUserID: { $nin: blocked } },
-        { community_entity_id: { $nin: blocked } },
-      ] : []),
-      { $or: [
-        { type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } },
-        { community_entity_id: { $in: managed } },
-      ] },
+      {
+        $or: [
+          { type: { $ne: "community_admin_activity" } },
+          { "content.headline": "Community activity preview" },
+        ],
+      },
+      ...(blocked.length
+        ? [
+            { fromUserID: { $nin: blocked } },
+            { community_entity_id: { $nin: blocked } },
+          ]
+        : []),
+      {
+        $or: [
+          { type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } },
+          { community_entity_id: { $in: managed } },
+        ],
+      },
     ],
   };
 };
 
-const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission) => {
+const canManageCommunityNotifications = async (
+  client,
+  viewerID,
+  communityID,
+  checkPermission = managementPermission,
+) => {
   if (!viewerID || !communityID) return false;
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id FROM community_realm r
@@ -101,12 +152,20 @@ const canManageCommunityNotifications = async (client, viewerID, communityID, ch
   return hasManagementPermission(viewerID, rows[0].id, checkPermission);
 };
 
-const authorizedNotificationStream = (response, authorize, authorizeManagement = async () => false) => ({
+const authorizedNotificationStream = (
+  response,
+  authorize,
+  authorizeManagement = async () => false,
+) => ({
   async sse(event, payload) {
     const target = payload?.result;
     if (isCommunityManagementNotification(target)) {
       try {
-        if (!target.community_entity_id || !(await authorizeManagement(target.community_entity_id))) return;
+        if (
+          !target.community_entity_id ||
+          !(await authorizeManagement(target.community_entity_id))
+        )
+          return;
       } catch {
         return;
       }
@@ -123,14 +182,19 @@ const authorizedNotificationStream = (response, authorize, authorizeManagement =
 
 const normalizeCommunityNotifications = async (client, items) => {
   const candidates = items.filter(
-    (item) => !isCommunityManagementNotification(item) &&
+    (item) =>
+      !isCommunityManagementNotification(item) &&
       (item.community_entity_id || item.target?.type === "post"),
   );
   if (!candidates.length) return;
-  const postIDs = [...new Set(candidates
-    .map((item) => item.target?.supportingID)
-    .filter(Boolean)
-    .map(String))];
+  const postIDs = [
+    ...new Set(
+      candidates
+        .map((item) => item.target?.supportingID)
+        .filter(Boolean)
+        .map(String),
+    ),
+  ];
   const { rows: destinations } = await client.query(
     `SELECT p.post_id, r.entity_id AS community_entity_id, r.name AS community_name,
             p.entity_id AS post_author_id, p.from_system, p.details
@@ -141,10 +205,13 @@ const normalizeCommunityNotifications = async (client, items) => {
   );
   const byPost = new Map(destinations.map((row) => [String(row.post_id), row]));
   const scoped = candidates.filter(
-    (item) => item.community_entity_id || byPost.has(String(item.target?.supportingID)),
+    (item) =>
+      item.community_entity_id || byPost.has(String(item.target?.supportingID)),
   );
   if (!scoped.length) return;
-  const references = [...new Set(scoped.map((item) => String(item.referenceID)))];
+  const references = [
+    ...new Set(scoped.map((item) => String(item.referenceID))),
+  ];
   const { rows: activities } = await client.query(
     `SELECT a.*, COALESCE(u.username, r.slug, b.handle) AS handle
      FROM (
@@ -173,13 +240,17 @@ const normalizeCommunityNotifications = async (client, items) => {
       destination?.community_entity_id || item.community_entity_id,
     );
     const kind = ["post_reaction", "comment_reaction"].includes(item.type)
-      ? item.type : "comment";
+      ? item.type
+      : "comment";
     const activity = activityMap.get(`${kind}:${item.referenceID}`);
-    const current = activity && activity.live &&
+    const current =
+      activity &&
+      activity.live &&
       String(activity.post_id) === String(item.target?.supportingID);
     const anonymous = !current || activity.is_anonymous;
     item.community_entity_id = communityID;
-    item.community_name = destination?.community_name || item.community_name || null;
+    item.community_name =
+      destination?.community_name || item.community_name || null;
     if (
       item.type === "community_activity" &&
       String(item.referenceID) === String(item.target?.supportingID) &&
@@ -198,13 +269,18 @@ const normalizeCommunityNotifications = async (client, items) => {
       comment_reaction: "reacted to a comment",
       comment_mention: "mentioned you",
     };
-    const verb = verbs[item.type] ||
+    const verb =
+      verbs[item.type] ||
       (item.content?.headline === "Replied Comment" ? "replied" : "commented");
     const subject = anonymous
       ? "An anonymous member"
-      : activity.handle ? `@${activity.handle}` : "A member";
-    const postLabel = String(item.toUserID) === String(destination?.post_author_id)
-      ? "your post" : "a post";
+      : activity.handle
+        ? `@${activity.handle}`
+        : "A member";
+    const postLabel =
+      String(item.toUserID) === String(destination?.post_author_id)
+        ? "your post"
+        : "a post";
     item.content = {
       ...item.content,
       details: current
@@ -224,3 +300,4 @@ module.exports = {
   authorizedNotificationStream,
   normalizeCommunityNotifications,
 };
+
