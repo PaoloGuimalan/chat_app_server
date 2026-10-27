@@ -27,6 +27,7 @@ const matches = (filter, item) => Object.entries(filter).every(([key, value]) =>
     if ("$in" in value) return value.$in.includes(item[key]);
     if ("$nin" in value) return !value.$nin.includes(item[key]);
     if ("$ne" in value) return item[key] !== value.$ne;
+    if ("$gt" in value) return item[key] > value.$gt;
   }
   return item[key] === value;
 });
@@ -51,7 +52,8 @@ test("join request audience excludes demoted managers while retaining their ordi
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", allowManagement);
   const notice = { toUserID: "viewer", fromUserID: "requester", type: "community_join_request" };
   for (const type of ["community_join_request", "community_admin_activity"]) {
-    assert.equal(matches(filter, { ...notice, type, community_entity_id: "managed" }), true);
+    Object.assign(notice, { activity_snapshot_version: 1, activity_count: 2, isRead: false });
+    assert.equal(matches(filter, { ...notice, type, community_entity_id: "managed" }), type !== "community_join_request");
     for (const community of ["demoted", "inactive", "unknown", undefined]) {
       assert.equal(matches(filter, { ...notice, type, community_entity_id: community }), false);
     }
@@ -61,15 +63,15 @@ test("join request audience excludes demoted managers while retaining their ordi
   assert.equal(matches(filter, { ...notice, type: "follow" }), true);
 });
 
-test("admin activity summaries derive their current count without post masking", async () => {
+test("saved preview sentences remain immutable when read or normalized", async () => {
   for (const [count, communityName, expected] of [
-    [1, "Garden Club", "1 new activity in Garden Club. Check them out."],
-    [3, undefined, "3 new activities in your community. Check them out."],
+    [1, "Garden Club", "Saved one activity."],
+    [3, undefined, "Saved three activities."],
   ]) {
     const item = {
       type: "community_admin_activity", fromUserID: "garden", community_entity_id: "garden",
       community_name: communityName, activity_count: count, activity_revision: 8,
-      content: { headline: "Community Activity", details: "Community activity changed" },
+      content: { headline: "Community Activity", details: expected },
       target: { type: "community_notifications", supportingID: "garden-realm" },
     };
     await normalizeCommunityNotifications({ query: async () => ({ rows: [] }) }, [item]);
@@ -126,7 +128,7 @@ test("management audience honors permission denials without hiding ordinary noti
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", checkPermission);
   for (const type of ["community_join_request", "community_admin_activity"]) {
     assert.equal(matches(filter, { toUserID: "viewer", type, community_entity_id: "garden" }), false);
-    assert.equal(matches(filter, { toUserID: "viewer", type, community_entity_id: "other" }), true);
+    assert.equal(matches(filter, { toUserID: "viewer", type, community_entity_id: "other", activity_snapshot_version: 1, activity_count: 2, isRead: false }), type !== "community_join_request");
   }
   assert.equal(matches(filter, { toUserID: "viewer", type: "post_comment", community_entity_id: "garden" }), true);
 });
@@ -224,4 +226,21 @@ test("trusted community media notices keep their community avatar and specific m
   assert.equal(item.is_anonymous, false);
   assert.equal(item.content.details, "Garden Club updated their cover photo.");
   assert.equal(comment.fromUserID, "maya");
+});
+
+test("personal lists exclude legacy, zero, read previews and separate join notices", async () => {
+  const database = { query: async () => ({ rows: [{ id: "club", entity_id: "garden", member_allowed: true, management_allowed: true }] }) };
+  const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", allowManagement);
+  const saved = { toUserID: "viewer", type: "community_admin_activity", community_entity_id: "garden", isRead: false, activity_snapshot_version: 1, activity_count: 3 };
+  assert.equal(matches(filter, saved), true);
+  for (const changed of [{ isRead: true }, { activity_snapshot_version: undefined }, { activity_count: 0 }, { type: "community_join_request" }]) {
+    assert.equal(matches(filter, { ...saved, ...changed }), false);
+  }
+});
+
+test("delivery authorization propagates resolver failures while reader authorization fails closed", async () => {
+  const client = { query: async () => ({ rows: [{ id: "club", entity_id: "garden" }] }) };
+  const unavailable = async () => { throw new Error("Permission database offline"); };
+  assert.equal(await canManageCommunityNotifications(client, "admin", "garden", unavailable), false);
+  await assert.rejects(canManageCommunityNotifications(client, "admin", "garden", unavailable, true), /Permission database offline/);
 });

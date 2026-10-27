@@ -36,8 +36,8 @@ const notificationReadMatch = (viewerID, summaries = []) => {
   };
 };
 
-// A coalesced summary keeps its original ObjectId. Rank its latest event,
-// otherwise new unread activity would stay buried at its creation position.
+// Replacing the single preview slot keeps its ObjectId. Rank the saved batch
+// date so a newly delivered preview appears at the correct position.
 const notificationSortStages = (keepTime = false) => {
   const created = { $convert: { input: "$_id", to: "date", onError: null, onNull: null } };
   return [
@@ -70,6 +70,11 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
   return {
     $and: [
       match,
+      { type: { $ne: "community_join_request" } },
+      { $or: [
+        { type: { $ne: "community_admin_activity" } },
+        { activity_snapshot_version: 1, activity_count: { $gt: 0 }, isRead: false },
+      ] },
       ...(blocked.length ? [
         { fromUserID: { $nin: blocked } },
         { community_entity_id: { $nin: blocked } },
@@ -82,7 +87,7 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
   };
 };
 
-const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission) => {
+const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission, throwOnPermissionError = false) => {
   if (!viewerID || !communityID) return false;
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id FROM community_realm r
@@ -92,7 +97,11 @@ const canManageCommunityNotifications = async (client, viewerID, communityID, ch
      LIMIT 1`,
     [viewerID, communityID],
   );
-  return rows.length > 0 && hasManagementPermission(viewerID, rows[0].id, checkPermission);
+  if (!rows.length) return false;
+  if (throwOnPermissionError) {
+    return Boolean(await checkPermission(viewerID, "realm.request.approve", rows[0].id));
+  }
+  return hasManagementPermission(viewerID, rows[0].id, checkPermission);
 };
 
 const authorizedNotificationStream = (response, authorize, authorizeManagement = async () => false) => ({
@@ -116,15 +125,6 @@ const authorizedNotificationStream = (response, authorize, authorizeManagement =
 });
 
 const normalizeCommunityNotifications = async (client, items) => {
-  for (const item of items) {
-    if (item.type !== "community_admin_activity") continue;
-    const count = Number.isSafeInteger(item.activity_count) && item.activity_count >= 0
-      ? item.activity_count : 0;
-    item.content = {
-      ...item.content,
-      details: `${count} new ${count === 1 ? "activity" : "activities"} in ${item.community_name || "your community"}. Check them out.`,
-    };
-  }
   const candidates = items.filter(
     (item) => !isCommunityManagementNotification(item) &&
       (item.community_entity_id || item.target?.type === "post"),

@@ -148,6 +148,10 @@ const usernotifications = mongoose.Schema({
     community_entity_id: { type: String, default: undefined },
     activity_count: { type: Number, min: 0, validate: Number.isSafeInteger, default: undefined },
     activity_revision: { type: Number, min: 0, validate: Number.isSafeInteger, default: undefined },
+    activity_snapshot_version: { type: Number, default: undefined },
+    activity_delivery_id: { type: String, default: undefined },
+    activity_delivery_version: { type: Number, default: undefined },
+    preview_key: { type: String, default: undefined },
     is_anonymous: { type: Boolean, default: undefined },
     content: {
         headline: { type: mongoose.Schema.Types.Mixed, require: true },
