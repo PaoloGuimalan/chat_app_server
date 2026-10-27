@@ -5,7 +5,10 @@ const { assertMessagingTarget } = require("../../reusables/models/realmCapabilit
 const {
   notificationAudienceMatch,
   authorizedNotificationStream,
+  canManageCommunityNotifications,
   normalizeCommunityNotifications,
+  notificationSortStages,
+  notificationReadMatch,
 } = require("../../reusables/models/communityNotifications");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
@@ -684,13 +687,20 @@ router.post("/readnotifications", jwtchecker, async (req, res) => {
   const entity_id = req.params.entity_id;
 
   if (entity_id) {
+    let match;
+    try {
+      match = notificationReadMatch(entity_id, req.body?.community_summaries);
+    } catch (error) {
+      return res.status(400).send({ status: false, message: error.message });
+    }
     await UserNotifications.updateMany(
-      { toUserID: entity_id, isRead: false },
+      match,
       { isRead: true },
     )
       .then(async (result) => {
         ReloadUserNotification(entity_id, "Notifications has been read");
-        res.send({ status: true, message: "Notifications has been read" });
+        const totalunread = await CountAllUnreadNotifications(entity_id);
+        res.send({ status: true, message: "Notifications has been read", totalunread });
       })
       .catch((err) => {
         console.log(err);
@@ -720,7 +730,7 @@ router.get("/getNotifications", jwtchecker, async (req, res) => {
       $facet: {
         metadata: [{ $count: "total" }],
         data: [
-          { $sort: { _id: -1 } },
+          ...notificationSortStages(),
           { $skip: (parseInt(page) - 1) * parseInt(range) },
           { $limit: parseInt(range) },
         ],
@@ -925,7 +935,7 @@ const fetchNotificationSection = async (match, page, range, viewerID) => {
         metadata: [{ $count: "total" }],
         unread: [{ $match: { isRead: false } }, { $count: "total" }],
         data: [
-          { $sort: { _id: -1 } },
+          ...notificationSortStages(),
           { $skip: (parseInt(page) - 1) * parseInt(range) },
           { $limit: parseInt(range) },
         ],
@@ -4046,7 +4056,11 @@ router.get(
     const sessionstamp = `SESSION_STAMP_${makeid(15)}`;
     const redis_event = `events_${entity_id}`;
 
-    const stream = authorizedNotificationStream(res, (postID) => CanEntityViewPost(postID, entity_id));
+    const stream = authorizedNotificationStream(
+      res,
+      (postID) => CanEntityViewPost(postID, entity_id),
+      (communityID) => canManageCommunityNotifications(pool, entity_id, communityID),
+    );
     listen(redis_event, stream);
 
     const activeMetaData = {

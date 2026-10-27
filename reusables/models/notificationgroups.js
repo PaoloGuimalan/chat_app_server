@@ -54,6 +54,7 @@
 
 const crypto = require("crypto");
 const { ACTIONS_BY_TYPE } = require("./notificationactions");
+const { MANAGEMENT_NOTIFICATION_TYPES, isCommunityManagementNotification, notificationSortStages } = require("./communityNotifications");
 
 /// One groupable action. `by` says which "thing" the rows must share:
 ///   target        - target.supportingID (the post)
@@ -217,6 +218,10 @@ const communityOf = (communities) => ({
 const groupKeyExpression = (specs = GROUP_SPECS, communities = []) => ({
   $switch: {
     branches: [
+      ...MANAGEMENT_NOTIFICATION_TYPES.map((type) => ({
+        case: { $eq: ["$type", type] },
+        then: { single: "$_id" },
+      })),
       {
         case: present(communityOf(communities)),
         then: {
@@ -257,6 +262,7 @@ const groupKeyExpression = (specs = GROUP_SPECS, communities = []) => ({
 /// to label a group. Null for a group of one.
 const specFor = (doc, specs = GROUP_SPECS) => {
   if (!doc) return null;
+  if (isCommunityManagementNotification(doc)) return null;
   if (doc.community_entity_id) return { family: "community", by: "community", memberActions: true };
   for (const spec of specs) {
     if (doc.type !== spec.type) continue;
@@ -324,7 +330,7 @@ const fetchGroupedNotificationSection = async (
   const result = await UserNotifications.aggregate(
     [
       { $match: match },
-      { $sort: { _id: -1 } },
+      ...notificationSortStages(true),
       { $addFields: { _groupKey: groupKeyExpression(GROUP_SPECS, communities) } },
       {
         $group: {
@@ -332,13 +338,14 @@ const fetchGroupedNotificationSection = async (
           // Sorted newest-first above, so $first is the newest and $push
           // collects newest-first.
           latest: { $first: "$_id" },
+          latestAt: { $first: "$_notificationSort" },
           ids: { $push: "$_id" },
           count: { $sum: 1 },
           unread: { $sum: { $cond: [{ $eq: ["$isRead", false] }, 1, 0] } },
           actors: { $addToSet: "$fromUserID" },
         },
       },
-      { $sort: { latest: -1 } },
+      { $sort: { latestAt: -1, latest: -1 } },
       {
         $facet: {
           metadata: [{ $count: "total" }],

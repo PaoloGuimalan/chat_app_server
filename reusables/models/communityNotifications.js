@@ -1,29 +1,110 @@
 // Community identity is independent of the sender. Both current actor-sender
 // rows and legacy community-sender rows are checked before Mongo pagination.
-const notificationAudienceMatch = async (client, match, viewerID) => {
+const MANAGEMENT_NOTIFICATION_TYPES = ["community_join_request", "community_admin_activity"];
+const isCommunityManagementNotification = (item) => MANAGEMENT_NOTIFICATION_TYPES.includes(item?.type);
+
+const managementPermission = (...args) => require("../hooks/permissionChecker").hasPermission(...args);
+
+const hasManagementPermission = async (viewerID, realmID, checkPermission) => {
+  try {
+    return Boolean(await checkPermission(viewerID, "realm.request.approve", realmID));
+  } catch {
+    return false;
+  }
+};
+
+const notificationReadMatch = (viewerID, summaries = []) => {
+  if (!Array.isArray(summaries) || summaries.length > 500) {
+    throw new TypeError("Invalid community notification read snapshots");
+  }
+  const snapshots = summaries.map((item) => {
+    if (!item || typeof item.notificationID !== "string" || !item.notificationID ||
+        item.notificationID.length > 200 || !Number.isSafeInteger(item.activity_revision) ||
+        item.activity_revision < 0) {
+      throw new TypeError("Invalid community notification read snapshot");
+    }
+    return {
+      type: "community_admin_activity",
+      notificationID: item.notificationID,
+      activity_revision: item.activity_revision,
+    };
+  });
+  return {
+    toUserID: viewerID,
+    isRead: false,
+    $or: [{ type: { $ne: "community_admin_activity" } }, ...snapshots],
+  };
+};
+
+// A coalesced summary keeps its original ObjectId. Rank its latest event,
+// otherwise new unread activity would stay buried at its creation position.
+const notificationSortStages = (keepTime = false) => {
+  const created = { $convert: { input: "$_id", to: "date", onError: null, onNull: null } };
+  return [
+    { $addFields: { _notificationSort: { $convert: {
+      input: { $cond: [{ $eq: ["$type", "community_admin_activity"] }, "$date.date", "$_id"] },
+      to: "date", onError: created, onNull: created,
+    } } } },
+    { $sort: { _notificationSort: -1, _id: -1 } },
+    ...(keepTime ? [] : [{ $project: { _notificationSort: 0 } }]),
+  ];
+};
+
+const notificationAudienceMatch = async (client, match, viewerID, checkPermission = managementPermission) => {
   const { rows } = await client.query(
-    `SELECT r.entity_id FROM community_realm r
-     WHERE r.type = 'community'
-       AND (r.is_active = FALSE OR NOT EXISTS (
-         SELECT 1 FROM community_member m
-         WHERE m.realm_id = r.id AND m.entity_id = $1
-       ))`,
+    `SELECT r.id, r.entity_id,
+            (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
+            (r.is_active = TRUE AND COALESCE(m.role IN ('owner', 'admin', 'moderator'), FALSE)) AS management_allowed
+     FROM community_realm r
+     LEFT JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
+     WHERE r.type = 'community'`,
     [viewerID],
   );
-  if (!rows.length) return match;
+  const blocked = rows.filter((row) => !row.member_allowed).map((row) => String(row.entity_id));
+  const managed = [];
+  for (const row of rows) {
+    if (row.management_allowed && await hasManagementPermission(viewerID, row.id, checkPermission)) {
+      managed.push(String(row.entity_id));
+    }
+  }
   return {
     $and: [
       match,
-      { fromUserID: { $nin: rows.map((row) => row.entity_id) } },
-      { community_entity_id: { $nin: rows.map((row) => row.entity_id) } },
+      ...(blocked.length ? [
+        { fromUserID: { $nin: blocked } },
+        { community_entity_id: { $nin: blocked } },
+      ] : []),
+      { $or: [
+        { type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } },
+        { community_entity_id: { $in: managed } },
+      ] },
     ],
   };
 };
 
-const authorizedNotificationStream = (response, authorize) => ({
+const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission) => {
+  if (!viewerID || !communityID) return false;
+  const { rows } = await client.query(
+    `SELECT r.id, r.entity_id FROM community_realm r
+     JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
+     WHERE r.entity_id = $2 AND r.type = 'community' AND r.is_active = TRUE
+       AND m.role IN ('owner', 'admin', 'moderator')
+     LIMIT 1`,
+    [viewerID, communityID],
+  );
+  return rows.length > 0 && hasManagementPermission(viewerID, rows[0].id, checkPermission);
+};
+
+const authorizedNotificationStream = (response, authorize, authorizeManagement = async () => false) => ({
   async sse(event, payload) {
     const target = payload?.result;
-    if (target?.community_entity_id && target?.post_id) {
+    if (isCommunityManagementNotification(target)) {
+      try {
+        if (!target.community_entity_id || !(await authorizeManagement(target.community_entity_id))) return;
+      } catch {
+        return;
+      }
+    } else if (target?.community_entity_id && target?.post_id) {
       try {
         if (!(await authorize(target.post_id))) return;
       } catch {
@@ -35,8 +116,18 @@ const authorizedNotificationStream = (response, authorize) => ({
 });
 
 const normalizeCommunityNotifications = async (client, items) => {
+  for (const item of items) {
+    if (item.type !== "community_admin_activity") continue;
+    const count = Number.isSafeInteger(item.activity_count) && item.activity_count >= 0
+      ? item.activity_count : 0;
+    item.content = {
+      ...item.content,
+      details: `${count} new ${count === 1 ? "activity" : "activities"} in ${item.community_name || "your community"}. Check them out.`,
+    };
+  }
   const candidates = items.filter(
-    (item) => item.community_entity_id || item.target?.type === "post",
+    (item) => !isCommunityManagementNotification(item) &&
+      (item.community_entity_id || item.target?.type === "post"),
   );
   if (!candidates.length) return;
   const postIDs = [...new Set(candidates
@@ -127,7 +218,12 @@ const normalizeCommunityNotifications = async (client, items) => {
 };
 
 module.exports = {
+  MANAGEMENT_NOTIFICATION_TYPES,
+  isCommunityManagementNotification,
+  notificationSortStages,
   notificationAudienceMatch,
+  notificationReadMatch,
+  canManageCommunityNotifications,
   authorizedNotificationStream,
   normalizeCommunityNotifications,
 };

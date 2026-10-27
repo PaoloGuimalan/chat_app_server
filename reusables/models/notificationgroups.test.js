@@ -136,6 +136,17 @@ test("all activity in one community shares a group while row targets remain inde
   assert.equal(b.target.anchor, "comment");
 });
 
+test("join requests retain their own labels outside community post activity groups", () => {
+  for (const type of ["community_join_request", "community_admin_activity"]) {
+    const join = notification({ type, community_entity_id: "garden", target: { type: "community_notifications", supportingID: "garden-realm" } });
+    const second = notification({ type, community_entity_id: "garden", target: { type: "community_notifications", supportingID: "garden-realm" } });
+    assert.notEqual(keyOf(join), keyOf(second));
+    assert.notEqual(keyOf(join), keyOf(reaction("post", { community_entity_id: "garden" })));
+    assert.equal(specFor(join), null);
+    assert.equal(groupSentence([join]), null);
+  }
+});
+
 test("legacy community senders join the same community group before pagination", () => {
   const communities = [{ entity_id: "garden", name: "Garden Club" }];
   const expression = groupKeyExpression(GROUP_SPECS, communities);
