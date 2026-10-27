@@ -1,6 +1,6 @@
 // Community identity is independent of the sender. Both current actor-sender
 // rows and legacy community-sender rows are checked before Mongo pagination.
-const MANAGEMENT_NOTIFICATION_TYPES = ["community_join_request", "community_admin_activity"];
+const MANAGEMENT_NOTIFICATION_TYPES = ["community_join_request", "community_admin_activity", "community_admin_inbox"];
 const isCommunityManagementNotification = (item) => MANAGEMENT_NOTIFICATION_TYPES.includes(item?.type);
 
 const managementPermission = (...args) => require("../hooks/permissionChecker").hasPermission(...args);
@@ -19,18 +19,18 @@ const notificationReadMatch = (viewerID, summaries = []) => {
   }
   const snapshots = summaries.map((item) => {
     if (!item || typeof item.notificationID !== "string" || !item.notificationID ||
-        item.notificationID.length > 200 || !Number.isSafeInteger(item.activity_revision) ||
-        item.activity_revision < 0) {
+        item.notificationID.length > 200 || (item.activity_revision !== undefined &&
+          (!Number.isSafeInteger(item.activity_revision) || item.activity_revision < 0))) {
       throw new TypeError("Invalid community notification read snapshot");
     }
     return {
       type: "community_admin_activity",
       notificationID: item.notificationID,
-      activity_revision: item.activity_revision,
     };
   });
   return {
     toUserID: viewerID,
+    type: { $ne: "community_admin_inbox" },
     isRead: false,
     $or: [{ type: { $ne: "community_admin_activity" } }, ...snapshots],
   };
@@ -70,10 +70,10 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
   return {
     $and: [
       match,
-      { type: { $ne: "community_join_request" } },
+      { type: { $nin: ["community_join_request", "community_admin_inbox"] } },
       { $or: [
         { type: { $ne: "community_admin_activity" } },
-        { activity_snapshot_version: 1, activity_count: { $gt: 0 }, isRead: false },
+        { "content.headline": "Community activity preview", isRead: false },
       ] },
       ...(blocked.length ? [
         { fromUserID: { $nin: blocked } },
@@ -87,7 +87,7 @@ const notificationAudienceMatch = async (client, match, viewerID, checkPermissio
   };
 };
 
-const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission, throwOnPermissionError = false) => {
+const canManageCommunityNotifications = async (client, viewerID, communityID, checkPermission = managementPermission) => {
   if (!viewerID || !communityID) return false;
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id FROM community_realm r
@@ -98,9 +98,6 @@ const canManageCommunityNotifications = async (client, viewerID, communityID, ch
     [viewerID, communityID],
   );
   if (!rows.length) return false;
-  if (throwOnPermissionError) {
-    return Boolean(await checkPermission(viewerID, "realm.request.approve", rows[0].id));
-  }
   return hasManagementPermission(viewerID, rows[0].id, checkPermission);
 };
 

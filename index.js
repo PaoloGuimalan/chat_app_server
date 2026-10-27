@@ -137,12 +137,7 @@ app.get("/", (req, res) => {
   getPool();
   connect();
   connectMongo()
-    .then(() => {
-      console.log(`Connected to MongoDB`);
-      const { startCommunityAdminPreviews } = require("./reusables/jobs/communityAdminPreviews");
-      const { publish } = require("./reusables/redis/pubsub");
-      startCommunityAdminPreviews({ database: mongoose.connection.db, client: getPool(), publish });
-    })
+    .then(() => console.log(`Connected to MongoDB`))
     .catch((err) => console.log(err));
 
   // 4. Start accepting HTTP requests only now

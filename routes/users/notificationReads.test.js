@@ -59,15 +59,12 @@ test("legacy reads retain ordinary behavior but cannot clear unsnapshotted commu
   assert.equal(response.totalunread, 1);
 });
 
-test("read snapshots cannot clear a newer summary revision or another recipient", async () => {
-  const rows = [summary(), summary({ notificationID: "other", toUserID: "other-admin" })];
+test("only the displayed immutable preview ID can be read, never its replacement or another admin", async () => {
+  const rows = [summary({ notificationID: "new-preview" }), summary({ notificationID: "other", toUserID: "other-admin" })];
   const read = reader(rows);
-  await read({ community_summaries: [{ notificationID: "summary", activity_revision: 2 }] });
-  assert.equal(rows[0].isRead, false, "revision 3 arrived after the overview read revision 2");
-  await read({ community_summaries: [
-    { notificationID: "summary", activity_revision: 3 },
-    { notificationID: "other", activity_revision: 3 },
-  ] });
+  await read({ community_summaries: [{ notificationID: "old-preview" }] });
+  assert.equal(rows[0].isRead, false);
+  await read({ community_summaries: [{ notificationID: "new-preview" }, { notificationID: "other" }] });
   assert.equal(rows[0].isRead, true);
   assert.equal(rows[1].isRead, false);
 });
@@ -80,4 +77,10 @@ test("malformed summary revisions never broaden the read operation", async () =>
     assert.equal(rows[0].isRead, false);
     assert.equal(response.httpStatus, 400);
   }
+});
+
+test("reading personal notifications never reads the community management inbox", async () => {
+  const rows = [{ notificationID: "inbox", toUserID: "admin", type: "community_admin_inbox", isRead: false }];
+  await reader(rows)();
+  assert.equal(rows[0].isRead, false);
 });
