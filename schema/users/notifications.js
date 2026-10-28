@@ -145,7 +145,6 @@ const usernotifications = mongoose.Schema({
     referenceStatus: { type: Boolean, require: true },
     toUserID: { type: mongoose.Schema.Types.Mixed, require: true },
     fromUserID: { type: mongoose.Schema.Types.Mixed, require: true },
-    community_entity_id: { type: String, default: undefined },
     is_anonymous: { type: Boolean, default: undefined },
     content: {
         headline: { type: mongoose.Schema.Types.Mixed, require: true },

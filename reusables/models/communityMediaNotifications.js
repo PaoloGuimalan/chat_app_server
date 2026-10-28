@@ -48,7 +48,6 @@ const notifyCommunityMediaUpdate = async ({ community, postID, mediaType }) => {
         target: { type: "post", supportingID: postID, anchor: null },
         toUserID: memberID,
         fromUserID: community.entity_id,
-        community_entity_id: community.entity_id,
         is_anonymous: false,
         content: { headline: title, details },
         date: { date: dateGetter(), time: timeGetter() },

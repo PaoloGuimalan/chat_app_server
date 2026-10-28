@@ -9,6 +9,7 @@ const {
   normalizeCommunityNotifications,
   notificationSortStages,
   notificationReadMatch,
+  notificationPostCommunities,
 } = require("../../reusables/models/communityNotifications");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
@@ -1155,12 +1156,24 @@ router.get(
 // exactly that.
 const groupedNotificationSection = async (entity_id, section, page, range) => {
   const { rows: communities } = await pool.query("SELECT entity_id, name FROM community_realm WHERE type = 'community'");
+  const posts = await notificationPostCommunities(pool, UserNotifications, entity_id);
+  const match = await notificationAudienceMatch(
+    pool,
+    notificationSectionMatch(entity_id, section),
+    entity_id,
+    undefined,
+    posts,
+  );
   const data = await fetchGroupedNotificationSection(
     UserNotifications,
-    await notificationAudienceMatch(pool, notificationSectionMatch(entity_id, section), entity_id),
+    match,
     page,
     range,
-    communities,
+    communities.map((community) => ({
+      ...community,
+      post_ids: posts.filter((post) => String(post.entity_id) === String(community.entity_id))
+        .map((post) => String(post.post_id)),
+    })),
   );
   return data;
 };

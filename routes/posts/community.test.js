@@ -29,6 +29,7 @@ function creation({
   const scoreEnd = scoreSource.indexOf("/**", scoreStart);
   const queries = [];
   const deliveries = [];
+  const adminActivities = [];
   const effects = [];
   let savedMediaPost = existingMediaPost;
   let pendingMediaPost = null;
@@ -94,6 +95,10 @@ function creation({
       if (records.length) effects.push({ attachment: { records, target } });
     },
     publishRelease: (releases) => effects.push({ releases }),
+    notifyCommunityPostCreated: async (options) => {
+      assert.ok(queries.some(({ sql }) => sql === "COMMIT"));
+      adminActivities.push(options.postID);
+    },
     notifyCommunityMediaUpdate: async (options) => {
       assert.ok(queries.some(({ sql }) => sql === "COMMIT"));
       if (notificationFailures-- > 0) throw new Error("Notification delivery failed");
@@ -147,6 +152,7 @@ function creation({
   };
   return {
     queries,
+    adminActivities,
     deliveries,
     effects,
     create: async (fields = {}, kind = "feed", internal = {}) => {
@@ -387,4 +393,17 @@ test("rejected and uncommitted shares do not score their source", async () => {
     await assert.rejects(app.create({ ...fields, content: sharedContent }), { status });
     assert.deepEqual(app.effects, []);
   }
+});
+
+test("committed community posts and shares produce admin activity, ordinary/failed posts do not", async () => {
+  for (const content of [undefined, sharedContent]) {
+    const app = creation();
+    await app.create({ community_entity_id: "community", ...(content ? { content } : {}) });
+    assert.deepEqual(app.adminActivities, ["post"]);
+  }
+  const ordinary = creation(); await ordinary.create();
+  assert.deepEqual(ordinary.adminActivities, []);
+  const failed = creation({ failCommit: true });
+  await assert.rejects(failed.create({ community_entity_id: "community" }));
+  assert.deepEqual(failed.adminActivities, []);
 });

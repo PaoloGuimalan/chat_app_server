@@ -69,7 +69,7 @@ test("media notifications address only freshly resolved members and identify the
   assert.deepEqual(app.rows.map((row) => row.toUserID), ["member", "admin"]);
   for (const row of app.rows) {
     assert.equal(row.fromUserID, "community");
-    assert.equal(row.community_entity_id, "community");
+    assert.equal(Object.hasOwn(row, "community_entity_id"), false);
     assert.equal(row.is_anonymous, false);
     assert.equal(row.type, "community_activity");
     assert.equal(row.referenceID, "post");

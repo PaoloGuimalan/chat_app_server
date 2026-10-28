@@ -1,5 +1,5 @@
-// Community identity is independent of the sender. Both current actor-sender
-// rows and legacy community-sender rows are checked before Mongo pagination.
+// Ownership uses toUserID. Community scope for personal activity is resolved
+// from its existing target post before pagination, never from an extra field.
 const MANAGEMENT_NOTIFICATION_TYPES = [
   "community_join_request",
   "community_admin_activity",
@@ -50,8 +50,8 @@ const notificationReadMatch = (viewerID, summaries = []) => {
   };
 };
 
-// Replacing the single preview slot keeps its ObjectId. Rank the saved batch
-// date so a newly delivered preview appears at the correct position.
+// Use the saved timestamp consistently across services. A refreshed community
+// preview keeps its Mongo slot but must move above older personal activity.
 const notificationSortStages = (keepTime = false) => {
   const created = {
     $convert: { input: "$_id", to: "date", onError: null, onNull: null },
@@ -61,13 +61,7 @@ const notificationSortStages = (keepTime = false) => {
       $addFields: {
         _notificationSort: {
           $convert: {
-            input: {
-              $cond: [
-                { $eq: ["$type", "community_admin_activity"] },
-                "$date.date",
-                "$_id",
-              ],
-            },
+            input: "$date.date",
             to: "date",
             onError: created,
             onNull: created,
@@ -80,12 +74,34 @@ const notificationSortStages = (keepTime = false) => {
   ];
 };
 
+const notificationPostCommunities = async (client, notifications, viewerID) => {
+  const postIDs = await notifications.distinct("target.supportingID", {
+    toUserID: viewerID,
+    "target.type": "post",
+  });
+  if (!postIDs.length) return [];
+  const { rows } = await client.query(
+    `SELECT t.post_id, r.entity_id, r.name
+     FROM newsfeed_posttag t
+     JOIN community_realm r ON r.entity_id = t.entity_id AND r.type = 'community'
+     WHERE t.post_id = ANY($1::text[])`,
+    [postIDs.map(String)],
+  );
+  return rows;
+};
+
 const notificationAudienceMatch = async (
   client,
   match,
   viewerID,
   checkPermission = managementPermission,
+  communityPosts = null,
 ) => {
+  const posts = communityPosts ?? await notificationPostCommunities(
+    client,
+    require("../../schema/users/notifications"),
+    viewerID,
+  );
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id,
             (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
@@ -107,6 +123,9 @@ const notificationAudienceMatch = async (
       managed.push(String(row.entity_id));
     }
   }
+  const blockedPosts = posts
+    .filter((post) => blocked.includes(String(post.entity_id)))
+    .map((post) => String(post.post_id));
   return {
     $and: [
       match,
@@ -114,19 +133,21 @@ const notificationAudienceMatch = async (
       {
         $or: [
           { type: { $ne: "community_admin_activity" } },
-          { "content.headline": "Community activity preview" },
+          { "content.headline": "Community activity preview", isRead: false },
         ],
       },
       ...(blocked.length
         ? [
             { fromUserID: { $nin: blocked } },
-            { community_entity_id: { $nin: blocked } },
           ]
+        : []),
+      ...(blockedPosts.length
+        ? [{ "target.supportingID": { $nin: blockedPosts } }]
         : []),
       {
         $or: [
           { type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } },
-          { community_entity_id: { $in: managed } },
+          { fromUserID: { $in: managed } },
         ],
       },
     ],
@@ -161,11 +182,10 @@ const authorizedNotificationStream = (
     const target = payload?.result;
     if (isCommunityManagementNotification(target)) {
       try {
-        if (
-          !target.community_entity_id ||
-          !(await authorizeManagement(target.community_entity_id))
-        )
-          return;
+        // Current notices identify the community as sender. Retain support
+        // for already queued event metadata from the previous service version.
+        const sender = target.fromUserID || target.community_entity_id;
+        if (!sender || !(await authorizeManagement(sender))) return;
       } catch {
         return;
       }
@@ -184,7 +204,7 @@ const normalizeCommunityNotifications = async (client, items) => {
   const candidates = items.filter(
     (item) =>
       !isCommunityManagementNotification(item) &&
-      (item.community_entity_id || item.target?.type === "post"),
+      item.target?.type === "post",
   );
   if (!candidates.length) return;
   const postIDs = [
@@ -206,7 +226,7 @@ const normalizeCommunityNotifications = async (client, items) => {
   const byPost = new Map(destinations.map((row) => [String(row.post_id), row]));
   const scoped = candidates.filter(
     (item) =>
-      item.community_entity_id || byPost.has(String(item.target?.supportingID)),
+      byPost.has(String(item.target?.supportingID)),
   );
   if (!scoped.length) return;
   const references = [
@@ -236,9 +256,7 @@ const normalizeCommunityNotifications = async (client, items) => {
   );
   for (const item of scoped) {
     const destination = byPost.get(String(item.target?.supportingID));
-    const communityID = String(
-      destination?.community_entity_id || item.community_entity_id,
-    );
+    const communityID = String(destination.community_entity_id);
     const kind = ["post_reaction", "comment_reaction"].includes(item.type)
       ? item.type
       : "comment";
@@ -296,6 +314,7 @@ module.exports = {
   notificationSortStages,
   notificationAudienceMatch,
   notificationReadMatch,
+  notificationPostCommunities,
   canManageCommunityNotifications,
   authorizedNotificationStream,
   normalizeCommunityNotifications,

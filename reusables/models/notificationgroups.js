@@ -200,20 +200,28 @@ const storedList = (field) => ({
 /// Every branch builds the same shape in the same field order - a document
 /// key compares field by field, in order - and the default is the row's own
 /// _id, so anything not provably groupable is a group of one.
-const communityOf = (communities) => ({
-  $ifNull: [
-    "$community_entity_id",
-    communities.length ? {
-      $switch: {
-        branches: communities.map((community) => ({
-          case: { $eq: ["$fromUserID", String(community.entity_id)] },
-          then: String(community.entity_id),
-        })),
-        default: null,
-      },
-    } : null,
-  ],
-});
+const communityOf = (communities) => {
+  if (!communities.length) return null;
+  return {
+    $switch: {
+      branches: communities.map((community) => ({
+        case: {
+          $or: [
+            { $eq: ["$fromUserID", String(community.entity_id)] },
+            {
+              $and: [
+                { $eq: ["$target.type", "post"] },
+                { $in: ["$target.supportingID", community.post_ids || []] },
+              ],
+            },
+          ],
+        },
+        then: String(community.entity_id),
+      })),
+      default: null,
+    },
+  };
+};
 
 const groupKeyExpression = (specs = GROUP_SPECS, communities = []) => ({
   $switch: {
@@ -225,9 +233,12 @@ const groupKeyExpression = (specs = GROUP_SPECS, communities = []) => ({
       {
         case: present(communityOf(communities)),
         then: {
-          type: "community", headline: null,
-          thing: { $ifNull: ["$community_entity_id", "$fromUserID"] },
-          anchor: null, actions: null, redirects: null,
+          type: "community",
+          headline: null,
+          thing: communityOf(communities),
+          anchor: null,
+          actions: null,
+          redirects: null,
         },
       },
       ...specs.map((spec) => {

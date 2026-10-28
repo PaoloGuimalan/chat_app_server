@@ -23,6 +23,7 @@ const {
 } = require("../../reusables/media/uploads");
 const { publishRelease } = require("../../reusables/media/release");
 const { notifyCommunityMediaUpdate } = require("../../reusables/models/communityMediaNotifications");
+const { notifyCommunityPostCreated } = require("../../reusables/models/communityPostNotifications");
 const { publishRequired, QUEUES } = require("../../reusables/rabbitmq/workqueue");
 
 // What a post (feed post, profile/cover photo, moment) may be made from.
@@ -774,6 +775,10 @@ const createPostFromPayload = async ({
       await client.query("COMMIT");
       committed = true;
 
+      if (community && !trustedCommunityMedia) {
+        await notifyCommunityPostCreated({ postID });
+      }
+
       if (decodeToken.content.isShared) {
         finaluploadedreferences.forEach(async (mp) => {
           // The worker increments shares_count while recalculating the score.
@@ -985,6 +990,7 @@ const createCommunityMediaPost = ({ params, realmID, mediaType, upload, caption 
   });
 
 const deliverCommunityMediaPost = async ({ community, postID, mediaType }) => {
+  await notifyCommunityPostCreated({ postID });
   try {
     // The worker derives the original post timestamp and current membership
     // from SQL, so replayed feed-index writes keep the same durable row keys.

@@ -53,6 +53,12 @@ const evaluate = (expr, doc) => {
     }
     case "$and":
       return args.every((a) => evaluate(a, doc) === true);
+    case "$or":
+      return args.some((a) => evaluate(a, doc) === true);
+    case "$in": {
+      const [value, values] = args.map((a) => evaluate(a, doc));
+      return values.includes(value);
+    }
     case "$eq": {
       const [a, b] = args.map((a) => evaluate(a, doc));
       if (a === MISSING || b === MISSING) return a === b;
@@ -97,7 +103,8 @@ const evaluate = (expr, doc) => {
   }
 };
 
-const keyOf = (doc) => JSON.stringify(evaluate(groupKeyExpression(), doc));
+const keyOf = (doc, communities = []) =>
+  JSON.stringify(evaluate(groupKeyExpression(GROUP_SPECS, communities), doc));
 
 let seq = 0;
 const notification = (fields) => ({
@@ -126,12 +133,14 @@ test("reactions on different posts do not", () => {
 });
 
 test("all activity in one community shares a group while row targets remain independent", () => {
-  const a = reaction("first-post", { community_entity_id: "garden", fromUserID: "maya", community_name: "Garden Club" });
-  const b = notification({ type: "community_activity", community_entity_id: "garden", fromUserID: "garden", is_anonymous: true, target: { type: "post", supportingID: "second-post", anchor: "comment" } });
-  assert.equal(keyOf(a), keyOf(b));
-  assert.notEqual(keyOf(a), keyOf({ ...b, community_entity_id: "other-community" }));
-  assert.notEqual(keyOf(a), keyOf(reaction("first-post")));
-  assert.equal(groupSentence([a, b]), "had activity in Garden Club");
+  const communities = [{ entity_id: "garden", post_ids: ["first-post", "second-post"] }];
+  const a = reaction("first-post", { fromUserID: "maya" });
+  const b = notification({ type: "community_activity", fromUserID: "garden", is_anonymous: true, target: { type: "post", supportingID: "second-post", anchor: "comment" } });
+  assert.equal(keyOf(a, communities), keyOf(b, communities));
+  assert.notEqual(keyOf(a, communities), keyOf(reaction("unrelated-post"), communities));
+  assert.notEqual(keyOf(a, communities), keyOf(reaction("first-post")));
+  // Display metadata is projected from SQL after grouping; it is not stored.
+  assert.equal(groupSentence([{ ...a, community_entity_id: "garden", community_name: "Garden Club" }, b]), "had activity in Garden Club");
   assert.equal(b.target.supportingID, "second-post");
   assert.equal(b.target.anchor, "comment");
 });
@@ -148,10 +157,10 @@ test("join requests retain their own labels outside community post activity grou
 });
 
 test("legacy community senders join the same community group before pagination", () => {
-  const communities = [{ entity_id: "garden", name: "Garden Club" }];
+  const communities = [{ entity_id: "garden", name: "Garden Club", post_ids: ["new-post"] }];
   const expression = groupKeyExpression(GROUP_SPECS, communities);
   const legacy = notification({ type: "post_comment", fromUserID: "garden", target: { supportingID: "old-post" } });
-  const current = reaction("new-post", { community_entity_id: "garden", fromUserID: "maya" });
+  const current = reaction("new-post", { fromUserID: "maya" });
   assert.deepEqual(evaluate(expression, legacy), evaluate(expression, current));
   assert.notDeepEqual(evaluate(expression, legacy), evaluate(expression, reaction("old-post")));
 });

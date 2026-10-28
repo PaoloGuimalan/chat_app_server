@@ -1,20 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-test("updated activity summaries sort by event time while ordinary rows keep creation time", () => {
+test("all notifications use saved timestamps with ObjectId fallback for missing dates", () => {
   const { notificationSortStages } = require("./communityNotifications");
   const stages = notificationSortStages();
   const converted = stages[0].$addFields._notificationSort.$convert;
-  assert.deepEqual(converted.input, { $cond: [
-    { $eq: ["$type", "community_admin_activity"] }, "$date.date", "$_id",
-  ] });
+  assert.equal(converted.input, "$date.date");
   assert.equal(converted.to, "date");
   assert.deepEqual(stages[1], { $sort: { _notificationSort: -1, _id: -1 } });
   assert.deepEqual(stages[2], { $project: { _notificationSort: 0 } });
   assert.equal(notificationSortStages(true).length, 2);
 });
 const {
-  notificationAudienceMatch,
+  notificationAudienceMatch: rawNotificationAudienceMatch,
+  notificationPostCommunities,
   authorizedNotificationStream,
   canManageCommunityNotifications,
   normalizeCommunityNotifications,
@@ -34,13 +33,45 @@ const matches = (filter, item) => Object.entries(filter).every(([key, value]) =>
 });
 
 const allowManagement = async () => true;
+const notificationAudienceMatch = (...args) => rawNotificationAudienceMatch(...args, []);
+
+test("community scope comes from the recipient's target posts without a stored community field", async () => {
+  const notifications = {
+    distinct: async (field, match) => {
+      assert.equal(field, "target.supportingID");
+      assert.deepEqual(match, { toUserID: "viewer", "target.type": "post" });
+      return ["private-post", "ordinary-post"];
+    },
+  };
+  const database = {
+    query: async (sql, values) => {
+      if (sql.includes("FROM newsfeed_posttag")) {
+        assert.deepEqual(values, [["private-post", "ordinary-post"]]);
+        return { rows: [{ post_id: "private-post", entity_id: "private-community" }] };
+      }
+      return { rows: [{ entity_id: "private-community", member_allowed: false }] };
+    },
+  };
+  const posts = await notificationPostCommunities(database, notifications, "viewer");
+  const filter = await rawNotificationAudienceMatch(
+    database, { toUserID: "viewer" }, "viewer", allowManagement, posts,
+  );
+  assert.equal(matches(filter, {
+    toUserID: "viewer", fromUserID: "named-actor", type: "post_comment",
+    target: { type: "post", supportingID: "private-post" },
+  }), false);
+  assert.equal(matches(filter, {
+    toUserID: "viewer", fromUserID: "named-actor", type: "post_comment",
+    target: { type: "post", supportingID: "ordinary-post" },
+  }), true);
+});
 
 test("private community notices are filtered before notification pagination and counts", async () => {
   const match = { toUserID: "viewer", type: "post_comment" };
   const database = { query: async () => ({ rows: [{ entity_id: "private-community", member_allowed: false, management_allowed: false }] }) };
-  const filter = await notificationAudienceMatch(database, match, "viewer", allowManagement);
+  const filter = await rawNotificationAudienceMatch(database, match, "viewer", allowManagement, [{post_id:"private-post",entity_id:"private-community"}]);
   assert.equal(matches(filter, { ...match, fromUserID: "private-community" }), false);
-  assert.equal(matches(filter, { ...match, fromUserID: "actor", community_entity_id: "private-community" }), false);
+  assert.equal(matches(filter, { ...match, fromUserID: "actor", target: { type: "post", supportingID: "private-post" } }), false);
   assert.equal(matches(filter, { ...match, fromUserID: "ordinary" }), true);
 });
 
@@ -54,12 +85,12 @@ test("join request audience excludes demoted managers while retaining their ordi
   const notice = { toUserID: "viewer", fromUserID: "requester", type: "community_join_request" };
   for (const type of ["community_join_request", "community_admin_activity"]) {
     Object.assign(notice, { content: { headline: "Community activity preview" }, isRead: false });
-    assert.equal(matches(filter, { ...notice, type, community_entity_id: "managed" }), type !== "community_join_request");
+    assert.equal(matches(filter, { ...notice, type, fromUserID: "managed" }), type !== "community_join_request");
     for (const community of ["demoted", "inactive", "unknown", undefined]) {
-      assert.equal(matches(filter, { ...notice, type, community_entity_id: community }), false);
+      assert.equal(matches(filter, { ...notice, type, fromUserID: community }), false);
     }
   }
-  assert.equal(matches(filter, { ...notice, toUserID: "other", community_entity_id: "managed" }), false);
+  assert.equal(matches(filter, { ...notice, toUserID: "other", fromUserID: "managed" }), false);
   assert.equal(matches(filter, { ...notice, type: "post_comment", community_entity_id: "demoted" }), true);
   assert.equal(matches(filter, { ...notice, type: "follow" }), true);
 });
@@ -128,8 +159,8 @@ test("management audience honors permission denials without hiding ordinary noti
   };
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", checkPermission);
   for (const type of ["community_join_request", "community_admin_activity"]) {
-    assert.equal(matches(filter, { toUserID: "viewer", type, community_entity_id: "garden" }), false);
-    assert.equal(matches(filter, { toUserID: "viewer", type, community_entity_id: "other", content: { headline: "Community activity preview" }, isRead: false }), type !== "community_join_request");
+    assert.equal(matches(filter, { toUserID: "viewer", type, fromUserID: "garden" }), false);
+    assert.equal(matches(filter, { toUserID: "viewer", type, fromUserID: "other", content: { headline: "Community activity preview" }, isRead: false }), type !== "community_join_request");
   }
   assert.equal(matches(filter, { toUserID: "viewer", type: "post_comment", community_entity_id: "garden" }), true);
 });
@@ -162,7 +193,7 @@ test("join request streams reauthorize each event and fail closed after demotion
   );
   const expected = [];
   for (const type of ["community_join_request", "community_admin_activity"]) {
-    const payload = { message: "Community notifications changed", result: { type, community_entity_id: "garden", realm_id: "garden-realm" } };
+    const payload = { message: "Community notifications changed", result: { type, fromUserID: "garden", realm_id: "garden-realm" } };
     allowed = true;
     await stream.sse("notifications", payload);
     expected.push(["notifications", payload]);
@@ -232,7 +263,7 @@ test("trusted community media notices keep their community avatar and specific m
 test("personal lists exclude management inbox rows, legacy summaries and read previews", async () => {
   const database = { query: async () => ({ rows: [{ id: "club", entity_id: "garden", member_allowed: true, management_allowed: true }] }) };
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", allowManagement);
-  const saved = { toUserID: "viewer", type: "community_admin_activity", community_entity_id: "garden", isRead: false,
+  const saved = { toUserID: "viewer", type: "community_admin_activity", fromUserID: "garden", isRead: false,
     content: { headline: "Community activity preview", details: "3 new activities in your community. Check them out." } };
   assert.equal(matches(filter, saved), true);
   for (const changed of [{ isRead: true }, { content: { headline: "Community activity" } }, { type: "community_join_request" }, { type: "community_admin_inbox" }]) {
