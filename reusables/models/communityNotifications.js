@@ -45,7 +45,6 @@ const notificationReadMatch = (viewerID, summaries = []) => {
   return {
     toUserID: viewerID,
     type: { $ne: "community_admin_inbox" },
-    isRead: false,
     $or: [{ type: { $ne: "community_admin_activity" } }, ...snapshots],
   };
 };
@@ -97,11 +96,13 @@ const notificationAudienceMatch = async (
   checkPermission = managementPermission,
   communityPosts = null,
 ) => {
-  const posts = communityPosts ?? await notificationPostCommunities(
-    client,
-    require("../../schema/users/notifications"),
-    viewerID,
-  );
+  const posts =
+    communityPosts ??
+    (await notificationPostCommunities(
+      client,
+      require("../../schema/users/notifications"),
+      viewerID,
+    ));
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id,
             (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
@@ -136,11 +137,7 @@ const notificationAudienceMatch = async (
           { "content.headline": "Community activity preview", isRead: false },
         ],
       },
-      ...(blocked.length
-        ? [
-            { fromUserID: { $nin: blocked } },
-          ]
-        : []),
+      ...(blocked.length ? [{ fromUserID: { $nin: blocked } }] : []),
       ...(blockedPosts.length
         ? [{ "target.supportingID": { $nin: blockedPosts } }]
         : []),
@@ -203,8 +200,7 @@ const authorizedNotificationStream = (
 const normalizeCommunityNotifications = async (client, items) => {
   const candidates = items.filter(
     (item) =>
-      !isCommunityManagementNotification(item) &&
-      item.target?.type === "post",
+      !isCommunityManagementNotification(item) && item.target?.type === "post",
   );
   if (!candidates.length) return;
   const postIDs = [
@@ -224,9 +220,8 @@ const normalizeCommunityNotifications = async (client, items) => {
     [postIDs],
   );
   const byPost = new Map(destinations.map((row) => [String(row.post_id), row]));
-  const scoped = candidates.filter(
-    (item) =>
-      byPost.has(String(item.target?.supportingID)),
+  const scoped = candidates.filter((item) =>
+    byPost.has(String(item.target?.supportingID)),
   );
   if (!scoped.length) return;
   const references = [
