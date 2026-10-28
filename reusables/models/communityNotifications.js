@@ -45,6 +45,7 @@ const notificationReadMatch = (viewerID, summaries = []) => {
   return {
     toUserID: viewerID,
     type: { $ne: "community_admin_inbox" },
+    isRead: false,
     $or: [{ type: { $ne: "community_admin_activity" } }, ...snapshots],
   };
 };
@@ -134,7 +135,7 @@ const notificationAudienceMatch = async (
       {
         $or: [
           { type: { $ne: "community_admin_activity" } },
-          { "content.headline": "Community activity preview", isRead: false },
+          { "content.headline": "Community activity preview" },
         ],
       },
       ...(blocked.length ? [{ fromUserID: { $nin: blocked } }] : []),
