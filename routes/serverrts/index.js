@@ -1,5 +1,6 @@
 require("dotenv").config();
 const express = require("express");
+const { resolveRole, realmOwnerRoleID } = require("../../reusables/models/roles");
 const jwt = require("jsonwebtoken");
 const { sseNotificationsWaiters } = require("../../reusables/hooks/sse");
 const dateGetter = require("../../reusables/hooks/getDate");
@@ -323,7 +324,7 @@ router.get(
                 FROM community_member cm
                 WHERE cm.entity_id = $3
                   AND cm.realm_id = pcr.realm_id
-                  AND cm.role IN ('admin', 'owner')
+                  AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND member_role.name IN ('admin', 'owner'))
               )
             )
           ) AS groupdetails,
@@ -478,7 +479,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           FROM community_member cm
           WHERE cm.entity_id = $1
             AND cm.realm_id = cr.realm_id
-            AND cm.role IN ('admin', 'owner')
+            AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND member_role.name IN ('admin', 'owner'))
         )
       ),
       'channels', COALESCE((
@@ -524,6 +525,9 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
       'usersWithInfo', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           '_id', COALESCE(cmu.id, cmr.id, cmb.id),
+          'member_id', cm.member_id,
+          'role_id', cm.role_id,
+          'role', roster_role.name,
           'entityID', p.id,
           'userID', COALESCE(cmu.username, cmr.slug, cmr.realm_id, cmb.handle),
           'fullname', CASE
@@ -558,6 +562,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           'realmType', cmr.type
         ))
         FROM community_member cm
+        JOIN entity_role roster_role ON roster_role.id = cm.role_id
         JOIN entity_entity p ON p.id = cm.entity_id
         LEFT JOIN user_account   cmu ON cmu.entity_id = p.id AND p.type = 'user'
         LEFT JOIN community_realm cmr ON cmr.entity_id = p.id AND p.type = 'realm'
@@ -884,10 +889,15 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
       return;
     }
 
+    const selectedRole = await resolveRole(pool, {
+      roleID: req.body.new_role_id,
+      roleName: new_role,
+    });
+
     // Setting someone as owner would create a second owner alongside the
     // existing one - that's an ownership transfer (realm.ownership.transfer),
     // not a plain role update, and isn't implemented via this endpoint yet.
-    if (new_role === "owner") {
+    if (selectedRole.name === "owner") {
       res.status(400).send({
         status: false,
         message: "Use ownership transfer to change the realm owner.",
@@ -909,17 +919,23 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
       actorRole = "owner";
     } else {
       const { rows: actorRow } = await pool.query(
-        `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+        `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.entity_id = $1 AND m.realm_id = $2`,
         [entityID, realm_id],
       );
       actorRole = actorRow.length > 0 ? actorRow[0].role : null;
     }
 
+    const { rows: targetRow } = await pool.query(
+      `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.member_id = $1 AND m.realm_id = $2`,
+      [member_id, realm_id],
+    );
+    if (!targetRow.length) {
+      return res.status(404).send({ status: false, message: "That member is not part of this realm" });
+    }
+    if (targetRow[0].role === "owner") {
+      return res.status(400).send({ status: false, message: "Use ownership transfer to change the realm owner." });
+    }
     if (actorRole !== "owner") {
-      const { rows: targetRow } = await pool.query(
-        `SELECT role FROM community_member WHERE member_id = $1 AND realm_id = $2`,
-        [member_id, realm_id],
-      );
       if (
         targetRow.length > 0 &&
         ["admin", "owner"].includes(targetRow[0].role)
@@ -933,8 +949,8 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE community_member SET role = $1 WHERE realm_id = $2 AND member_id = $3;`,
-      [new_role, realm_id, member_id],
+      `UPDATE community_member SET role_id = $1 WHERE realm_id = $2 AND member_id = $3;`,
+      [selectedRole.id, realm_id, member_id],
     );
 
     // Realtime: signal every member of the realm that the members list
@@ -965,13 +981,15 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
 
     res.send({
       status: true,
-      message: `Member ${member_id} updated role to ${new_role}`,
+      message: `Member ${member_id} updated role to ${selectedRole.name}`,
+      role: selectedRole.name,
+      role_id: selectedRole.id,
     });
   } catch (err) {
     console.log(err);
-    res.send({
+    res.status(err.status || 500).send({
       status: false,
-      message: "Error occured",
+      message: err.status ? err.message : "Error occured",
     });
   }
 });
@@ -1003,7 +1021,7 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
     }
 
     const { rows: targetRows } = await pool.query(
-      `SELECT entity_id, role FROM community_member WHERE member_id = $1 AND realm_id = $2`,
+      `SELECT m.entity_id, m.role_id, r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE member_id = $1 AND m.realm_id = $2`,
       [member_id, realm_id],
     );
 
@@ -1023,26 +1041,30 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
       return;
     }
 
+    const ownerRoleID = await realmOwnerRoleID(pool, realm_id);
+    if (ownerRoleID == null) {
+      return res.status(400).send({ status: false, message: "Realm has ambiguous owner role definitions." });
+    }
+    const adminRole = await resolveRole(pool, { roleName: "admin" });
+
     // One statement rather than two updates in a transaction: getPool()
     // hands back the POOL, not a pinned client, so BEGIN/COMMIT issued
     // through it can land on different connections. A single UPDATE is
     // atomic on its own and cannot leave the realm with two owners (or
     // none) if the process dies mid-way.
     //
-    // The actor has no row to demote when acting AS the realm itself - a
-    // realm's own entity is never a Member of its own realm - and the WHERE
-    // simply matches one row instead of two. That actor keeps owner tier
-    // regardless, which is correct: it IS the realm.
+    // Preserve the exact owner definition on the new owner. Demote all
+    // memberships of that definition, including when the actor is the realm
+    // entity rather than its outgoing human owner.
     await pool.query(
       `UPDATE community_member
-          SET role = CASE
-                       WHEN member_id = $1 THEN 'owner'
-                       WHEN entity_id = $2 THEN 'admin'
-                       ELSE role
+          SET role_id = CASE
+                       WHEN member_id = $1 THEN $3::bigint
+                       ELSE $4::bigint
                      END
-        WHERE realm_id = $3
-          AND (member_id = $1 OR entity_id = $2)`,
-      [member_id, entityID, realm_id],
+        WHERE realm_id = $2
+          AND (member_id = $1 OR role_id = $3::bigint)`,
+      [member_id, realm_id, ownerRoleID, adminRole.id],
     );
 
     // Same broadcast the role update sends: roles changed, so every client

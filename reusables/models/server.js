@@ -92,6 +92,9 @@ const GetServerMembers = async (serverID, withDetails) => {
       `SELECT
        COALESCE(pua.id, pr.id, pb.id) AS _id,
        cr.entity_id AS "entityID",
+       cr.member_id,
+       cr.role_id,
+       member_role.name AS role,
        COALESCE(pua.id, pr.id, pb.id) AS "userID",
        COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username,
        CASE
@@ -122,6 +125,7 @@ const GetServerMembers = async (serverID, withDetails) => {
         ELSE 'user'
        END AS "entityType"
        FROM community_member cr
+       JOIN entity_role member_role ON member_role.id = cr.role_id
        LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        LEFT JOIN community_realm pr ON cr.entity_id = pr.entity_id
        LEFT JOIN bot_bot pb ON cr.entity_id = pb.entity_id
@@ -135,9 +139,13 @@ const GetServerMembers = async (serverID, withDetails) => {
       `SELECT
        COALESCE(pua.id, pr.id, pb.id) AS _id,
        cr.entity_id AS "entityID",
+       cr.member_id,
+       cr.role_id,
+       member_role.name AS role,
        COALESCE(pua.id, pr.id, pb.id) AS "userID",
        COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username
        FROM community_member cr
+       JOIN entity_role member_role ON member_role.id = cr.role_id
        LEFT JOIN user_account pua ON cr.entity_id = pua.entity_id
        LEFT JOIN community_realm pr ON cr.entity_id = pr.entity_id
        LEFT JOIN bot_bot pb ON cr.entity_id = pb.entity_id

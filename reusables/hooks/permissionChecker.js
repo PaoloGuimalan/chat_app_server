@@ -1,8 +1,8 @@
 /**
  * Node-side port of the entity permissions system defined in the Django
  * user_service repo (entity/permissions.py, entity/services/permission_resolver.py).
- * Both repos share the same Postgres tables (entity_entitypermission,
- * community_member, entity_permissioncatalogentry, entity_rolepermission),
+ * Both repos share the same Postgres tables (entity_permission,
+ * community_member, entity_permission_catalog, entity_role_permissions),
  * so this hand-ports the same priority logic rather than calling into
  * Django - keep the two files in sync when either changes:
  *   - user_service/entity/permissions.py
@@ -10,16 +10,17 @@
  *   - user_service/entity/services/permission_catalog_cache.py
  *
  * The permission catalog, role-default matrix, and entity-type-default
- * matrix are DATABASE-BACKED (entity_permissioncatalogentry,
- * entity_rolepermission, entity_entitytypedefaultpermission), not hardcoded
+ * matrix are DATABASE-BACKED (entity_permission_catalog,
+ * entity_role_permissions, entity_permission_catalog_entity_types joined to
+ * entity_type), not hardcoded
  * here - both repos read the same shared Redis instance
- * (permcache:catalog:v1 / permcache:role_matrix:v1 /
+ * (permcache:catalog:v1 / permcache:role_matrix:v2 /
  * permcache:entity_type_matrix:v1, plain JSON strings) with a direct-query
  * fallback on a cache miss, so an admin editing the catalog on the Django
  * side is visible here without a deploy.
  *
  * Resolution priority (highest to lowest):
- *   1. Explicit deny (entity_entitypermission, effect='deny', not expired) -> false, always.
+ *   1. Explicit deny (entity_permission, effect='deny', not expired) -> false, always.
  *   2. Explicit grant (effect='grant', not expired) -> true.
  *   3. Entity-type default (entity_type-scoped) OR role-derived default
  *      (realm-scoped) OR platform default (global-scoped).
@@ -28,12 +29,27 @@
 
 const redis = require("redis");
 const pool = require("../database/postgres");
+const { realmOwnerRoleID } = require("../models/roles");
 const { REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD } = require("../vars/redis");
 
 const CATALOG_CACHE_KEY = "permcache:catalog:v1";
-const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v1";
+const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v2";
 const ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1";
 const CACHE_TTL_SECONDS = 60 * 60; // safety-net only; Django invalidates on write
+// Keep aligned with entity/permissions.py::GLOBAL_PLATFORM_DEFAULT. Other
+// global catalog entries, including developer API scopes, require a grant.
+const GLOBAL_PLATFORM_DEFAULT = new Set([
+  "messages.send",
+  "messages.react",
+  "conversations.create",
+  "posts.create",
+  "comments.create",
+  "contacts.request.create",
+  "poke.create",
+  "ai.prompt.assist",
+  "webrtc.call.join",
+  "realm.server.create",
+]);
 
 let cacheClient = null;
 
@@ -78,7 +94,7 @@ async function getCatalog() {
   }
 
   const { rows } = await pool.query(
-    `SELECT codename, scope, is_active FROM entity_permissioncatalogentry`,
+    `SELECT codename, scope, is_active FROM entity_permission_catalog`,
   );
   const catalog = {};
   for (const row of rows) {
@@ -96,16 +112,17 @@ async function getRoleMatrix() {
 
   const { rows } = await pool.query(
     `
-    SELECT rp.role, pce.codename
-    FROM entity_rolepermission rp
-    JOIN entity_permissioncatalogentry pce ON rp.permission_id = pce.id
+    SELECT rp.role_id, pce.codename
+    FROM entity_role_permissions rp
+    JOIN entity_permission_catalog pce ON rp.permission_id = pce.id
     WHERE pce.is_active = true
     `,
   );
   const matrix = {};
   for (const row of rows) {
-    if (!matrix[row.role]) matrix[row.role] = [];
-    matrix[row.role].push(row.codename);
+    const roleID = String(row.role_id);
+    if (!matrix[roleID]) matrix[roleID] = [];
+    matrix[roleID].push(row.codename);
   }
   await _cacheSet(ROLE_MATRIX_CACHE_KEY, JSON.stringify(matrix));
   return matrix;
@@ -119,9 +136,10 @@ async function getEntityTypeMatrix() {
 
   const { rows } = await pool.query(
     `
-    SELECT etp.entity_type, pce.codename
-    FROM entity_entitytypedefaultpermission etp
-    JOIN entity_permissioncatalogentry pce ON etp.permission_id = pce.id
+    SELECT et.name AS entity_type, pce.codename
+    FROM entity_permission_catalog_entity_types links
+    JOIN entity_type et ON et.id = links.entity_type_id
+    JOIN entity_permission_catalog pce ON pce.id = links.permission_id
     WHERE pce.is_active = true
     `,
   );
@@ -145,11 +163,12 @@ async function _getEntityType(entityId) {
 async function _activeOverride(entityId, permission, realmId) {
   const { rows } = await pool.query(
     `
-    SELECT effect FROM entity_entitypermission
-    WHERE entity_id = $1
-      AND permission = $2
-      AND realm_id IS NOT DISTINCT FROM $3
-      AND (expires_at IS NULL OR expires_at > NOW())
+    SELECT ep.effect FROM entity_permission ep
+    JOIN entity_permission_catalog pc ON pc.id = ep.permission_id
+    WHERE ep.entity_id = $1
+      AND pc.codename = $2
+      AND ep.realm_id IS NOT DISTINCT FROM $3
+      AND (ep.expires_at IS NULL OR ep.expires_at > NOW())
     LIMIT 1
     `,
     [entityId, permission, realmId],
@@ -165,8 +184,7 @@ async function _globalPlatformDefault(entityId) {
     [entityId],
   );
   if (rows.length === 0) {
-    // Non-user entities (realm/bot) have no Account row - fall through to
-    // explicit grant/deny only, same as the Django side.
+    // Non-user entities have no Account standing restriction, matching Django.
     return true;
   }
   return rows[0].is_active === true;
@@ -176,7 +194,7 @@ async function _globalPlatformDefault(entityId) {
  * hasPermission(entityId, permission, realmId = null) -> Promise<boolean>
  * realmId is the realm's identifier as used throughout this codebase's SQL
  * (community_realm.realm_id, which createRealmReusable always sets equal to
- * community_realm.id, the actual FK target of entity_entitypermission.realm_id).
+ * community_realm.id, the actual FK target of entity_permission.realm_id).
  */
 async function hasPermission(entityId, permission, realmId = null) {
   if (!entityId) {
@@ -223,23 +241,26 @@ async function hasPermission(entityId, permission, realmId = null) {
     );
     if (selfRealmRows.length > 0) {
       const roleMatrix = await getRoleMatrix();
-      const ownerDefaults = roleMatrix["owner"];
+      const ownerRoleID = await realmOwnerRoleID(pool, realmId);
+      const ownerDefaults = ownerRoleID == null ? null : roleMatrix[String(ownerRoleID)];
       return ownerDefaults ? ownerDefaults.includes(permission) : false;
     }
 
     const { rows } = await pool.query(
-      `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2 LIMIT 1`,
+      `SELECT role_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 LIMIT 1`,
       [entityId, realmId],
     );
     if (rows.length === 0) {
       return false;
     }
     const roleMatrix = await getRoleMatrix();
-    const roleDefaults = roleMatrix[rows[0].role];
+    const roleDefaults = roleMatrix[String(rows[0].role_id)];
     return roleDefaults ? roleDefaults.includes(permission) : false;
   }
 
-  return _globalPlatformDefault(entityId);
+  return GLOBAL_PLATFORM_DEFAULT.has(permission)
+    ? _globalPlatformDefault(entityId)
+    : false;
 }
 
 /**

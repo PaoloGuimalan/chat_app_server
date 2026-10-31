@@ -140,7 +140,7 @@ test("management stream authorization reads current active community manager rol
     const client = { query: async (sql, params) => {
       assert.deepEqual(params, ["viewer", "garden"]);
       assert.match(sql, /r\.is_active = TRUE/);
-      assert.match(sql, /m\.role IN \('owner', 'admin', 'moderator'\)/);
+      assert.match(sql, /member_role\.name IN \('owner', 'admin', 'moderator'\)/);
       return { rows: allowed ? [{ id: "garden-realm", entity_id: "garden" }] : [] };
     } };
     assert.equal(await canManageCommunityNotifications(client, "viewer", "garden", allowManagement), allowed);

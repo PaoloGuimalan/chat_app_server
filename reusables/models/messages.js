@@ -20,6 +20,7 @@ const { publish } = require("../redis/pubsub");
 const pool = require("../../reusables/database/postgres");
 const { v4: uuidv4 } = require("uuid");
 const { assertMessagingTarget } = require("./realmCapabilities");
+const { resolveRole } = require("./roles");
 
 // The first of `messageID` and fresh ids that no message uses yet. Used to
 // recurse without returning the result (a collision resolved to undefined),
@@ -61,12 +62,13 @@ const AddNewMemberToContacts = async (
   added_by_id = null,
 ) => {
   await assertMessagingTarget(pool, contactID, entityID, added_by_id);
+  const memberRole = await resolveRole(pool, { roleName: "member" });
   const member_id = uuidv4(); // generate a unique UUID for member_id
   const date_joined = new Date(); // current timestamp
 
   const query = `
     INSERT INTO community_member
-    (member_id, entity_id, nickname, realm_id, added_by_id, date_joined, role)
+    (member_id, entity_id, nickname, realm_id, added_by_id, date_joined, role_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (entity_id, realm_id) DO NOTHING;
   `;
@@ -78,7 +80,7 @@ const AddNewMemberToContacts = async (
     contactID,
     added_by_id,
     date_joined,
-    "member",
+    memberRole.id,
   ];
 
   try {

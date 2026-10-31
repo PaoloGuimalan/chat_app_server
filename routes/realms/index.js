@@ -166,7 +166,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         actorRole = "owner";
       } else {
         const { rows: actorRow } = await pool.query(
-          `SELECT role FROM community_member WHERE entity_id = $1 AND realm_id = $2`,
+          `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.entity_id = $1 AND m.realm_id = $2`,
           [entityID, realm_id],
         );
         actorRole = actorRow.length > 0 ? actorRow[0].role : null;
@@ -174,7 +174,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
 
       if (actorRole !== "owner") {
         const { rows: targetAdminRows } = await pool.query(
-          `SELECT entity_id FROM community_member WHERE realm_id = $1 AND entity_id = ANY($2::text[]) AND role IN ('admin', 'owner')`,
+          `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.realm_id = $1 AND m.entity_id = ANY($2::text[]) AND r.name IN ('admin', 'owner')`,
           [realm_id, restids],
         );
         if (targetAdminRows.length > 0) {
@@ -207,7 +207,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     // owner, per the actorRole check above), so this covers the whole
     // batch, not just self-removal.
     const { rows: ownerRows } = await pool.query(
-      `SELECT entity_id FROM community_member WHERE realm_id = $1 AND role = 'owner'`,
+      `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.realm_id = $1 AND r.name = 'owner'`,
       [realm_id],
     );
     const currentOwnerIds = ownerRows.map((mp) => mp.entity_id);

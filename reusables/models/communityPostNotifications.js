@@ -158,8 +158,8 @@ function createCommunityPostNotifier({
     const post = posts[0];
     if (!post) return;
     const { rows: managers } = await client.query(
-      `SELECT entity_id FROM community_member WHERE realm_id = $1
-       AND role IN ('owner', 'admin', 'moderator')`,
+      `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id
+       WHERE m.realm_id = $1 AND r.name IN ('owner', 'admin', 'moderator')`,
       [post.realm_id],
     );
     const canonicalID = noticeID(postID, post.community_entity_id, CREATED);

@@ -1,3 +1,4 @@
+const { resolveRole } = require("../../reusables/models/roles");
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
@@ -2889,6 +2890,8 @@ router.post(
         [userReceivers.map((mp) => mp.entityID)],
       );
 
+      const ownerRole = await resolveRole(client, { roleName: "owner" });
+      const memberRole = await resolveRole(client, { roleName: "member" });
       const insertValues = [];
       const params = [];
       let paramIndex = 1;
@@ -2905,9 +2908,9 @@ router.post(
         params.push(new Date()); // date_joined or null as needed
 
         if (accountId === entity_id) {
-          params.push("owner"); // member role
+          params.push(ownerRole.id); // member role
         } else {
-          params.push("member"); // member role
+          params.push(memberRole.id); // member role
         }
       });
 
@@ -2937,7 +2940,7 @@ router.post(
 
       await client.query(
         `
-        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role)
+        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role_id)
         VALUES ${insertValues.join(", ")}
       `,
         params,
@@ -3039,6 +3042,8 @@ const createRealmReusable = async (
       [allReceivers],
     );
 
+    const ownerRole = await resolveRole(client, { roleName: "owner" });
+    const memberRole = await resolveRole(client, { roleName: "member" });
     const insertValues = [];
     const params = [];
     let paramIndex = 1;
@@ -3055,9 +3060,9 @@ const createRealmReusable = async (
       params.push(new Date()); // date_joined or null as needed
 
       if (accountId === entityID) {
-        params.push("owner"); // realm creator - full control, incl. delete/ownership transfer
+        params.push(ownerRole.id); // realm creator - full control, incl. delete/ownership transfer
       } else {
-        params.push("member"); // member role
+        params.push(memberRole.id); // member role
       }
     });
 
@@ -3094,7 +3099,7 @@ const createRealmReusable = async (
 
     await client.query(
       `
-        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role)
+        INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role_id)
         VALUES ${insertValues.join(", ")}
       `,
       params,

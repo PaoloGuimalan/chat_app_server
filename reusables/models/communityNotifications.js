@@ -107,9 +107,10 @@ const notificationAudienceMatch = async (
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id,
             (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
-            (r.is_active = TRUE AND COALESCE(m.role IN ('owner', 'admin', 'moderator'), FALSE)) AS management_allowed
+            (r.is_active = TRUE AND COALESCE(member_role.name IN ('owner', 'admin', 'moderator'), FALSE)) AS management_allowed
      FROM community_realm r
      LEFT JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
+     LEFT JOIN entity_role member_role ON member_role.id = m.role_id
      WHERE r.type = 'community'`,
     [viewerID],
   );
@@ -162,8 +163,9 @@ const canManageCommunityNotifications = async (
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id FROM community_realm r
      JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
+     JOIN entity_role member_role ON member_role.id = m.role_id
      WHERE r.entity_id = $2 AND r.type = 'community' AND r.is_active = TRUE
-       AND m.role IN ('owner', 'admin', 'moderator')
+       AND member_role.name IN ('owner', 'admin', 'moderator')
      LIMIT 1`,
     [viewerID, communityID],
   );

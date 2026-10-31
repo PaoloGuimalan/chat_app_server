@@ -37,6 +37,23 @@ test("adding a community entity to an ordinary group is rejected before membersh
   assert.equal(queries.some((sql) => sql.includes("INSERT")), false);
 });
 
+test("new membership stores the marked default member role ID", async (t) => {
+  let inserted;
+  t.mock.method(pool, "query", async (sql, params) => {
+    if (sql.includes("FROM community_realm")) return { rows: [] };
+    if (sql.includes("FROM entity_role")) {
+      assert.match(sql, /is_default = TRUE/);
+      assert.deepEqual(params, ["member"]);
+      return { rows: [{ id: "42", name: "member", is_default: true }] };
+    }
+    inserted = { sql, params };
+    return { rows: [] };
+  });
+  await AddNewMemberToContacts("ordinary-group", "new-member", "actor");
+  assert.match(inserted.sql, /date_joined, role_id\)/);
+  assert.equal(inserted.params.at(-1), "42");
+});
+
 const capture = () => {
   const calls = [];
   Conversation.findOneAndUpdate = async (filter, update, options) => {

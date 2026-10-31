@@ -295,9 +295,10 @@ async function getRealmWithUsers(realmId, entityID) {
         OR EXISTS (
           SELECT 1
           FROM community_member cm_admin
+          JOIN entity_role member_role ON member_role.id = cm_admin.role_id
           WHERE cm_admin.entity_id = $2
             AND cm_admin.realm_id = cr.realm_id
-            AND cm_admin.role IN ('admin', 'owner')
+            AND member_role.name IN ('admin', 'owner')
         )
       ),
       'is_member', (
@@ -328,6 +329,9 @@ async function getRealmWithUsers(realmId, entityID) {
       'usersWithInfo', COALESCE(jsonb_agg(
         jsonb_build_object(
           '_id', COALESCE(ua.id, mr.id, mb.id),
+          'member_id', cm.member_id,
+          'role_id', cm.role_id,
+          'role', roster_role.name,
           'entityID', p.id,
           'userID', COALESCE(ua.username, mr.slug, mb.handle, mr.realm_id),
           'fullname', CASE
@@ -362,6 +366,7 @@ async function getRealmWithUsers(realmId, entityID) {
     ) AS realm_with_users
     FROM community_realm cr
     LEFT JOIN community_member cm ON cr.realm_id = cm.realm_id
+    LEFT JOIN entity_role roster_role ON roster_role.id = cm.role_id
     LEFT JOIN entity_entity p ON p.id = cm.entity_id
     LEFT JOIN user_account ua ON ua.entity_id = p.id AND p.type = 'user'
     LEFT JOIN community_realm mr ON mr.entity_id = p.id AND p.type = 'realm'
