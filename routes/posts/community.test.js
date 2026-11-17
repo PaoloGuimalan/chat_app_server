@@ -20,7 +20,6 @@ function creation({
   canSubmit = true,
   canCreate = true,
   canPublish = true,
-  approvalsEnabled = true,
 } = {}) {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");
   const start = source.indexOf("const createPostFromPayload =");
@@ -84,7 +83,6 @@ function creation({
   const context = {
     ...communityPosts,
     resolveCommunityPostApproval: (...args) => require('../../reusables/models/communityPublication').resolveCommunityPostApproval(...args, {
-      enabled: approvalsEnabled,
       checkPermission: async (_actor, code, _realm, options) => {
         assert.equal(options.client, client);
         assert.equal(options.fresh, true);
@@ -444,8 +442,8 @@ test('restricted community originals and shares persist pending without publicat
   }
 });
 
-test('submission denial and disabled review never bypass policy or insert a post', async () => {
-  for (const settings of [{ canCreate: false }, { canSubmit: false }, { canPublish: false, approvalsEnabled: false }]) {
+test('submission denial never bypasses policy or inserts a post', async () => {
+  for (const settings of [{ canCreate: false }, { canSubmit: false }]) {
     const app = creation(settings);
     await assert.rejects(app.create({ community_entity_id: 'community' }), { status: 403 });
     assert.equal(app.queries.some(({ sql }) => sql.includes('INSERT INTO newsfeed_post (')), false);
