@@ -81,12 +81,13 @@ const loadCommunityMediaRealm = async (client, realmID, lock = false) => {
 
 const loadPostCommunity = async (client, postID, viewerID) => {
   const { rows } = await client.query(
-    `SELECT r.entity_id, r.realm_id, r.is_private, r.is_active,
+    `SELECT r.entity_id, r.realm_id, r.is_private, r.is_active, p.approval,
             EXISTS (
               SELECT 1 FROM community_member m
               WHERE m.realm_id = r.id AND m.entity_id = $2
             ) AS is_member
      FROM newsfeed_posttag t
+     JOIN newsfeed_post p ON p.post_id = t.post_id
      JOIN community_realm r ON r.entity_id = t.entity_id
      WHERE t.post_id = $1 AND r.type = 'community'
      LIMIT 2`,
@@ -99,6 +100,9 @@ const loadPostCommunity = async (client, postID, viewerID) => {
 };
 
 const validateCommunityInteraction = (community, requestedAnonymity) => {
+  if (community?.approval != null && community.approval !== 1) {
+    throw communityError("Post not available", 404);
+  }
   const anonymous = parseAnonymousFlag(requestedAnonymity);
   if (
     community &&
@@ -114,6 +118,9 @@ const validateCommunityInteraction = (community, requestedAnonymity) => {
 };
 
 const validateCommunityShare = (source, destination) => {
+  if (source?.approval != null && source.approval !== 1) {
+    throw communityError("Post not available", 404);
+  }
   if (
     source &&
     (!source.is_active ||
@@ -148,6 +155,7 @@ const communityScopeSQL = (postAlias, selection = "1") => `
 const communityAudienceSQL = (postAlias, viewerParam) => `(
   (${communityScopeSQL(postAlias, "COUNT(DISTINCT community.id)")}) = 1
   AND ${postAlias}.on_feed = 'feed'
+  AND ${postAlias}.approval = 1
   AND NOT EXISTS (
     ${communityScopeSQL(postAlias)}
     AND (

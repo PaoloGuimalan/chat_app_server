@@ -33,7 +33,52 @@ const matches = (filter, item) => Object.entries(filter).every(([key, value]) =>
 });
 
 const allowManagement = async () => true;
-const notificationAudienceMatch = (...args) => rawNotificationAudienceMatch(...args, []);
+const notificationAudienceMatch = (...args) => rawNotificationAudienceMatch(...args, [], []);
+
+test('former authors retain only ownership-verified decisions in list and unread-count matches', async () => {
+  const client = { query: async () => ({ rows: [{ entity_id: 'private-community', member_allowed: false }] }) };
+  const proof = { decision_id: 'decision', community_id: 'private-community' };
+  const filter = await rawNotificationAudienceMatch(client, { toUserID: 'author' }, 'author', allowManagement, [], [proof]);
+  const notice = { toUserID: 'author', type: 'community_post_decision', referenceID: 'decision', fromUserID: 'private-community',
+    target: { type: 'realm_review', supportingID: 'decision' } };
+  assert.equal(matches(filter, notice), true);
+  for (const changed of [{ toUserID: 'other' }, { type: 'post_comment' }, { referenceID: 'forged' },
+    { target: { type: 'realm_review', supportingID: 'forged' } }]) assert.equal(matches(filter, { ...notice, ...changed }), false);
+  const denied = await rawNotificationAudienceMatch(client, { toUserID: 'author' }, 'author', allowManagement, [], []);
+  assert.equal(matches(denied, notice), false);
+});
+
+test('former-author decision events recheck ownership while unrelated community events stay blocked', async () => {
+  const sent = [];
+  let owns = true;
+  const stream = authorizedNotificationStream({ sse: (...args) => sent.push(args) }, async () => false, async () => false,
+    async (decision, community) => owns && decision === 'decision' && community === 'private-community');
+  const payload = { result: { type: 'community_post_decision', review_decision_id: 'decision', community_entity_id: 'private-community' } };
+  await stream.sse('notifications', payload);
+  owns = false;
+  await stream.sse('notifications', payload);
+  await stream.sse('notifications', { result: { post_id: 'post', community_entity_id: 'private-community' } });
+  assert.deepEqual(sent, [['notifications', payload]]);
+});
+
+test('a custom post reviewer can receive and stream previews without join-management powers', async () => {
+  const client = { query: async () => ({ rows: [{ id: 'club', entity_id: 'garden', member_allowed: true, management_allowed: true }] }) };
+  const postReviewer = async (actor, permission) => permission === 'realm.post.review';
+  assert.equal(await canManageCommunityNotifications(client, 'viewer', 'garden', postReviewer), true);
+  const filter = await notificationAudienceMatch(client, { toUserID: 'viewer' }, 'viewer', postReviewer);
+  assert.equal(matches(filter, { toUserID: 'viewer', fromUserID: 'garden', type: 'community_admin_activity',
+    isRead: false, content: { headline: 'Community activity preview' } }), true);
+});
+
+test("hidden community post notices are excluded even for current members", async () => {
+  const database = { query: async () => ({ rows: [{ id: 'realm', entity_id: 'community', member_allowed: true }] }) };
+  for (const approval of [0, 1, 2]) {
+    const filter = await rawNotificationAudienceMatch(database, { toUserID: 'viewer' }, 'viewer', allowManagement,
+      [{ post_id: 'post', entity_id: 'community', approval }], []);
+    assert.equal(matches(filter, { toUserID: 'viewer', fromUserID: 'actor', type: 'post_comment',
+      target: { type: 'post', supportingID: 'post' } }), approval === 1);
+  }
+});
 
 test("community scope comes from the recipient's target posts without a stored community field", async () => {
   const notifications = {
@@ -54,7 +99,7 @@ test("community scope comes from the recipient's target posts without a stored c
   };
   const posts = await notificationPostCommunities(database, notifications, "viewer");
   const filter = await rawNotificationAudienceMatch(
-    database, { toUserID: "viewer" }, "viewer", allowManagement, posts,
+    database, { toUserID: "viewer" }, "viewer", allowManagement, posts, [],
   );
   assert.equal(matches(filter, {
     toUserID: "viewer", fromUserID: "named-actor", type: "post_comment",
@@ -69,7 +114,7 @@ test("community scope comes from the recipient's target posts without a stored c
 test("private community notices are filtered before notification pagination and counts", async () => {
   const match = { toUserID: "viewer", type: "post_comment" };
   const database = { query: async () => ({ rows: [{ entity_id: "private-community", member_allowed: false, management_allowed: false }] }) };
-  const filter = await rawNotificationAudienceMatch(database, match, "viewer", allowManagement, [{post_id:"private-post",entity_id:"private-community"}]);
+  const filter = await rawNotificationAudienceMatch(database, match, "viewer", allowManagement, [{post_id:"private-post",entity_id:"private-community"}], []);
   assert.equal(matches(filter, { ...match, fromUserID: "private-community" }), false);
   assert.equal(matches(filter, { ...match, fromUserID: "actor", target: { type: "post", supportingID: "private-post" } }), false);
   assert.equal(matches(filter, { ...match, fromUserID: "ordinary" }), true);
@@ -140,7 +185,9 @@ test("management stream authorization reads current active community manager rol
     const client = { query: async (sql, params) => {
       assert.deepEqual(params, ["viewer", "garden"]);
       assert.match(sql, /r\.is_active = TRUE/);
-      assert.match(sql, /member_role\.name IN \('owner', 'admin', 'moderator'\)/);
+      assert.match(sql, /member_role\.code/);
+      assert.match(sql, /member_role\.realm_id = m\.realm_id/);
+      assert.match(sql, /entity_role_permissions/);
       return { rows: allowed ? [{ id: "garden-realm", entity_id: "garden" }] : [] };
     } };
     assert.equal(await canManageCommunityNotifications(client, "viewer", "garden", allowManagement), allowed);
@@ -154,7 +201,7 @@ test("management audience honors permission denials without hiding ordinary noti
   ] }) };
   const checkPermission = async (actor, permission, realm) => {
     assert.equal(actor, "viewer");
-    assert.equal(permission, "realm.request.approve");
+    assert.ok(require('./communityNotificationPermissions').MANAGEMENT_PERMISSIONS.includes(permission));
     return realm === "other-realm";
   };
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", checkPermission);
@@ -169,7 +216,9 @@ test("management stream rejects explicit permission denial and inactive catalog 
   const database = { query: async () => ({ rows: [{ id: "garden-realm", entity_id: "garden" }] }) };
   for (const permission of [false, true]) {
     const allowed = await canManageCommunityNotifications(database, "viewer", "garden", async (actor, name, realm) => {
-      assert.deepEqual([actor, name, realm], ["viewer", "realm.request.approve", "garden-realm"]);
+      assert.equal(actor, 'viewer');
+      assert.equal(realm, 'garden-realm');
+      assert.ok(require('./communityNotificationPermissions').MANAGEMENT_PERMISSIONS.includes(name));
       return permission;
     });
     assert.equal(allowed, permission);

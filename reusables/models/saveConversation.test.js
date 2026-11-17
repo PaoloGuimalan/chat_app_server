@@ -43,8 +43,8 @@ test("new membership stores the marked default member role ID", async (t) => {
     if (sql.includes("FROM community_realm")) return { rows: [] };
     if (sql.includes("FROM entity_role")) {
       assert.match(sql, /is_default = TRUE/);
-      assert.deepEqual(params, ["member"]);
-      return { rows: [{ id: "42", name: "member", is_default: true }] };
+      assert.deepEqual(params, ["member", "ordinary-group"]);
+      return { rows: [{ id: "42", name: "member", code: "member", realm_id: "ordinary-group", is_default: true }] };
     }
     inserted = { sql, params };
     return { rows: [] };

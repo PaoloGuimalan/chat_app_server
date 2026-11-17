@@ -465,7 +465,7 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
   return rows;
 };
 
-async function CreateEntity(type) {
+async function CreateEntity(type, client = pool) {
   // Validate incoming parameter safely before sending to the database instance
   if (!type) {
     throw new Error(
@@ -484,7 +484,7 @@ async function CreateEntity(type) {
   const values = [entityId, type];
 
   try {
-    const { rows } = await pool.query(queryText, values);
+    const { rows } = await client.query(queryText, values);
 
     // Returns the newly generated row object index directly
     return rows[0].id;

@@ -17,6 +17,10 @@ function creation({
   existingMediaPost = null,
   notificationFailures = 0,
   fanoutFailures = 0,
+  canSubmit = true,
+  canCreate = true,
+  canPublish = true,
+  approvalsEnabled = true,
 } = {}) {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");
   const start = source.indexOf("const createPostFromPayload =");
@@ -31,8 +35,10 @@ function creation({
   const deliveries = [];
   const adminActivities = [];
   const effects = [];
+  const lifecycle = [];
   let savedMediaPost = existingMediaPost;
   let pendingMediaPost = null;
+  let leased = false;
   const community = {
     entity_id: "community", realm_id: "realm", is_private: false,
     profile: "https://storage/old.jpg", cover_photo: "https://storage/old-cover.jpg",
@@ -77,7 +83,16 @@ function creation({
   };
   const context = {
     ...communityPosts,
-    pool: { ...client, getPool: () => ({ connect: async () => client }), releaseClient: () => {} },
+    resolveCommunityPostApproval: (...args) => require('../../reusables/models/communityPublication').resolveCommunityPostApproval(...args, {
+      enabled: approvalsEnabled,
+      checkPermission: async (_actor, code, _realm, options) => {
+        assert.equal(options.client, client);
+        assert.equal(options.fresh, true);
+        assert.ok(queries.some(({ sql }) => sql === 'BEGIN'));
+        return code === 'posts.create' ? canCreate : code === 'realm.post.submit' ? canSubmit : canPublish;
+      },
+    }),
+    pool: { ...client, getPool: () => ({ connect: async () => { leased = true; return client; } }), releaseClient: () => { leased = false; } },
     checkPostIDExisting: async () => "post",
     makeID: () => "generated",
     generateUUID: () => "tag-id",
@@ -96,8 +111,11 @@ function creation({
     },
     publishRelease: (releases) => effects.push({ releases }),
     notifyCommunityPostCreated: async (options) => {
+      assert.equal(leased, false, 'Release the transaction client before notification queries use the pool');
       assert.ok(queries.some(({ sql }) => sql === "COMMIT"));
+      if (options.pendingDecisionID) { lifecycle.push('pendingNotice'); return true; }
       adminActivities.push(options.postID);
+      return true;
     },
     notifyCommunityMediaUpdate: async (options) => {
       assert.ok(queries.some(({ sql }) => sql === "COMMIT"));
@@ -111,12 +129,12 @@ function creation({
       deliveries.push([payload.current_entity_id, { ...payload.post_data }, payload.type]);
       return true;
     },
-    createPostScore: () => {},
+    createPostScore: () => lifecycle.push('seedScore'),
     bulkFanoutToCache: (...args) => {
       assert.ok(queries.some(({ sql }) => sql === "COMMIT"));
       deliveries.push(args);
     },
-    queueContentTagging: () => {},
+    queueContentTagging: () => lifecycle.push('safetyModeration'),
     logPostShare: async () => {},
     QUEUES: { UPDATE_RANKING_SCORE: "ranking", BULK_FANOUT_TO_CACHE: "fanout" },
     publish: (queue, payload) => {
@@ -155,6 +173,7 @@ function creation({
     adminActivities,
     deliveries,
     effects,
+    lifecycle,
     create: async (fields = {}, kind = "feed", internal = {}) => {
       const result = await context.create({
         params: { entity_id: "author", id: "account" },
@@ -406,4 +425,30 @@ test("committed community posts and shares produce admin activity, ordinary/fail
   const failed = creation({ failCommit: true });
   await assert.rejects(failed.create({ community_entity_id: "community" }));
   assert.deepEqual(failed.adminActivities, []);
+});
+
+test('restricted community originals and shares persist pending without publication effects', async () => {
+  for (const shared of [false, true]) {
+    const app = creation({ canPublish: false });
+    const result = await app.create({ community_entity_id: 'community', approval: 1,
+      ...(shared ? { content: sharedContent } : {}) });
+    const post = app.queries.find(({ sql }) => sql.includes('INSERT INTO newsfeed_post ('));
+    assert.match(post.sql, /approval/);
+    assert.equal(post.params[17], 0);
+    assert.equal(result.approval, 0);
+    assert.ok(app.queries.some(({ sql }) => sql.includes('INSERT INTO community_approvals')));
+    assert.equal(app.deliveries.length, 0);
+    assert.deepEqual(app.adminActivities, []);
+    assert.deepEqual(app.effects, []);
+    assert.deepEqual(app.lifecycle, ['safetyModeration', 'pendingNotice']);
+  }
+});
+
+test('submission denial and disabled review never bypass policy or insert a post', async () => {
+  for (const settings of [{ canCreate: false }, { canSubmit: false }, { canPublish: false, approvalsEnabled: false }]) {
+    const app = creation(settings);
+    await assert.rejects(app.create({ community_entity_id: 'community' }), { status: 403 });
+    assert.equal(app.queries.some(({ sql }) => sql.includes('INSERT INTO newsfeed_post (')), false);
+    assert.equal(app.deliveries.length, 0);
+  }
 });

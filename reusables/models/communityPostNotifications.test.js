@@ -2,6 +2,37 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createCommunityPostNotifier, noticeID } = require("./communityPostNotifications");
 
+test('the production notifier pins realm then post locks through pending-notice delivery and releases on failure', async () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  for (const fail of [false, true]) {
+    const calls = [];
+    const client = { query: async sql => {
+      calls.push(sql);
+      if (fail && sql.includes('FOR UPDATE OF p')) throw new Error('unavailable');
+      return { rows: sql.includes('FOR UPDATE OF r') ? [{ id: 'realm' }] : [] };
+    }, release: () => calls.push('release') };
+    const module = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(require.resolve('./communityPostNotifications'), 'utf8'), {
+      module, exports: module.exports, Buffer, console: { error() {} },
+      require: name => {
+        if (name === '../database/postgres') return { getPool: () => ({ connect: async () => { calls.push('connect'); return client; } }), query: async () => { throw new Error('not pinned'); } };
+        if (name === '../redis/pubsub') return { publish: async () => {} };
+        if (name === '../../schema/users/notifications') return {};
+        if (name === './communityNotifications') return { canManageCommunityNotifications: async () => false };
+        return require(name);
+      },
+    });
+    await module.exports.notifyCommunityPostCreated({ postID: 'post', pendingDecisionID: 'decision' });
+    assert.equal(calls[0], 'connect');
+    assert.equal(calls[1], 'BEGIN');
+    assert.match(calls[2], /FOR UPDATE OF r/);
+    assert.match(calls[3], /FOR UPDATE OF p/);
+    assert.equal(calls.at(-2), fail ? 'ROLLBACK' : 'COMMIT');
+    assert.equal(calls.at(-1), 'release');
+  }
+});
+
 const field = (row, key) => key.split(".").reduce((value, part) => value?.[part], row);
 const matches = (row, query) => Object.entries(query).every(([key, value]) => {
   const actual = field(row, key);
@@ -42,13 +73,23 @@ function fixture({ anonymous = false } = {}) {
   };
   let allowed = true;
   const notify = createCommunityPostNotifier({ notifications,
-    client: { query: async (sql) => ({ rows: sql.includes("FROM newsfeed_post") ? (post ? [post] : []) : [{ entity_id: "admin" }, { entity_id: "maya" }] }) },
+    client: { query: async (sql) => ({ rows: sql.includes("FROM newsfeed_post") ? (post ? [post] : []) : ['admin', 'maya'].map(entity_id => ({ entity_id, notice_types: require('./communityNotificationPermissions').INBOX_TYPES })) }) },
     canManage: async () => allowed,
     publish: async (...event) => events.push(event),
     now: () => timestamp,
   });
   return { rows, events, notifications, notify, setPost: (next) => { post = next; }, setTime: (next) => { timestamp = next; }, revoke: () => { allowed = false; } };
 }
+
+test('pending notices target approvals and count in previews without announcing publication', async () => {
+  const app = fixture();
+  await app.notify('post', { pendingDecisionID: 'decision' });
+  assert.equal(app.rows.filter(row => row.type === 'community_post_created').length, 0);
+  const pending = app.rows.find(row => row.type === 'community_post_pending');
+  assert.equal(pending.referenceID, 'decision');
+  assert.equal(pending.target.type, 'community_approvals');
+  assert.match(app.rows.find(row => row.type === 'community_admin_activity').content.details, /1 new activity/);
+});
 
 test("new community posts immediately write inbox activity and fixed admin preview", async () => {
   const f = fixture();

@@ -62,7 +62,7 @@ const AddNewMemberToContacts = async (
   added_by_id = null,
 ) => {
   await assertMessagingTarget(pool, contactID, entityID, added_by_id);
-  const memberRole = await resolveRole(pool, { roleName: "member" });
+  const memberRole = await resolveRole(pool, { roleName: "member", realmID: contactID });
   const member_id = uuidv4(); // generate a unique UUID for member_id
   const date_joined = new Date(); // current timestamp
 

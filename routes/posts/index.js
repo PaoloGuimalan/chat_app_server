@@ -79,6 +79,7 @@ const {
   stop_listen,
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { resolveCommunityPostApproval } = require("../../reusables/models/communityPublication");
 const {
   loadPostCommunity,
   loadCommunityMediaRealm,
@@ -510,11 +511,11 @@ const createPostFromPayload = async ({
     INSERT INTO newsfeed_post (
       post_id, entity_id, is_sponsored, is_live, on_feed, from_system, date_posted,
       is_shared, file_type, caption, content_type, is_tagged, privacy_status, is_archived,
-      expires_at, details, is_anonymous
+      expires_at, details, is_anonymous, approval
     ) VALUES (
       $1, $2, $3, $4, $5, $6, to_timestamp($7),
       $8, $9, $10, $11, $12, $13, $14,
-      $15, $16, $17
+      $15, $16, $17, $18
     );
   `;
     const postValues = [
@@ -535,6 +536,7 @@ const createPostFromPayload = async ({
       expiresAt,
       details ? JSON.stringify(details) : null,
       isAnonymous,
+      1, // Derived under the transaction's destination/membership locks below.
     ];
 
     // A CHECKED-OUT client, not the pool. This was `await pool.getPool()`,
@@ -544,12 +546,16 @@ const createPostFromPayload = async ({
     // depends on it being real: its advisory lock is transaction-scoped.
     const client = await pool.getPool().connect();
     let committed = false;
+    let released = false;
+    let submissionDecisionID = null;
 
     try {
       await client.query("BEGIN");
       community = trustedCommunityMedia
         ? await loadCommunityMediaRealm(client, trustedCommunityMedia.realmID, true)
         : await resolveCommunityDestination(client, entityID, decodeToken, kind);
+      const approval = trustedCommunityMedia ? 1 : await resolveCommunityPostApproval(client, entityID, community);
+      postValues[17] = approval;
 
       if (trustedCommunityMedia) {
         // The realm lock serializes retries for the same upload. A completed
@@ -569,6 +575,8 @@ const createPostFromPayload = async ({
         if (existing.length) {
           await client.query("COMMIT");
           committed = true;
+          pool.releaseClient(client);
+          released = true;
           await deliverCommunityMediaPost({
             community, postID: existing[0].post_id, mediaType: content_type,
           });
@@ -617,6 +625,15 @@ const createPostFromPayload = async ({
       }
 
       await client.query(postInsertQuery, postValues);
+      if (approval === 0) {
+        submissionDecisionID = generateUUID();
+        await client.query(`INSERT INTO community_approvals
+          (id, realm_id, actor_id, target_kind, target_id, action, previous_state, new_state,
+           reason, content_version, created_at, delivery_state)
+          VALUES ($1, $2, $3, 'post', $4, 'submit', '{}', '{"approval":0,"published":false}',
+                  '', to_timestamp($5), now(), '{"pending_notice":"pending","status":"pending"}')`,
+          [submissionDecisionID, community.realm_id, entityID, postID, currentTimestampInSeconds]);
+      }
       if (community) {
         await client.query(
           `INSERT INTO newsfeed_posttag (post_tag_id, post_id, entity_id)
@@ -774,6 +791,22 @@ const createPostFromPayload = async ({
 
       await client.query("COMMIT");
       committed = true;
+      pool.releaseClient(client);
+      released = true;
+
+      if (approval === 0) {
+        attachRecords(ownUploads, { type: "post", id: postID });
+        queueContentTagging({ postID, entityID, caption: decodeToken.content.data, references: finaluploadedreferences });
+        if (await notifyCommunityPostCreated({ postID, pendingDecisionID: submissionDecisionID })) {
+          try {
+            await pool.query(`UPDATE community_approvals SET delivery_state =
+              '{"notices":"sent","status":"complete"}'::jsonb WHERE id = $1`, [submissionDecisionID]);
+          } catch (error) {
+            console.error("[community submission] Delivery bookkeeping remains pending:", error.message);
+          }
+        }
+        return { postID, expiresAt, approval, submissionURL: `/api/newsfeed/submissions/${postID}` };
+      }
 
       if (community && !trustedCommunityMedia) {
         await notifyCommunityPostCreated({ postID });
@@ -932,7 +965,7 @@ const createPostFromPayload = async ({
           ))
       `;
 
-        const { rows: userRows } = await client.query(userQuery, [
+        const { rows: userRows } = await pool.query(userQuery, [
           taggedUsernames,
           community?.realm_id || null,
         ]);
@@ -946,7 +979,7 @@ const createPostFromPayload = async ({
         );
       }
 
-      return { postID, expiresAt };
+      return { postID, expiresAt, approval };
     } catch (err) {
       if (!committed) await client.query("ROLLBACK");
       console.error("Transaction error:", err);
@@ -954,7 +987,7 @@ const createPostFromPayload = async ({
       throw err;
     } finally {
       // client.release(); // very important!
-      pool.releaseClient(client);
+      if (!released) pool.releaseClient(client);
     }
   } catch (ex) {
     if (!ex.status) {
@@ -1049,12 +1082,13 @@ router.post(
       // profile/cover upload sends it as boolean `true`, and the kind of a
       // row is not the client's to choose - moments and thoughts have their
       // own routes below.
-      await createPostFromPayload({
+      const created = await createPostFromPayload({
         params: req.params,
         decodeToken,
         kind: POST_KINDS.FEED,
       });
-      res.send({ status: true, result: "OK" });
+      res.send({ status: true, result: "OK", post_id: created.postID, approval: created.approval ?? 1,
+        submission_url: created.submissionURL ?? null });
     } catch (ex) {
       sendCreatePostError(res, ex);
     }

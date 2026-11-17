@@ -1,4 +1,4 @@
-const { resolveRole } = require("../../reusables/models/roles");
+const { ensureDefaultRoles } = require("../../reusables/models/roles");
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
@@ -7,6 +7,7 @@ const {
   notificationAudienceMatch,
   authorizedNotificationStream,
   canManageCommunityNotifications,
+  canReceiveCommunityDecision,
   normalizeCommunityNotifications,
   notificationSortStages,
   notificationReadMatch,
@@ -2865,9 +2866,13 @@ router.post(
     const username = req.params.username;
     const token = req.body.token;
 
-    const client = await pool.getPool();
+    const client = await pool.getPool().connect();
+    let transactionOpen = false;
+  let clientReleased = false;
 
     try {
+      await client.query("BEGIN");
+      transactionOpen = true;
       const decodeToken = jwt.verify(token, JWT_SECRET);
 
       const contactID = await checkGroupID(`${makeID(20)}`);
@@ -2890,31 +2895,7 @@ router.post(
         [userReceivers.map((mp) => mp.entityID)],
       );
 
-      const ownerRole = await resolveRole(client, { roleName: "owner" });
-      const memberRole = await resolveRole(client, { roleName: "member" });
-      const insertValues = [];
-      const params = [];
-      let paramIndex = 1;
-
-      rows.forEach(({ entity_id: accountId }) => {
-        insertValues.push(
-          `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
-        );
-        // member_id - generate UUID here or use a package during insert if your DB auto-generates
-        params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
-        params.push(accountId); // account FK
-        params.push(contactID); // pass your realm ID here
-        params.push(entity_id); // who added this member (account FK)
-        params.push(new Date()); // date_joined or null as needed
-
-        if (accountId === entity_id) {
-          params.push(ownerRole.id); // member role
-        } else {
-          params.push(memberRole.id); // member role
-        }
-      });
-
-      const realm_entity_id = await CreateEntity("realm");
+      const realm_entity_id = await CreateEntity("realm", client);
 
       await client.query(
         `INSERT INTO community_realm (
@@ -2938,6 +2919,29 @@ router.post(
         ],
       );
 
+      const { owner: ownerRole, member: memberRole } = await ensureDefaultRoles(client, contactID);
+      const insertValues = [];
+      const params = [];
+      let paramIndex = 1;
+
+      rows.forEach(({ entity_id: accountId }) => {
+        insertValues.push(
+          `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+        );
+        // member_id - generate UUID here or use a package during insert if your DB auto-generates
+        params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
+        params.push(accountId); // account FK
+        params.push(contactID); // pass your realm ID here
+        params.push(entity_id); // who added this member (account FK)
+        params.push(new Date()); // date_joined or null as needed
+
+        if (accountId === entity_id) {
+          params.push(ownerRole.id); // member role
+        } else {
+          params.push(memberRole.id); // member role
+        }
+      });
+
       await client.query(
         `
         INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role_id)
@@ -2947,6 +2951,9 @@ router.post(
       );
 
       await client.query("COMMIT");
+      transactionOpen = false;
+      client.release();
+    clientReleased = true;
 
       // Atomic upsert instead of an unawaited, unconditional .save() - same
       // fix as messages/index.js's ChatHistory creation, guarding against
@@ -2982,9 +2989,11 @@ router.post(
 
       res.send({ status: true, message: `You created a Group Chat` });
     } catch (ex) {
-      await client.query("ROLLBACK");
+      if (transactionOpen) await client.query("ROLLBACK");
       res.send({ status: false, message: "Group token encountered an error!" });
       console.log(ex);
+    } finally {
+      if (!clientReleased) client.release();
     }
   },
 );
@@ -3011,9 +3020,13 @@ const createRealmReusable = async (
   await validateProfilePath(slug, "slug");
   const profile = realmProfile || "N/A";
 
-  const client = await pool.getPool();
+  const client = await pool.getPool().connect();
+  let transactionOpen = false;
+  let clientReleased = false;
 
   try {
+    await client.query("BEGIN");
+    transactionOpen = true;
     const contactID = realmID ?? (await checkGroupID(`${makeID(20)}`));
     const privacy = privacyprop;
 
@@ -3042,31 +3055,7 @@ const createRealmReusable = async (
       [allReceivers],
     );
 
-    const ownerRole = await resolveRole(client, { roleName: "owner" });
-    const memberRole = await resolveRole(client, { roleName: "member" });
-    const insertValues = [];
-    const params = [];
-    let paramIndex = 1;
-
-    rows.forEach(({ entity_id: accountId }) => {
-      insertValues.push(
-        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
-      );
-      // member_id - generate UUID here or use a package during insert if your DB auto-generates
-      params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
-      params.push(accountId); // account FK
-      params.push(contactID); // pass your realm ID here
-      params.push(entityID); // who added this member (account FK)
-      params.push(new Date()); // date_joined or null as needed
-
-      if (accountId === entityID) {
-        params.push(ownerRole.id); // realm creator - full control, incl. delete/ownership transfer
-      } else {
-        params.push(memberRole.id); // member role
-      }
-    });
-
-    const realm_entity_id = await CreateEntity("realm");
+    const realm_entity_id = await CreateEntity("realm", client);
 
     await client.query(
       `INSERT INTO community_realm (
@@ -3097,6 +3086,29 @@ const createRealmReusable = async (
       ],
     );
 
+    const { owner: ownerRole, member: memberRole } = await ensureDefaultRoles(client, contactID);
+    const insertValues = [];
+    const params = [];
+    let paramIndex = 1;
+
+    rows.forEach(({ entity_id: accountId }) => {
+      insertValues.push(
+        `($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`,
+      );
+      // member_id - generate UUID here or use a package during insert if your DB auto-generates
+      params.push(uuidv4()); // use a UUID generator (e.g. 'uuid' library)
+      params.push(accountId); // account FK
+      params.push(contactID); // pass your realm ID here
+      params.push(entityID); // who added this member (account FK)
+      params.push(new Date()); // date_joined or null as needed
+
+      if (accountId === entityID) {
+        params.push(ownerRole.id); // realm creator - full control, incl. delete/ownership transfer
+      } else {
+        params.push(memberRole.id); // member role
+      }
+    });
+
     await client.query(
       `
         INSERT INTO community_member (member_id, entity_id, realm_id, added_by_id, date_joined, role_id)
@@ -3106,6 +3118,9 @@ const createRealmReusable = async (
     );
 
     await client.query("COMMIT");
+    transactionOpen = false;
+    client.release();
+    clientReleased = true;
 
     // Realtime fan-out for the two structural changes a client cannot learn any
     // other way. Both are published AFTER the commit, so anything refetching on
@@ -3178,8 +3193,11 @@ const createRealmReusable = async (
       );
     }
   } catch (ex) {
-    await client.query("ROLLBACK");
+    if (transactionOpen) await client.query("ROLLBACK");
     console.log(ex);
+    throw ex;
+  } finally {
+    if (!clientReleased) client.release();
   }
 };
 
@@ -4078,6 +4096,7 @@ router.get(
       res,
       (postID) => CanEntityViewPost(postID, entity_id),
       (communityID) => canManageCommunityNotifications(pool, entity_id, communityID),
+      (decisionID, communityID) => canReceiveCommunityDecision(pool, entity_id, decisionID, communityID),
     );
     listen(redis_event, stream);
 

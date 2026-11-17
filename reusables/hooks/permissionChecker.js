@@ -14,14 +14,14 @@
  * entity_role_permissions, entity_permission_catalog_entity_types joined to
  * entity_type), not hardcoded
  * here - both repos read the same shared Redis instance
- * (permcache:catalog:v1 / permcache:role_matrix:v2 /
+ * (permcache:catalog:v3 / permcache:role_matrix:v3:<realm> /
  * permcache:entity_type_matrix:v1, plain JSON strings) with a direct-query
  * fallback on a cache miss, so an admin editing the catalog on the Django
  * side is visible here without a deploy.
  *
  * Resolution priority (highest to lowest):
- *   1. Explicit deny (entity_permission, effect='deny', not expired) -> false, always.
- *   2. Explicit grant (effect='grant', not expired) -> true.
+ *   1. The immutable realm Owner holds all active realm capabilities.
+ *   2. Explicit entity deny/grant for the exact scope (including globals).
  *   3. Entity-type default (entity_type-scoped) OR role-derived default
  *      (realm-scoped) OR platform default (global-scoped).
  *   4. Deny-by-default fallback -> false.
@@ -29,11 +29,10 @@
 
 const redis = require("redis");
 const pool = require("../database/postgres");
-const { realmOwnerRoleID } = require("../models/roles");
 const { REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD } = require("../vars/redis");
 
-const CATALOG_CACHE_KEY = "permcache:catalog:v1";
-const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v2";
+const CATALOG_CACHE_KEY = "permcache:catalog:v3";
+const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v3";
 const ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1";
 const CACHE_TTL_SECONDS = 60 * 60; // safety-net only; Django invalidates on write
 // Keep aligned with entity/permissions.py::GLOBAL_PLATFORM_DEFAULT. Other
@@ -104,8 +103,9 @@ async function getCatalog() {
   return catalog;
 }
 
-async function getRoleMatrix() {
-  const cached = await _cacheGet(ROLE_MATRIX_CACHE_KEY);
+async function getRoleMatrix(realmID) {
+  const key = `${ROLE_MATRIX_CACHE_KEY}:${realmID}`;
+  const cached = await _cacheGet(key);
   if (cached) {
     return JSON.parse(cached);
   }
@@ -115,8 +115,9 @@ async function getRoleMatrix() {
     SELECT rp.role_id, pce.codename
     FROM entity_role_permissions rp
     JOIN entity_permission_catalog pce ON rp.permission_id = pce.id
-    WHERE pce.is_active = true
-    `,
+    JOIN entity_role role ON role.id = rp.role_id
+    WHERE role.realm_id = $1
+    `, [realmID],
   );
   const matrix = {};
   for (const row of rows) {
@@ -124,7 +125,7 @@ async function getRoleMatrix() {
     if (!matrix[roleID]) matrix[roleID] = [];
     matrix[roleID].push(row.codename);
   }
-  await _cacheSet(ROLE_MATRIX_CACHE_KEY, JSON.stringify(matrix));
+  await _cacheSet(key, JSON.stringify(matrix));
   return matrix;
 }
 
@@ -160,8 +161,8 @@ async function _getEntityType(entityId) {
   return rows.length > 0 ? rows[0].type : null;
 }
 
-async function _activeOverride(entityId, permission, realmId) {
-  const { rows } = await pool.query(
+async function _activeOverride(entityId, permission, realmId, client = pool) {
+  const { rows } = await client.query(
     `
     SELECT ep.effect FROM entity_permission ep
     JOIN entity_permission_catalog pc ON pc.id = ep.permission_id
@@ -176,10 +177,10 @@ async function _activeOverride(entityId, permission, realmId) {
   return rows.length > 0 ? rows[0].effect : null;
 }
 
-async function _globalPlatformDefault(entityId) {
+async function _globalPlatformDefault(entityId, client = pool) {
   // "Allowed unless explicitly denied" baseline - mirrors
   // entity/permissions.py::_account_in_good_standing.
-  const { rows } = await pool.query(
+  const { rows } = await client.query(
     `SELECT is_active FROM user_account WHERE entity_id = $1 LIMIT 1`,
     [entityId],
   );
@@ -196,12 +197,42 @@ async function _globalPlatformDefault(entityId) {
  * (community_realm.realm_id, which createRealmReusable always sets equal to
  * community_realm.id, the actual FK target of entity_permission.realm_id).
  */
-async function hasPermission(entityId, permission, realmId = null) {
+async function rolePermission(roleID, permission, realmID, { client, fresh }) {
+  if (roleID == null) return false;
+  if (fresh) {
+    const { rows } = await client.query(
+      `SELECT rp.role_id, pce.codename FROM entity_role_permissions rp
+       JOIN entity_permission_catalog pce ON pce.id = rp.permission_id
+       WHERE rp.role_id = $1 AND pce.codename = $2 AND pce.is_active = TRUE`,
+      [roleID, permission],
+    );
+    return rows.length > 0;
+  }
+  return (await getRoleMatrix(realmID))[String(roleID)]?.includes(permission) ?? false;
+}
+
+// Feature guards deny a disabled catalog capability; programming errors and
+// unknown codenames retain the generic resolver's explicit error contract.
+async function hasActivePermission(entityId, permission, realmId = null, options = {}) {
+  try { return await hasPermission(entityId, permission, realmId, options); }
+  catch (error) {
+    if (!error.message?.startsWith("Unknown permission string:")) throw error;
+    const catalog = options.fresh ? Object.fromEntries((await (options.client || pool).query(
+      "SELECT codename, scope, is_active FROM entity_permission_catalog WHERE codename = $1", [permission],
+    )).rows.map(row => [row.codename, row])) : await getCatalog();
+    if (catalog[permission] && !catalog[permission].is_active) return false;
+    throw error;
+  }
+}
+
+async function hasPermission(entityId, permission, realmId = null, { client = pool, fresh = false } = {}) {
   if (!entityId) {
     return false;
   }
 
-  const catalog = await getCatalog();
+  const catalog = fresh ? Object.fromEntries((await client.query(
+    "SELECT codename, scope, is_active FROM entity_permission_catalog WHERE codename = $1", [permission],
+  )).rows.map(row => [row.codename, row])) : await getCatalog();
   const entry = catalog[permission];
   if (!entry || !entry.is_active) {
     throw new Error(`Unknown permission string: ${permission}`);
@@ -215,51 +246,29 @@ async function hasPermission(entityId, permission, realmId = null) {
     throw new Error(`${permission} is realm-scoped and requires a realm`);
   }
 
-  const override = await _activeOverride(entityId, permission, realmId);
-  if (override !== null) {
-    return override === "grant";
+  let role = null;
+  if (realmId != null) {
+    const { rows: selfRealm } = await client.query(
+      `SELECT 1 FROM community_realm WHERE id = $1 AND entity_id = $2 AND type <> 'community' LIMIT 1`,
+      [realmId, entityId]);
+    if (selfRealm.length) return true;
+    const { rows } = await client.query(
+      `SELECT m.role_id, r.code, r.is_default FROM community_member m
+       JOIN entity_role r ON r.id = m.role_id AND r.realm_id = m.realm_id
+       WHERE m.entity_id = $1 AND m.realm_id = $2 LIMIT 1`, [entityId, realmId]);
+    role = rows[0];
+    if (role?.is_default && role.code === "owner") return true;
   }
-
+  const override = await _activeOverride(entityId, permission, realmId, client);
+  if (override !== null) return override === "grant";
   if (scope === "entity_type") {
     const entityType = await _getEntityType(entityId);
-    const entityTypeMatrix = await getEntityTypeMatrix();
-    const allowedForType = entityType ? entityTypeMatrix[entityType] : null;
-    return allowedForType ? allowedForType.includes(permission) : false;
+    return (await getEntityTypeMatrix())[entityType]?.includes(permission) ?? false;
   }
-
-  if (realmId != null) {
-    // A page's own entity can never appear as a Member row of its own realm
-    // (community_member only ever holds personal accounts), so once "acting
-    // as" that exact page (entity switch re-issues the JWT's entity claim to
-    // the realm's own entity), the Member lookup below would always miss and
-    // wrongly deny. Resolve self-administration as owner tier directly -
-    // this can only match the realm this entity's own id belongs to, so it
-    // can't be used to bypass authorization on any other realm.
-    const { rows: selfRealmRows } = await pool.query(
-      `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2 LIMIT 1`,
-      [realmId, entityId],
-    );
-    if (selfRealmRows.length > 0) {
-      const roleMatrix = await getRoleMatrix();
-      const ownerRoleID = await realmOwnerRoleID(pool, realmId);
-      const ownerDefaults = ownerRoleID == null ? null : roleMatrix[String(ownerRoleID)];
-      return ownerDefaults ? ownerDefaults.includes(permission) : false;
-    }
-
-    const { rows } = await pool.query(
-      `SELECT role_id FROM community_member WHERE entity_id = $1 AND realm_id = $2 LIMIT 1`,
-      [entityId, realmId],
-    );
-    if (rows.length === 0) {
-      return false;
-    }
-    const roleMatrix = await getRoleMatrix();
-    const roleDefaults = roleMatrix[String(rows[0].role_id)];
-    return roleDefaults ? roleDefaults.includes(permission) : false;
-  }
+  if (realmId != null) return rolePermission(role?.role_id, permission, realmId, { client, fresh });
 
   return GLOBAL_PLATFORM_DEFAULT.has(permission)
-    ? _globalPlatformDefault(entityId)
+    ? _globalPlatformDefault(entityId, client)
     : false;
 }
 
@@ -360,6 +369,7 @@ function requiresPermission(permission, { realmId } = {}) {
 
 module.exports = {
   hasPermission,
+  hasActivePermission,
   requiresPermission,
   getCatalog,
   getRoleMatrix,

@@ -1,16 +1,11 @@
 const { createHash, randomUUID } = require("node:crypto");
+const { INBOX_TYPES, memberHasAnyPermissionSQL, managementNoticeTypesSQL } = require('./communityNotificationPermissions');
 
 const INBOX = "community_admin_inbox";
 const PREVIEW = "community_admin_activity";
 const CREATED = "community_post_created";
-const COMMUNITY_ACTIVITY_TYPES = [
-  "community_join_request",
-  "community_member_joined",
-  CREATED,
-  "post_comment",
-  "post_reaction",
-  "comment_reaction",
-];
+const PENDING = "community_post_pending";
+const COMMUNITY_ACTIVITY_TYPES = INBOX_TYPES;
 const URL_NAMESPACE = Buffer.from("6ba7b8119dad11d180b400c04fd430c8", "hex");
 
 // Match Django's _notice_id so both services acknowledge the same inbox rows.
@@ -53,7 +48,7 @@ function createCommunityPostNotifier({
   publish,
   now = () => new Date().toISOString(),
 }) {
-  async function savePreview(post, admin) {
+  async function savePreview(post, admin, kinds) {
     if (!(await canManage(admin, post.community_entity_id))) return;
     const id = slotID(post.community_entity_id, admin);
     let notificationID;
@@ -64,7 +59,7 @@ function createCommunityPostNotifier({
       const timestamp = now();
       const canonicalIDs = await notifications.distinct("notificationID", {
         toUserID: post.community_entity_id,
-        type: { $in: COMMUNITY_ACTIVITY_TYPES },
+        type: { $in: kinds },
       });
       unread = {
         referenceID: { $in: canonicalIDs },
@@ -140,7 +135,7 @@ function createCommunityPostNotifier({
     await publish("events_" + admin, "community_admin_preview_changed", payload);
   }
 
-  return async function notify(postID) {
+  return async function notify(postID, { pendingDecisionID = null } = {}) {
     const { rows: posts } = await client.query(
       `SELECT p.post_id, p.entity_id AS author_id, p.is_anonymous, r.id AS realm_id,
               r.entity_id AS community_entity_id, r.name AS community_name,
@@ -152,32 +147,41 @@ function createCommunityPostNotifier({
        LEFT JOIN community_realm author ON author.entity_id = p.entity_id
        LEFT JOIN bot_bot b ON b.entity_id = p.entity_id
        WHERE p.post_id = $1 AND r.is_active = TRUE
-         AND p.deleted_at IS NULL AND p.is_archived = FALSE`,
-      [postID],
+         AND p.deleted_at IS NULL AND p.is_archived = FALSE AND p.approval = $2
+         AND ($3::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM community_approvals d WHERE d.id = $3
+           AND d.realm_id = r.id AND d.target_kind = 'post' AND d.target_id = p.post_id
+           AND d.action IN ('submit','edit') AND d.content_version = COALESCE(p.updated_at,p.date_posted)
+           AND d.new_state->>'approval' = '0'))`,
+      [postID, pendingDecisionID ? 0 : 1, pendingDecisionID],
     );
     const post = posts[0];
     if (!post) return;
     const { rows: managers } = await client.query(
-      `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id
-       WHERE m.realm_id = $1 AND r.name IN ('owner', 'admin', 'moderator')`,
+      `SELECT m.entity_id, ${managementNoticeTypesSQL('m', 'r')} AS notice_types
+       FROM community_member m JOIN entity_role r ON r.id = m.role_id
+       WHERE m.realm_id = $1 AND ${memberHasAnyPermissionSQL('m', 'r', pendingDecisionID ? ['realm.post.review'] : ['realm.notifications.view'])}`,
       [post.realm_id],
     );
-    const canonicalID = noticeID(postID, post.community_entity_id, CREATED);
+    const type = pendingDecisionID ? PENDING : CREATED;
+    const referenceID = pendingDecisionID || postID;
+    const canonicalID = noticeID(referenceID, post.community_entity_id, type);
     const subject = post.is_anonymous
       ? "An anonymous member"
       : post.handle ? "@" + post.handle : "A member";
     const fields = {
-      referenceID: postID,
-      referenceStatus: true,
-      type: CREATED,
+      referenceID,
+      referenceStatus: !pendingDecisionID,
+      type,
       fromUserID: post.is_anonymous ? post.community_entity_id : post.author_id,
       is_anonymous: Boolean(post.is_anonymous),
       content: {
-        headline: "New community post",
-        details: `${subject} posted in ${post.community_name}.`,
+        headline: pendingDecisionID ? "Post awaiting approval" : "New community post",
+        details: pendingDecisionID ? `${subject} submitted a post for approval.` : `${subject} posted in the community.`,
       },
       date: { date: now() },
-      target: { type: "post", supportingID: postID, anchor: null },
+      target: pendingDecisionID ? { type: "community_approvals", supportingID: post.realm_id, anchor: "posts" } :
+        { type: "post", supportingID: postID, anchor: null },
       isRead: false,
     };
     const inserted = [];
@@ -219,26 +223,44 @@ function createCommunityPostNotifier({
           realm_id: post.realm_id,
           },
       });
-      await savePreview(post, admin);
+      const kinds = managers.find(row => String(row.entity_id) === admin).notice_types;
+      if (!Array.isArray(kinds)) throw new TypeError('Missing management notification capabilities');
+      await savePreview(post, admin, kinds);
     }
+    return true;
   };
 }
 
-async function notifyCommunityPostCreated({ postID }) {
+async function notifyCommunityPostCreated({ postID, pendingDecisionID = null }) {
+  let client;
   try {
-    const client = require("../database/postgres");
+    client = await require('../database/postgres').getPool().connect();
+    await client.query('BEGIN');
+    // Serialize with the Django review/edit paths. A late pending delivery
+    // cannot recreate unread receipts after a reviewer has resolved them.
+    const { rows } = await client.query(`SELECT r.id FROM community_realm r
+      JOIN newsfeed_posttag t ON t.entity_id = r.entity_id
+      WHERE t.post_id = $1 AND r.type = 'community' ORDER BY r.id FOR UPDATE OF r`, [postID]);
+    if (!rows.length) { await client.query('COMMIT'); return; }
+    await client.query('SELECT p.post_id FROM newsfeed_post p WHERE p.post_id = $1 FOR UPDATE OF p', [postID]);
     const { publish } = require("../redis/pubsub");
     const { canManageCommunityNotifications } = require("./communityNotifications");
-    await createCommunityPostNotifier({
+    const delivered = await createCommunityPostNotifier({
       notifications: require("../../schema/users/notifications"),
       client,
       publish,
       canManage: (admin, community) =>
         canManageCommunityNotifications(client, admin, community),
-    })(postID);
+    })(postID, { pendingDecisionID });
+    await client.query('COMMIT');
+    return delivered;
   } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
     // A notification failure cannot undo a post that already committed.
     console.error("[community notifications] Could not record post activity:", error.message);
+    return false;
+  } finally {
+    client?.release();
   }
 }
 

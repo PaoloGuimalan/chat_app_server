@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
+const { roleTierSQL } = require("../../reusables/models/roles");
 const {
   LEGACY_REPLYING_TO_EXPR,
 } = require("../../reusables/hooks/replyTargets");
@@ -298,7 +299,7 @@ async function getRealmWithUsers(realmId, entityID) {
           JOIN entity_role member_role ON member_role.id = cm_admin.role_id
           WHERE cm_admin.entity_id = $2
             AND cm_admin.realm_id = cr.realm_id
-            AND member_role.name IN ('admin', 'owner')
+            AND ${roleTierSQL("member_role")} IN ('admin', 'owner')
         )
       ),
       'is_member', (
@@ -331,7 +332,9 @@ async function getRealmWithUsers(realmId, entityID) {
           '_id', COALESCE(ua.id, mr.id, mb.id),
           'member_id', cm.member_id,
           'role_id', cm.role_id,
-          'role', roster_role.name,
+          'role', ${roleTierSQL("roster_role")},
+          'role_name', roster_role.name,
+          'role_code', roster_role.code,
           'entityID', p.id,
           'userID', COALESCE(ua.username, mr.slug, mb.handle, mr.realm_id),
           'fullname', CASE

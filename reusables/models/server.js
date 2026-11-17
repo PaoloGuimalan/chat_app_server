@@ -4,6 +4,7 @@ const dateGetter = require("../hooks/getDate");
 const timeGetter = require("../hooks/getTime");
 const makeid = require("../hooks/makeID");
 const pool = require("../database/postgres");
+const { roleTierSQL } = require("./roles");
 
 const GetServerChannels = async (serverID, privacy) => {
   const { rows } = await pool.query(
@@ -94,7 +95,9 @@ const GetServerMembers = async (serverID, withDetails) => {
        cr.entity_id AS "entityID",
        cr.member_id,
        cr.role_id,
-       member_role.name AS role,
+       ${roleTierSQL("member_role")} AS role,
+       member_role.name AS role_name,
+       member_role.code AS role_code,
        COALESCE(pua.id, pr.id, pb.id) AS "userID",
        COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username,
        CASE
@@ -141,7 +144,9 @@ const GetServerMembers = async (serverID, withDetails) => {
        cr.entity_id AS "entityID",
        cr.member_id,
        cr.role_id,
-       member_role.name AS role,
+       ${roleTierSQL("member_role")} AS role,
+       member_role.name AS role_name,
+       member_role.code AS role_code,
        COALESCE(pua.id, pr.id, pb.id) AS "userID",
        COALESCE(pua.username, pr.slug, pb.handle, pr.realm_id) AS username
        FROM community_member cr

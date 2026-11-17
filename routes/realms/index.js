@@ -19,6 +19,7 @@ const {
 } = require("../../reusables/models/users");
 const { publish } = require("../../reusables/redis/pubsub");
 const { hasPermission } = require("../../reusables/hooks/permissionChecker");
+const { assertCanRemoveMembers } = require("../../reusables/models/realmRolePolicy");
 const { createCommunityMediaPost } = require("../posts");
 const router = express.Router();
 
@@ -102,6 +103,9 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
   const username = req.params.username;
   const id = req.params.id;
   const entityID = req.params.entity_id;
+  let client;
+  let transactionOpen = false;
+  const afterCommit = [];
 
   try {
     // entityID is the ACTING entity - removing a member while switched to the
@@ -137,97 +141,15 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
         ? `${target.username} left`
         : `${actorHandle} removed ${target.username}`;
 
-    // Removing yourself (leaving) is always allowed. Removing anyone else
-    // requires realm.member.remove, plus a target-role-aware rule: an admin
-    // can remove a plain member/moderator, but only the owner can
-    // remove/demote a fellow admin or the owner (see the NOTE in
-    // entity/permissions.py about this not being a flat permission).
-    const restids = account_ids.filter((flt) => flt !== entityID);
-
-    if (restids.length > 0) {
-      if (!(await hasPermission(entityID, "realm.member.remove", realm_id))) {
-        res.status(401).send({
-          status: false,
-          message: "You are not authorized to do this action",
-        });
-        return;
-      }
-
-      // A page's own entity can never appear as a Member row of its own
-      // realm, so once switched to act as this exact realm, resolve as
-      // owner tier directly instead of letting the lookup below miss and
-      // wrongly deny it.
-      const { rows: selfRealmActorRow } = await pool.query(
-        `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2`,
-        [realm_id, entityID],
-      );
-      let actorRole;
-      if (selfRealmActorRow.length > 0) {
-        actorRole = "owner";
-      } else {
-        const { rows: actorRow } = await pool.query(
-          `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.entity_id = $1 AND m.realm_id = $2`,
-          [entityID, realm_id],
-        );
-        actorRole = actorRow.length > 0 ? actorRow[0].role : null;
-      }
-
-      if (actorRole !== "owner") {
-        const { rows: targetAdminRows } = await pool.query(
-          `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.realm_id = $1 AND m.entity_id = ANY($2::text[]) AND r.name IN ('admin', 'owner')`,
-          [realm_id, restids],
-        );
-        if (targetAdminRows.length > 0) {
-          res.status(401).send({
-            status: false,
-            message: "Only the realm owner can remove or demote an admin.",
-          });
-          return;
-        }
-      }
-    }
-
-    const { rows: realm_row } = await pool.query(
-      `SELECT * FROM community_realm WHERE realm_id = $1`,
-      [realm_id],
-    );
-
-    if (realm_row.length <= 0) {
-      res.status(400).send({
-        status: false,
-        message: "No realm found",
-      });
-      return;
-    }
-
-    const realm = realm_row[0];
-
-    // A realm can't be left with zero owners - whether via self-leave or an
-    // owner removing a co-owner (only an owner can remove/demote a fellow
-    // owner, per the actorRole check above), so this covers the whole
-    // batch, not just self-removal.
-    const { rows: ownerRows } = await pool.query(
-      `SELECT m.entity_id FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.realm_id = $1 AND r.name = 'owner'`,
-      [realm_id],
-    );
-    const currentOwnerIds = ownerRows.map((mp) => mp.entity_id);
-    const ownersBeingRemoved = account_ids.filter((flt) =>
-      currentOwnerIds.includes(flt),
-    );
-
-    if (
-      ownersBeingRemoved.length > 0 &&
-      ownersBeingRemoved.length >= currentOwnerIds.length
-    ) {
-      res.status(400).send({
-        status: false,
-        message: "Transfer ownership to another member before leaving.",
-      });
-      return;
-    }
+    client = await pool.getPool().connect();
+    await client.query("BEGIN");
+    transactionOpen = true;
+    const { realm } = await assertCanRemoveMembers(client, {
+      actorID: entityID, realmID: realm_id, entityIDs: account_ids,
+    }, hasPermission);
 
     if (realm.type === "server") {
-      const { rows: channels } = await pool.query(
+      const { rows: channels } = await client.query(
         `SELECT realm_id FROM community_realm WHERE parent_id = $1`,
         [realm_id],
       );
@@ -238,7 +160,7 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       // had to guess, and it guessed "channel" for every row - including VOICE
       // rooms, which then got a notif message written for them (stored as
       // conversationType "channel", for a conversation that is neither).
-      const { rows: joined_channels } = await pool.query(
+      const { rows: joined_channels } = await client.query(
         `SELECT cm.realm_id, cr.type
            FROM community_member cm
            JOIN community_realm cr ON cr.realm_id = cm.realm_id
@@ -257,16 +179,16 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
       const joined_channel_ids = [...joined_channel_types.keys()];
 
       if (joined_channel_ids.length > 0) {
-        await pool.query(
+        await client.query(
           `DELETE FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = ANY($2::text[])`,
           [account_ids, joined_channel_ids],
         );
 
-        await Promise.all(
+        afterCommit.push(() => Promise.all(
           joined_channel_ids.map(async (channelID) => {
             await SyncConversationParticipants(channelID);
           }),
-        );
+        ));
 
         users.map((mp) => {
           joined_channel_ids.map((mpp) => {
@@ -279,22 +201,27 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
               return;
             }
 
-            NotificationMessageForConversations(
+            afterCommit.push(() => { NotificationMessageForConversations(
               mpp,
               entityID,
               [],
               membershipMessage(mp),
               channelType,
-            );
+            ); });
           });
         });
       }
     }
 
-    await pool.query(
+    await client.query(
       `DELETE FROM community_member WHERE entity_id = ANY($1::text[]) AND realm_id = $2`,
       [account_ids, realm_id],
     );
+    await client.query("COMMIT");
+    transactionOpen = false;
+    client.release();
+    client = null;
+    for (const effect of afterCommit) await effect();
 
     if (realm.type !== "community") {
       await SyncConversationParticipants(realm_id);
@@ -373,9 +300,14 @@ router.delete("/remove-user", jwtchecker, async (req, res) => {
     });
   } catch (ex) {
     res
-      .status(500)
+      .status(ex.code === "OWNERSHIP_TRANSFER" ? 400 : ex.status || 500)
       .send({ status: false, message: ex.message || ex.toString() });
     console.log(ex);
+  } finally {
+    if (transactionOpen) {
+      try { await client.query("ROLLBACK"); } catch (error) { console.error("Member removal rollback failed", error); }
+    }
+    if (client) client.release();
   }
 });
 

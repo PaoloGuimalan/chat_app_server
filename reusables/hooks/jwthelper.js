@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const UserAccount = require("../../schema/auth/useraccount");
 const UserSessions = require("../../schema/auth/sessions");
 const pool = require("../database/postgres");
+const { canActAsEntity, authorizedActingStream } = require("../models/actingIdentity");
 const { decryptNonce, matchesDeviceHash } = require("./crypto");
 const { isUniqueNonce } = require("../redis/pubsub");
 const message = require("../../schema/messages/message");
@@ -84,6 +85,20 @@ const jwtchecker = async (req, res, next) => {
         if (rows.length > 0) {
           const currentRow = rows[0];
 
+          let actingAllowed;
+          try {
+            actingAllowed = await canActAsEntity(currentRow.entity_id, decode.entity);
+          } catch (error) {
+            console.error("Acting authority check failed:", error);
+            return res.status(503).send({ status: false, message: "We couldn't verify realm access. Please try again." });
+          }
+          if (!actingAllowed) {
+            const { rows: realms } = await pool.query("SELECT name FROM community_realm WHERE entity_id = $1 LIMIT 1", [decode.entity])
+              .catch(error => { console.error("Revoked realm label lookup failed:", error); return { rows: [] }; });
+            return res.status(403).send({ status: false, auth: false, code: "REALM_ACCESS_REVOKED",
+              message: `Your access to ${realms[0]?.name || "this realm"} was revoked.` });
+          }
+
           const session_result = await UserSessions.findOne({
             deviceToken: deviceToken,
             entityID: decode.entity,
@@ -154,6 +169,24 @@ const jwtssechecker = (req, res, next) => {
 
           if (rows.length > 0) {
             const currentRow = rows[0];
+            let actingAllowed;
+            try {
+              actingAllowed = await canActAsEntity(currentRow.entity_id, decode.entity);
+            } catch (error) {
+              console.error("Acting authority check failed:", error);
+              return res.sse(type, { status: false, auth: true, message: "We couldn't verify realm access. Please try again." });
+            }
+            if (!actingAllowed) {
+              const { rows: realms } = await pool.query("SELECT name FROM community_realm WHERE entity_id = $1 LIMIT 1", [decode.entity])
+              .catch(error => { console.error("Revoked realm label lookup failed:", error); return { rows: [] }; });
+              return res.sse(type, { status: false, auth: false, code: "REALM_ACCESS_REVOKED",
+                message: `Your access to ${realms[0]?.name || "this realm"} was revoked.` });
+            }
+            if (String(currentRow.entity_id) !== String(decode.entity)) {
+              const actingStream = authorizedActingStream({ sse: res.sse.bind(res), end: () => res.end() },
+                currentRow.entity_id, decode.entity, pool, type);
+              res.sse = (event, payload) => actingStream.sse(event, payload);
+            }
             req.params.userID = currentRow.id;
             req.params.username = currentRow.username;
             req.params.deviceToken = deviceToken;

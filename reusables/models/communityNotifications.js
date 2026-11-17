@@ -1,5 +1,6 @@
 // Ownership uses toUserID. Community scope for personal activity is resolved
 // from its existing target post before pagination, never from an extra field.
+const { MANAGEMENT_PERMISSIONS, memberHasAnyPermissionSQL } = require('./communityNotificationPermissions');
 const MANAGEMENT_NOTIFICATION_TYPES = [
   "community_join_request",
   "community_admin_activity",
@@ -9,16 +10,17 @@ const isCommunityManagementNotification = (item) =>
   MANAGEMENT_NOTIFICATION_TYPES.includes(item?.type);
 
 const managementPermission = (...args) =>
-  require("../hooks/permissionChecker").hasPermission(...args);
+  require("../hooks/permissionChecker").hasActivePermission(...args);
 
 const hasManagementPermission = async (viewerID, realmID, checkPermission) => {
-  try {
-    return Boolean(
-      await checkPermission(viewerID, "realm.request.approve", realmID),
-    );
-  } catch {
-    return false;
+  for (const code of MANAGEMENT_PERMISSIONS) {
+    try {
+      if (await checkPermission(viewerID, code, realmID)) return true;
+    } catch {
+      // Disabled/unavailable capabilities do not authorize a management event.
+    }
   }
+  return false;
 };
 
 const notificationReadMatch = (viewerID, summaries = []) => {
@@ -81,8 +83,9 @@ const notificationPostCommunities = async (client, notifications, viewerID) => {
   });
   if (!postIDs.length) return [];
   const { rows } = await client.query(
-    `SELECT t.post_id, r.entity_id, r.name
+    `SELECT t.post_id, r.entity_id, r.name, p.approval
      FROM newsfeed_posttag t
+     JOIN newsfeed_post p ON p.post_id = t.post_id
      JOIN community_realm r ON r.entity_id = t.entity_id AND r.type = 'community'
      WHERE t.post_id = ANY($1::text[])`,
     [postIDs.map(String)],
@@ -90,12 +93,38 @@ const notificationPostCommunities = async (client, notifications, viewerID) => {
   return rows;
 };
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function reviewDecisionProofs(client, viewerID, ids) {
+  const safe = [...new Set(ids.filter(id => typeof id === 'string' && uuidPattern.test(id)))];
+  if (!safe.length) return [];
+  const { rows } = await client.query(`SELECT d.id::text AS decision_id, r.entity_id AS community_id
+    FROM community_approvals d JOIN newsfeed_post p ON p.post_id = d.target_id
+    JOIN community_realm r ON r.id = d.realm_id AND r.type = 'community'
+    WHERE d.target_kind = 'post' AND d.action IN ('approve','reject','takedown')
+      AND p.entity_id = $1 AND d.id = ANY($2::uuid[])`, [viewerID, safe]);
+  return rows;
+}
+
+async function canReceiveCommunityDecision(client, viewerID, decisionID, communityID) {
+  if (!viewerID || !communityID) return false;
+  const proofs = await reviewDecisionProofs(client, viewerID, [decisionID]);
+  return proofs.some(row => String(row.community_id) === String(communityID));
+}
+
+async function notificationDecisionProofs(client, notifications, viewerID) {
+  const ids = await notifications.distinct('referenceID', {
+    toUserID: viewerID, type: 'community_post_decision', 'target.type': 'realm_review',
+  });
+  return reviewDecisionProofs(client, viewerID, ids);
+}
+
 const notificationAudienceMatch = async (
   client,
   match,
   viewerID,
   checkPermission = managementPermission,
   communityPosts = null,
+  reviewDecisions = null,
 ) => {
   const posts =
     communityPosts ??
@@ -107,7 +136,7 @@ const notificationAudienceMatch = async (
   const { rows } = await client.query(
     `SELECT r.id, r.entity_id,
             (r.is_active = TRUE AND m.entity_id IS NOT NULL) AS member_allowed,
-            (r.is_active = TRUE AND COALESCE(member_role.name IN ('owner', 'admin', 'moderator'), FALSE)) AS management_allowed
+            (r.is_active = TRUE AND COALESCE(${memberHasAnyPermissionSQL('m', 'member_role')}, FALSE)) AS management_allowed
      FROM community_realm r
      LEFT JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
      LEFT JOIN entity_role member_role ON member_role.id = m.role_id
@@ -127,8 +156,11 @@ const notificationAudienceMatch = async (
     }
   }
   const blockedPosts = posts
-    .filter((post) => blocked.includes(String(post.entity_id)))
+    .filter((post) => blocked.includes(String(post.entity_id)) || (post.approval != null && post.approval !== 1))
     .map((post) => String(post.post_id));
+  const proofs = reviewDecisions ?? await notificationDecisionProofs(client, require('../../schema/users/notifications'), viewerID);
+  const decisionMatches = proofs.map(row => ({ referenceID: String(row.decision_id),
+    'target.supportingID': String(row.decision_id), fromUserID: String(row.community_id) }));
   return {
     $and: [
       match,
@@ -136,17 +168,20 @@ const notificationAudienceMatch = async (
       {
         $or: [
           { type: { $ne: "community_admin_activity" } },
-          { "content.headline": "Community activity preview" },
+          { "content.headline": "Community activity preview", isRead: false },
         ],
       },
-      ...(blocked.length ? [{ fromUserID: { $nin: blocked } }] : []),
-      ...(blockedPosts.length
-        ? [{ "target.supportingID": { $nin: blockedPosts } }]
-        : []),
       {
         $or: [
-          { type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } },
-          { fromUserID: { $in: managed } },
+          { $and: [
+            { type: { $ne: 'community_post_decision' } },
+            ...(blocked.length ? [{ fromUserID: { $nin: blocked } }] : []),
+            ...(blockedPosts.length ? [{ 'target.supportingID': { $nin: blockedPosts } }] : []),
+            { $or: [{ type: { $nin: MANAGEMENT_NOTIFICATION_TYPES } }, { fromUserID: { $in: managed } }] },
+          ] },
+          ...(decisionMatches.length ? [{ $and: [
+            { type: 'community_post_decision', 'target.type': 'realm_review' }, { $or: decisionMatches },
+          ] }] : []),
         ],
       },
     ],
@@ -165,7 +200,7 @@ const canManageCommunityNotifications = async (
      JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $1
      JOIN entity_role member_role ON member_role.id = m.role_id
      WHERE r.entity_id = $2 AND r.type = 'community' AND r.is_active = TRUE
-       AND member_role.name IN ('owner', 'admin', 'moderator')
+       AND ${memberHasAnyPermissionSQL('m', 'member_role')}
      LIMIT 1`,
     [viewerID, communityID],
   );
@@ -177,10 +212,15 @@ const authorizedNotificationStream = (
   response,
   authorize,
   authorizeManagement = async () => false,
+  authorizeDecision = async () => false,
 ) => ({
   async sse(event, payload) {
     const target = payload?.result;
-    if (isCommunityManagementNotification(target)) {
+    if (target?.type === 'community_post_decision') {
+      try {
+        if (!(await authorizeDecision(target.review_decision_id, target.community_entity_id))) return;
+      } catch { return; }
+    } else if (isCommunityManagementNotification(target)) {
       try {
         // Current notices identify the community as sender. Retain support
         // for already queued event metadata from the previous service version.
@@ -307,6 +347,8 @@ const normalizeCommunityNotifications = async (client, items) => {
 };
 
 module.exports = {
+  notificationDecisionProofs,
+  canReceiveCommunityDecision,
   MANAGEMENT_NOTIFICATION_TYPES,
   isCommunityManagementNotification,
   notificationSortStages,

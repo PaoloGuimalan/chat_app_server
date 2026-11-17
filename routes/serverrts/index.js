@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
-const { resolveRole, realmOwnerRoleID } = require("../../reusables/models/roles");
+const { resolveRole, realmOwnerRoleID, roleTier, roleTierSQL } = require("../../reusables/models/roles");
+const { assertCanDelegateRole, assertCanTransferOwnership } = require("../../reusables/models/realmRolePolicy");
 const jwt = require("jsonwebtoken");
 const { sseNotificationsWaiters } = require("../../reusables/hooks/sse");
 const dateGetter = require("../../reusables/hooks/getDate");
@@ -25,7 +26,7 @@ const {
   GetAllReceivers,
 } = require("../../reusables/models/messages");
 const pool = require("../../reusables/database/postgres");
-const { hasPermission } = require("../../reusables/hooks/permissionChecker");
+const { hasActivePermission: hasPermission } = require("../../reusables/hooks/permissionChecker");
 const { transformServersData } = require("../../reusables/hooks/transformers");
 const { getAllParticipants, publish } = require("../../reusables/redis/pubsub");
 const {
@@ -324,7 +325,7 @@ router.get(
                 FROM community_member cm
                 WHERE cm.entity_id = $3
                   AND cm.realm_id = pcr.realm_id
-                  AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND member_role.name IN ('admin', 'owner'))
+                  AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND ${roleTierSQL("member_role")} IN ('admin', 'owner'))
               )
             )
           ) AS groupdetails,
@@ -479,7 +480,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           FROM community_member cm
           WHERE cm.entity_id = $1
             AND cm.realm_id = cr.realm_id
-            AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND member_role.name IN ('admin', 'owner'))
+            AND EXISTS (SELECT 1 FROM entity_role member_role WHERE member_role.id = cm.role_id AND ${roleTierSQL("member_role")} IN ('admin', 'owner'))
         )
       ),
       'channels', COALESCE((
@@ -527,7 +528,9 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
           '_id', COALESCE(cmu.id, cmr.id, cmb.id),
           'member_id', cm.member_id,
           'role_id', cm.role_id,
-          'role', roster_role.name,
+          'role', ${roleTierSQL("roster_role")},
+          'role_name', roster_role.name,
+          'role_code', roster_role.code,
           'entityID', p.id,
           'userID', COALESCE(cmu.username, cmr.slug, cmr.realm_id, cmb.handle),
           'fullname', CASE
@@ -877,10 +880,15 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
   const realm_id = req.body.realm_id;
   const member_id = req.body.member_id;
   const new_role = req.body.new_role;
+  let client;
+  let transactionOpen = false;
 
   try {
+    client = await pool.getPool().connect();
+    await client.query("BEGIN");
+    transactionOpen = true;
     if (
-      !(await hasPermission(entityID, "realm.member.role.update", realm_id))
+      !(await hasPermission(entityID, "realm.member.role.update", realm_id, { client, fresh: true }))
     ) {
       res.status(401).send({
         status: false,
@@ -889,15 +897,20 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
       return;
     }
 
-    const selectedRole = await resolveRole(pool, {
+    const { rows: roleRealms } = await client.query(
+      "SELECT id FROM community_realm WHERE id = $1 AND is_active = TRUE FOR UPDATE", [realm_id],
+    );
+    if (!roleRealms.length) return res.status(404).send({ status: false, message: "This realm is unavailable." });
+    const selectedRole = await resolveRole(client, {
       roleID: req.body.new_role_id,
       roleName: new_role,
+      realmID: realm_id,
     });
 
     // Setting someone as owner would create a second owner alongside the
     // existing one - that's an ownership transfer (realm.ownership.transfer),
     // not a plain role update, and isn't implemented via this endpoint yet.
-    if (selectedRole.name === "owner") {
+    if (roleTier(selectedRole) === "owner") {
       res.status(400).send({
         status: false,
         message: "Use ownership transfer to change the realm owner.",
@@ -905,55 +918,19 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
       return;
     }
 
-    // Target-role-aware rule: an admin can change a plain member/moderator's
-    // role, but only the owner can change a fellow admin's (or the owner's).
-    // A page's own entity can never appear as a Member row of its own realm,
-    // so once switched to act as this exact realm, resolve as owner tier
-    // directly instead of letting the lookup below miss and wrongly deny it.
-    const { rows: selfRealmActorRow } = await pool.query(
-      `SELECT 1 FROM community_realm WHERE realm_id = $1 AND entity_id = $2`,
-      [realm_id, entityID],
-    );
-    let actorRole;
-    if (selfRealmActorRow.length > 0) {
-      actorRole = "owner";
-    } else {
-      const { rows: actorRow } = await pool.query(
-        `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.entity_id = $1 AND m.realm_id = $2`,
-        [entityID, realm_id],
-      );
-      actorRole = actorRow.length > 0 ? actorRow[0].role : null;
-    }
-
-    const { rows: targetRow } = await pool.query(
-      `SELECT r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE m.member_id = $1 AND m.realm_id = $2`,
-      [member_id, realm_id],
-    );
-    if (!targetRow.length) {
-      return res.status(404).send({ status: false, message: "That member is not part of this realm" });
-    }
-    if (targetRow[0].role === "owner") {
-      return res.status(400).send({ status: false, message: "Use ownership transfer to change the realm owner." });
-    }
-    if (actorRole !== "owner") {
-      if (
-        targetRow.length > 0 &&
-        ["admin", "owner"].includes(targetRow[0].role)
-      ) {
-        res.status(401).send({
-          status: false,
-          message: "Only the realm owner can change an admin's role.",
-        });
-        return;
-      }
-    }
-
-    await pool.query(
+    await assertCanDelegateRole(client, {
+      actorID: entityID, realmID: realm_id, role: selectedRole, targetMemberID: member_id,
+    }, hasPermission);
+    await client.query(
       `UPDATE community_member SET role_id = $1 WHERE realm_id = $2 AND member_id = $3;`,
       [selectedRole.id, realm_id, member_id],
     );
+    await client.query("COMMIT");
+    transactionOpen = false;
 
     // Realtime: signal every member of the realm that the members list
+    client.release();
+    client = null;
     // changed so conference clients refetch it (roles, permissions). The
     // event carries no member data — the client pulls the full list via API.
     try {
@@ -982,15 +959,22 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
     res.send({
       status: true,
       message: `Member ${member_id} updated role to ${selectedRole.name}`,
-      role: selectedRole.name,
+      role: roleTier(selectedRole),
+      role_name: selectedRole.name,
+      role_code: selectedRole.code,
       role_id: selectedRole.id,
     });
   } catch (err) {
     console.log(err);
-    res.status(err.status || 500).send({
+    res.status(err.code === "OWNERSHIP_TRANSFER" ? 400 : err.status || 500).send({
       status: false,
       message: err.status ? err.message : "Error occured",
     });
+  } finally {
+    if (transactionOpen) {
+      try { await client.query("ROLLBACK"); } catch (error) { console.error("Role change rollback failed", error); }
+    }
+    if (client) client.release();
   }
 });
 
@@ -1008,10 +992,15 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
   const entityID = req.params.entity_id;
   const realm_id = req.body.realm_id;
   const member_id = req.body.member_id;
+  let client;
+  let transactionOpen = false;
 
   try {
+    client = await pool.getPool().connect();
+    await client.query("BEGIN");
+    transactionOpen = true;
     if (
-      !(await hasPermission(entityID, "realm.ownership.transfer", realm_id))
+      !(await hasPermission(entityID, "realm.ownership.transfer", realm_id, { client, fresh: true }))
     ) {
       res.status(401).send({
         status: false,
@@ -1020,8 +1009,9 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
       return;
     }
 
-    const { rows: targetRows } = await pool.query(
-      `SELECT m.entity_id, m.role_id, r.name AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE member_id = $1 AND m.realm_id = $2`,
+    await assertCanTransferOwnership(client, { actorID: entityID, realmID: realm_id }, hasPermission);
+    const { rows: targetRows } = await client.query(
+      `SELECT m.entity_id, m.role_id, ${roleTierSQL("r")} AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE member_id = $1 AND m.realm_id = $2 FOR UPDATE OF m`,
       [member_id, realm_id],
     );
 
@@ -1041,22 +1031,19 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
       return;
     }
 
-    const ownerRoleID = await realmOwnerRoleID(pool, realm_id);
+    const ownerRoleID = await realmOwnerRoleID(client, realm_id);
     if (ownerRoleID == null) {
       return res.status(400).send({ status: false, message: "Realm has ambiguous owner role definitions." });
     }
-    const adminRole = await resolveRole(pool, { roleName: "admin" });
+    const adminRole = await resolveRole(client, { roleName: "admin", realmID: realm_id });
 
-    // One statement rather than two updates in a transaction: getPool()
-    // hands back the POOL, not a pinned client, so BEGIN/COMMIT issued
-    // through it can land on different connections. A single UPDATE is
-    // atomic on its own and cannot leave the realm with two owners (or
-    // none) if the process dies mid-way.
+    // Preserve the single ownership UPDATE, using the same pinned client
+    // and realm lock as role/rule changes so authority cannot race them.
     //
     // Preserve the exact owner definition on the new owner. Demote all
     // memberships of that definition, including when the actor is the realm
     // entity rather than its outgoing human owner.
-    await pool.query(
+    await client.query(
       `UPDATE community_member
           SET role_id = CASE
                        WHEN member_id = $1 THEN $3::bigint
@@ -1066,8 +1053,12 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
           AND (member_id = $1 OR role_id = $3::bigint)`,
       [member_id, realm_id, ownerRoleID, adminRole.id],
     );
+    await client.query("COMMIT");
+    transactionOpen = false;
 
     // Same broadcast the role update sends: roles changed, so every client
+    client.release();
+    client = null;
     // holding a members list needs to refetch it.
     try {
       const { rows: realmMembers } = await pool.query(
@@ -1098,10 +1089,15 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
     });
   } catch (err) {
     console.log(err);
-    res.send({
+    res.status(err.status || 500).send({
       status: false,
-      message: "Error occured",
+      message: err.status ? err.message : "Error occured",
     });
+  } finally {
+    if (transactionOpen) {
+      try { await client.query("ROLLBACK"); } catch (error) { console.error("Ownership transfer rollback failed", error); }
+    }
+    if (client) client.release();
   }
 });
 

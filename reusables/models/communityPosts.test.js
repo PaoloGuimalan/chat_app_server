@@ -2,6 +2,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const communities = require("./communityPosts");
 
+test("ordinary SQL and loaded interaction/share guards hide unapproved community content", () => {
+  assert.match(communities.communityAudienceSQL('post', '$1'), /post\.approval\s*=\s*1/);
+  for (const approval of [0, 2]) {
+    const hidden = { is_active: true, is_private: false, is_member: true, approval };
+    assert.throws(() => communities.validateCommunityInteraction(hidden, false), { status: 404 });
+    assert.throws(() => communities.validateCommunityShare(hidden, hidden), { status: 404 });
+  }
+  assert.equal(communities.validateCommunityInteraction(null, false), false);
+});
+
 test("normal and shared community posts accept joined tags and lock membership rows", async () => {
   for (const isShared of [false, true]) {
     const destination = {

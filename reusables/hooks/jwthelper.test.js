@@ -36,7 +36,7 @@ function middleware(sessionExists = true) {
           ? { fcmToken: null } : null,
     },
     "../database/postgres": {
-      query: async (_query, [id]) => ({ rows: id === "account-1" ? [{ id, username: "person" }] : [] }),
+      query: async (_query, [id]) => ({ rows: id === "account-1" ? [{ id, username: "person", entity_id: "entity-1" }] : [] }),
     },
     "./crypto": decryptor,
     "../redis/pubsub": { isUniqueNonce: async () => true },
