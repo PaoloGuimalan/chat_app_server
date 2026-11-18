@@ -309,14 +309,40 @@ test("trusted community media notices keep their community avatar and specific m
   assert.equal(comment.fromUserID, "maya");
 });
 
-test("personal lists exclude management inbox rows, legacy summaries and read previews", async () => {
+test("personal lists retain read previews while excluding management inbox rows and legacy summaries", async () => {
   const database = { query: async () => ({ rows: [{ id: "club", entity_id: "garden", member_allowed: true, management_allowed: true }] }) };
   const filter = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", allowManagement);
   const saved = { toUserID: "viewer", type: "community_admin_activity", fromUserID: "garden", isRead: false,
     content: { headline: "Community activity preview", details: "3 new activities in your community. Check them out." } };
   assert.equal(matches(filter, saved), true);
-  for (const changed of [{ isRead: true }, { content: { headline: "Community activity" } }, { type: "community_join_request" }, { type: "community_admin_inbox" }]) {
+  assert.equal(matches(filter, { ...saved, isRead: true }), true);
+  for (const changed of [{ content: { headline: "Community activity" } }, { type: "community_join_request" }, { type: "community_admin_inbox" }]) {
     assert.equal(matches(filter, { ...saved, ...changed }), false);
   }
 });
 
+
+
+test("reading an admin preview retains its saved content and history while clearing the unread count", async () => {
+  const database = { query: async () => ({ rows: [
+    { id: "club", entity_id: "garden", member_allowed: true, management_allowed: true },
+    { id: "demoted-club", entity_id: "demoted", member_allowed: true, management_allowed: false },
+  ] }) };
+  const saved = { notificationID: "preview-id", toUserID: "viewer", fromUserID: "garden",
+    type: "community_admin_activity", isRead: false,
+    content: { headline: "Community activity preview", details: "3 new activities in your community. Check them out." } };
+  const originalContent = JSON.stringify(saved.content);
+  const { notificationReadMatch } = require("./communityNotifications");
+  const read = notificationReadMatch("viewer", [{ notificationID: saved.notificationID }]);
+  assert.equal(matches(read, saved), true);
+  saved.isRead = true;
+
+  const personal = await notificationAudienceMatch(database, { toUserID: "viewer" }, "viewer", allowManagement);
+  const unread = await notificationAudienceMatch(database, { toUserID: "viewer", isRead: false }, "viewer", allowManagement);
+  assert.equal(matches(personal, saved), true);
+  assert.equal(matches(unread, saved), false);
+  assert.equal(saved.notificationID, "preview-id");
+  assert.equal(JSON.stringify(saved.content), originalContent);
+  assert.equal(matches(personal, { ...saved, toUserID: "other-admin" }), false);
+  assert.equal(matches(personal, { ...saved, fromUserID: "demoted" }), false);
+});

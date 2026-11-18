@@ -168,7 +168,8 @@ const notificationAudienceMatch = async (
       {
         $or: [
           { type: { $ne: "community_admin_activity" } },
-          { "content.headline": "Community activity preview", isRead: false },
+          // Read previews remain in history; unread-only callers filter via match.
+          { "content.headline": "Community activity preview" },
         ],
       },
       {
