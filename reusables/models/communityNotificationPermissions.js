@@ -16,7 +16,7 @@ function memberHasAnyPermissionSQL(member, role, codes = MANAGEMENT_PERMISSIONS)
   return `(${role}.realm_id = ${member}.realm_id AND EXISTS (
     SELECT 1 FROM entity_permission_catalog notice_cap
     WHERE notice_cap.scope = 'realm' AND notice_cap.is_active = TRUE
-      AND notice_cap.codename IN (${codes.map(code => `'${code}'`).join(',')})
+      AND notice_cap.code IN (${codes.map(code => `'${code}'`).join(',')})
       AND ((${role}.code = 'owner' AND ${role}.is_default = TRUE) OR COALESCE((
         SELECT notice_override.effect = 'grant' FROM entity_permission notice_override
         WHERE notice_override.entity_id = ${member}.entity_id AND notice_override.realm_id = ${member}.realm_id

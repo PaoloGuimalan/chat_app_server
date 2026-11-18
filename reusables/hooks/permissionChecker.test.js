@@ -7,20 +7,20 @@ const roles = require("../models/roles");
 function resolver({ memberRole = "11", owners = [], self = false, globalPermission = null, override = null, accountActive = true, entityType = null, owner = false, catalogActive = true } = {}) {
   const cache = new Map();
   const pool = { query: async (sql) => {
-    if (sql.includes("SELECT codename, scope")) return { rows: [{ codename: entityType ? "module.test" : globalPermission || "realm.test", scope: entityType ? "entity_type" : globalPermission ? "global" : "realm", is_active: catalogActive }] };
+    if (sql.includes("SELECT code, scope")) return { rows: [{ code: entityType ? "module.test" : globalPermission || "realm.test", scope: entityType ? "entity_type" : globalPermission ? "global" : "realm", is_active: catalogActive }] };
     if (sql.includes("SELECT ep.effect")) return { rows: override == null ? [] : [{ effect: override }] };
     if (sql.includes("SELECT is_active FROM user_account")) return { rows: accountActive == null ? [] : [{ is_active: accountActive }] };
     if (sql.includes("SELECT 1 FROM community_realm")) return { rows: self ? [{}] : [] };
     if (sql.includes("SELECT DISTINCT m.role_id")) return { rows: owners.map(role_id => ({ role_id })) };
     if (sql.includes("FROM entity_role WHERE code")) return { rows: [{ id: "11", name: "owner", code: "owner", realm_id: null, is_default: true }] };
     if (sql.includes("SELECT m.role_id")) return { rows: memberRole == null ? [] : [{ role_id: memberRole, code: owner ? "owner" : "member", is_default: true }] };
-    if (sql.includes("FROM entity_role_permissions")) return { rows: [{ role_id: "11", codename: "realm.test" }] };
+    if (sql.includes("FROM entity_role_permissions")) return { rows: [{ role_id: "11", code: "realm.test" }] };
     if (sql.includes("SELECT type FROM entity_entity")) return { rows: [{ type: entityType }] };
     if (sql.includes("FROM entity_permission_catalog_entity_types")) {
       assert.match(sql, /JOIN entity_type et ON et.id = links.entity_type_id/);
       assert.match(sql, /JOIN entity_permission_catalog pce ON pce.id = links.permission_id/);
       assert.match(sql, /WHERE pce.is_active = true/);
-      return { rows: [{ entity_type: "user", codename: "module.test" }] };
+      return { rows: [{ entity_type: "user", code: "module.test" }] };
     }
     throw new Error(sql);
   } };
@@ -47,7 +47,7 @@ test('fresh global authorization reads standing through the pinned client', asyn
   const { checker } = resolver({ globalPermission: 'posts.create', accountActive: false });
   let standingReads = 0;
   const client = { query: async sql => {
-    if (sql.includes('SELECT codename')) return { rows: [{ codename: 'posts.create', scope: 'global', is_active: true }] };
+    if (sql.includes('SELECT code')) return { rows: [{ code: 'posts.create', scope: 'global', is_active: true }] };
     if (sql.includes('SELECT ep.effect')) return { rows: [] };
     if (sql.includes('SELECT is_active')) { standingReads++; return { rows: [{ is_active: true }] }; }
     throw new Error(sql);

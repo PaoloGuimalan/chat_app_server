@@ -10,7 +10,7 @@ async function canActAsEntity(personalID, actingID, client = pool) {
     WHERE realm.entity_id = $2 AND realm.is_active = TRUE
       AND realm.type IN ('page','server','group','conference','channel','voice')
       AND EXISTS (
-        SELECT 1 FROM entity_permission_catalog pc WHERE pc.codename = 'realm.identity.act'
+        SELECT 1 FROM entity_permission_catalog pc WHERE pc.code = 'realm.identity.act'
           AND pc.scope = 'realm' AND pc.is_active = TRUE
           AND ((role.code = 'owner' AND role.is_default = TRUE) OR COALESCE((SELECT ep.effect = 'grant' FROM entity_permission ep
             WHERE ep.entity_id = member.entity_id AND ep.realm_id = realm.id AND ep.permission_id = pc.id

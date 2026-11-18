@@ -43,7 +43,7 @@ async function ensureDefaultRoles(client, realmID) {
     if (inserted.rows.length && code !== "owner") {
       await client.query(`INSERT INTO entity_role_permissions (role_id, permission_id, created_at)
         SELECT $1, id, NOW() FROM entity_permission_catalog
-        WHERE codename = ANY($2::text[]) AND scope = 'realm' AND is_active = TRUE
+        WHERE code = ANY($2::text[]) AND scope = 'realm' AND is_active = TRUE
         ON CONFLICT (role_id, permission_id) DO NOTHING`, [role.id, templatePermissions(code, rows[0].type)]);
     }
     result[code] = role;

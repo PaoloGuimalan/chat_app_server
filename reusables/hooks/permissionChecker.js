@@ -93,11 +93,11 @@ async function getCatalog() {
   }
 
   const { rows } = await pool.query(
-    `SELECT codename, scope, is_active FROM entity_permission_catalog`,
+    `SELECT code, scope, is_active FROM entity_permission_catalog`,
   );
   const catalog = {};
   for (const row of rows) {
-    catalog[row.codename] = { scope: row.scope, is_active: row.is_active };
+    catalog[row.code] = { scope: row.scope, is_active: row.is_active };
   }
   await _cacheSet(CATALOG_CACHE_KEY, JSON.stringify(catalog));
   return catalog;
@@ -112,7 +112,7 @@ async function getRoleMatrix(realmID) {
 
   const { rows } = await pool.query(
     `
-    SELECT rp.role_id, pce.codename
+    SELECT rp.role_id, pce.code
     FROM entity_role_permissions rp
     JOIN entity_permission_catalog pce ON rp.permission_id = pce.id
     JOIN entity_role role ON role.id = rp.role_id
@@ -123,7 +123,7 @@ async function getRoleMatrix(realmID) {
   for (const row of rows) {
     const roleID = String(row.role_id);
     if (!matrix[roleID]) matrix[roleID] = [];
-    matrix[roleID].push(row.codename);
+    matrix[roleID].push(row.code);
   }
   await _cacheSet(key, JSON.stringify(matrix));
   return matrix;
@@ -137,7 +137,7 @@ async function getEntityTypeMatrix() {
 
   const { rows } = await pool.query(
     `
-    SELECT et.name AS entity_type, pce.codename
+    SELECT et.name AS entity_type, pce.code
     FROM entity_permission_catalog_entity_types links
     JOIN entity_type et ON et.id = links.entity_type_id
     JOIN entity_permission_catalog pce ON pce.id = links.permission_id
@@ -147,7 +147,7 @@ async function getEntityTypeMatrix() {
   const matrix = {};
   for (const row of rows) {
     if (!matrix[row.entity_type]) matrix[row.entity_type] = [];
-    matrix[row.entity_type].push(row.codename);
+    matrix[row.entity_type].push(row.code);
   }
   await _cacheSet(ENTITY_TYPE_MATRIX_CACHE_KEY, JSON.stringify(matrix));
   return matrix;
@@ -167,7 +167,7 @@ async function _activeOverride(entityId, permission, realmId, client = pool) {
     SELECT ep.effect FROM entity_permission ep
     JOIN entity_permission_catalog pc ON pc.id = ep.permission_id
     WHERE ep.entity_id = $1
-      AND pc.codename = $2
+      AND pc.code = $2
       AND ep.realm_id IS NOT DISTINCT FROM $3
       AND (ep.expires_at IS NULL OR ep.expires_at > NOW())
     LIMIT 1
@@ -201,9 +201,9 @@ async function rolePermission(roleID, permission, realmID, { client, fresh }) {
   if (roleID == null) return false;
   if (fresh) {
     const { rows } = await client.query(
-      `SELECT rp.role_id, pce.codename FROM entity_role_permissions rp
+      `SELECT rp.role_id, pce.code FROM entity_role_permissions rp
        JOIN entity_permission_catalog pce ON pce.id = rp.permission_id
-       WHERE rp.role_id = $1 AND pce.codename = $2 AND pce.is_active = TRUE`,
+       WHERE rp.role_id = $1 AND pce.code = $2 AND pce.is_active = TRUE`,
       [roleID, permission],
     );
     return rows.length > 0;
@@ -212,14 +212,14 @@ async function rolePermission(roleID, permission, realmID, { client, fresh }) {
 }
 
 // Feature guards deny a disabled catalog capability; programming errors and
-// unknown codenames retain the generic resolver's explicit error contract.
+// unknown codes retain the generic resolver's explicit error contract.
 async function hasActivePermission(entityId, permission, realmId = null, options = {}) {
   try { return await hasPermission(entityId, permission, realmId, options); }
   catch (error) {
     if (!error.message?.startsWith("Unknown permission string:")) throw error;
     const catalog = options.fresh ? Object.fromEntries((await (options.client || pool).query(
-      "SELECT codename, scope, is_active FROM entity_permission_catalog WHERE codename = $1", [permission],
-    )).rows.map(row => [row.codename, row])) : await getCatalog();
+      "SELECT code, scope, is_active FROM entity_permission_catalog WHERE code = $1", [permission],
+    )).rows.map(row => [row.code, row])) : await getCatalog();
     if (catalog[permission] && !catalog[permission].is_active) return false;
     throw error;
   }
@@ -231,8 +231,8 @@ async function hasPermission(entityId, permission, realmId = null, { client = po
   }
 
   const catalog = fresh ? Object.fromEntries((await client.query(
-    "SELECT codename, scope, is_active FROM entity_permission_catalog WHERE codename = $1", [permission],
-  )).rows.map(row => [row.codename, row])) : await getCatalog();
+    "SELECT code, scope, is_active FROM entity_permission_catalog WHERE code = $1", [permission],
+  )).rows.map(row => [row.code, row])) : await getCatalog();
   const entry = catalog[permission];
   if (!entry || !entry.is_active) {
     throw new Error(`Unknown permission string: ${permission}`);
@@ -283,7 +283,7 @@ async function hasPermission(entityId, permission, realmId = null, { client = po
  * usertoken, instead of a separate follow-up call to Django's
  * /api/entity/me/modules. Keep in sync with the Django version.
  *
- * entity_type-scoped codenames are read straight from the shared catalog
+ * entity_type-scoped codes are read straight from the shared catalog
  * (scope === "entity_type") rather than a hardcoded list here, unlike
  * Django's Permission.ENTITY_TYPE_SCOPED constant - the catalog is already
  * the single source of truth this file reads for everything else.
@@ -292,12 +292,12 @@ async function resolveAllowedModulesAndContext(entityId, personalEntityId, perso
   const catalog = await getCatalog();
   const entityTypeCodenames = Object.entries(catalog)
     .filter(([, entry]) => entry.scope === "entity_type" && entry.is_active)
-    .map(([codename]) => codename);
+    .map(([code]) => code);
 
   const allowedModules = [];
-  for (const codename of entityTypeCodenames) {
-    if (await hasPermission(entityId, codename, null)) {
-      allowedModules.push(codename);
+  for (const code of entityTypeCodenames) {
+    if (await hasPermission(entityId, code, null)) {
+      allowedModules.push(code);
     }
   }
 

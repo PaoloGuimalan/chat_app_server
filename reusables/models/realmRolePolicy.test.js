@@ -16,7 +16,7 @@ function fixture({ tier = "owner", targetTier = "member", grants = [], explicitT
       if (sql.includes("FROM community_member") && sql.includes("= 'owner'")) return { rows: tier === "owner" ? [{ entity_id: "actor" }] : [] };
       if (sql.includes("FROM community_member") && Array.isArray(params[0])) return { rows: params[0].map(entity_id => ({ entity_id, tier: entity_id === "actor" ? tier : targetTier })) };
       if (sql.includes("FROM community_member")) return { rows: [{ member_id: params[0] === "target" ? "target" : "actor-member", entity_id: params[0] === "target" ? "recipient" : "actor", tier: params[0] === "target" ? targetTier : tier }] };
-      if (sql.includes("FROM entity_role_permissions")) return { rows: grants.map(codename => ({ codename })) };
+      if (sql.includes("FROM entity_role_permissions")) return { rows: grants.map(code => ({ code })) };
       throw new Error(sql);
     } },
     checkPermission: async (actor, permission) => actor === "recipient" ? explicitTargetAdmin && permission === "realm.roles.manage" : true,

@@ -8,15 +8,15 @@ const denied = (message, code) => Object.assign(new Error(message), { status: 40
 async function effectiveRolePermissions(client, role, realmID) {
   if (String(role.realm_id) !== String(realmID)) throw denied("The selected role belongs to another realm");
   if (roleTier(role) === "owner") {
-    const { rows } = await client.query("SELECT codename FROM entity_permission_catalog WHERE scope = 'realm' AND is_active = TRUE");
-    return new Set(rows.map(row => row.codename));
+    const { rows } = await client.query("SELECT code FROM entity_permission_catalog WHERE scope = 'realm' AND is_active = TRUE");
+    return new Set(rows.map(row => row.code));
   }
   const { rows } = await client.query(
-    `SELECT pce.codename FROM entity_role_permissions rp
+    `SELECT pce.code FROM entity_role_permissions rp
      JOIN entity_permission_catalog pce ON pce.id = rp.permission_id
      JOIN entity_role r ON r.id = rp.role_id
      WHERE rp.role_id = $1 AND r.realm_id = $2 AND pce.scope = 'realm' AND pce.is_active = TRUE`, [role.id, realmID]);
-  const result = new Set(rows.map(row => row.codename));
+  const result = new Set(rows.map(row => row.code));
   return result;
 }
 
