@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { resolveRole, realmOwnerRoleID, roleTier, roleTierSQL } = require("../../reusables/models/roles");
-const { assertCanDelegateRole, assertCanTransferOwnership } = require("../../reusables/models/realmRolePolicy");
+const { assertCanDelegateRole, assertCanTransferOwnership, configurationCapabilities } = require("../../reusables/models/realmRolePolicy");
 const jwt = require("jsonwebtoken");
 const { sseNotificationsWaiters } = require("../../reusables/hooks/sse");
 const dateGetter = require("../../reusables/hooks/getDate");
@@ -381,6 +381,9 @@ router.get(
           return;
         }
 
+        details_result.groupdetails.capabilities = await configurationCapabilities(entityID, conversationID)
+          .catch(error => { console.error('Channel configuration hints unavailable:', error); return {}; });
+
         const encodedResult = jwt.sign(
           {
             conversationslist: [
@@ -596,6 +599,8 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     console.error("[initserverchannels] can_create_channel check failed:", err);
     return false;
   });
+  deconstructedData.capabilities = await configurationCapabilities(entityID, serverID)
+    .catch(error => { console.error('Server configuration hints unavailable:', error); return {}; });
 
   UserMessage.aggregate([
     {
@@ -920,6 +925,7 @@ router.put("/update-member-realm-role", jwtchecker, async (req, res) => {
 
     await assertCanDelegateRole(client, {
       actorID: entityID, realmID: realm_id, role: selectedRole, targetMemberID: member_id,
+      personalID: req.authenticatedPersonalEntityID || null,
     }, hasPermission);
     await client.query(
       `UPDATE community_member SET role_id = $1 WHERE realm_id = $2 AND member_id = $3;`,
@@ -1009,7 +1015,8 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
       return;
     }
 
-    await assertCanTransferOwnership(client, { actorID: entityID, realmID: realm_id }, hasPermission);
+    await assertCanTransferOwnership(client, { actorID: entityID, realmID: realm_id,
+      personalID: req.authenticatedPersonalEntityID || null }, hasPermission);
     const { rows: targetRows } = await client.query(
       `SELECT m.entity_id, m.role_id, ${roleTierSQL("r")} AS role FROM community_member m JOIN entity_role r ON r.id = m.role_id WHERE member_id = $1 AND m.realm_id = $2 FOR UPDATE OF m`,
       [member_id, realm_id],

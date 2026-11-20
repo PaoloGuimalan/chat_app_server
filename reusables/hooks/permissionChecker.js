@@ -14,7 +14,7 @@
  * entity_role_permissions, entity_permission_catalog_entity_types joined to
  * entity_type), not hardcoded
  * here - both repos read the same shared Redis instance
- * (permcache:catalog:v3 / permcache:role_matrix:v3:<realm> /
+ * (permcache:catalog:v4 / permcache:role_matrix:v3:<realm> /
  * permcache:entity_type_matrix:v1, plain JSON strings) with a direct-query
  * fallback on a cache miss, so an admin editing the catalog on the Django
  * side is visible here without a deploy.
@@ -29,9 +29,10 @@
 
 const redis = require("redis");
 const pool = require("../database/postgres");
+const { permissionApplies } = require("../models/permissionApplicability");
 const { REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD } = require("../vars/redis");
 
-const CATALOG_CACHE_KEY = "permcache:catalog:v3";
+const CATALOG_CACHE_KEY = "permcache:catalog:v4";
 const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v3";
 const ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1";
 const CACHE_TTL_SECONDS = 60 * 60; // safety-net only; Django invalidates on write
@@ -93,11 +94,14 @@ async function getCatalog() {
   }
 
   const { rows } = await pool.query(
-    `SELECT code, scope, is_active FROM entity_permission_catalog`,
+    `SELECT code, scope, is_active, ARRAY(SELECT kind.code
+      FROM entity_permission_catalog_realm_types applicability
+      JOIN community_type kind ON kind.id = applicability.type_id
+      WHERE applicability.permissioncatalogentry_id = entity_permission_catalog.id ORDER BY kind.code) AS realm_types FROM entity_permission_catalog`,
   );
   const catalog = {};
   for (const row of rows) {
-    catalog[row.code] = { scope: row.scope, is_active: row.is_active };
+    catalog[row.code] = { scope: row.scope, is_active: row.is_active, realm_types: row.realm_types };
   }
   await _cacheSet(CATALOG_CACHE_KEY, JSON.stringify(catalog));
   return catalog;
@@ -218,7 +222,10 @@ async function hasActivePermission(entityId, permission, realmId = null, options
   catch (error) {
     if (!error.message?.startsWith("Unknown permission string:")) throw error;
     const catalog = options.fresh ? Object.fromEntries((await (options.client || pool).query(
-      "SELECT code, scope, is_active FROM entity_permission_catalog WHERE code = $1", [permission],
+      `SELECT code, scope, is_active, ARRAY(SELECT kind.code
+      FROM entity_permission_catalog_realm_types applicability
+      JOIN community_type kind ON kind.id = applicability.type_id
+      WHERE applicability.permissioncatalogentry_id = entity_permission_catalog.id ORDER BY kind.code) AS realm_types FROM entity_permission_catalog WHERE code = $1`, [permission],
     )).rows.map(row => [row.code, row])) : await getCatalog();
     if (catalog[permission] && !catalog[permission].is_active) return false;
     throw error;
@@ -231,7 +238,10 @@ async function hasPermission(entityId, permission, realmId = null, { client = po
   }
 
   const catalog = fresh ? Object.fromEntries((await client.query(
-    "SELECT code, scope, is_active FROM entity_permission_catalog WHERE code = $1", [permission],
+    `SELECT code, scope, is_active, ARRAY(SELECT kind.code
+      FROM entity_permission_catalog_realm_types applicability
+      JOIN community_type kind ON kind.id = applicability.type_id
+      WHERE applicability.permissioncatalogentry_id = entity_permission_catalog.id ORDER BY kind.code) AS realm_types FROM entity_permission_catalog WHERE code = $1`, [permission],
   )).rows.map(row => [row.code, row])) : await getCatalog();
   const entry = catalog[permission];
   if (!entry || !entry.is_active) {
@@ -248,10 +258,11 @@ async function hasPermission(entityId, permission, realmId = null, { client = po
 
   let role = null;
   if (realmId != null) {
-    const { rows: selfRealm } = await client.query(
-      `SELECT 1 FROM community_realm WHERE id = $1 AND entity_id = $2 AND type <> 'community' LIMIT 1`,
-      [realmId, entityId]);
-    if (selfRealm.length) return true;
+    const { rows: realms } = await client.query(
+      `SELECT id, entity_id, type, parent_id, is_active FROM community_realm WHERE id = $1 LIMIT 1`, [realmId]);
+    const realm = realms[0];
+    if (!realm?.is_active || !permissionApplies(entry, realm)) return false;
+    if (realm.type !== 'community' && String(realm.entity_id) === String(entityId)) return true;
     const { rows } = await client.query(
       `SELECT m.role_id, r.code, r.is_default FROM community_member m
        JOIN entity_role r ON r.id = m.role_id AND r.realm_id = m.realm_id

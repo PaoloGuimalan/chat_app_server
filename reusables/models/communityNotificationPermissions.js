@@ -1,5 +1,6 @@
 // Keep aligned with community/notification_permissions.py. Codes are server
 // constants, never role display names or user-supplied SQL fragments.
+const { realmPermissionSQL } = require('./permissionApplicability');
 const NOTICE_PERMISSIONS = Object.freeze({
   community_post_pending: ['realm.post.review'],
   community_invite_pending: ['realm.invite.review'],
@@ -17,6 +18,8 @@ function memberHasAnyPermissionSQL(member, role, codes = MANAGEMENT_PERMISSIONS)
     SELECT 1 FROM entity_permission_catalog notice_cap
     WHERE notice_cap.scope = 'realm' AND notice_cap.is_active = TRUE
       AND notice_cap.code IN (${codes.map(code => `'${code}'`).join(',')})
+      AND EXISTS (SELECT 1 FROM community_realm notice_realm WHERE notice_realm.id = ${member}.realm_id
+        AND ${realmPermissionSQL('notice_cap', 'notice_realm')})
       AND ((${role}.code = 'owner' AND ${role}.is_default = TRUE) OR COALESCE((
         SELECT notice_override.effect = 'grant' FROM entity_permission notice_override
         WHERE notice_override.entity_id = ${member}.entity_id AND notice_override.realm_id = ${member}.realm_id

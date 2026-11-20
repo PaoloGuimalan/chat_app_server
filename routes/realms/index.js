@@ -58,7 +58,7 @@ router.post("/upload-media", jwtchecker, async (req, res) => {
   try {
     const { realm_id, media_type, uploadID, caption } = req.body || {};
     if (!REALM_MEDIA_COLUMN[media_type]) throw new MediaUploadError("Media type mismatch");
-    if (!(await hasPermission(entityID, "realm.media.update", realm_id))) {
+    if (!(await hasPermission(entityID, "realm.media.update", realm_id, { fresh: true }))) {
       throw new MediaUploadError("You do not have permission to make this action.", 403);
     }
     const upload = await resolveUploadByID({

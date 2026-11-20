@@ -1,5 +1,6 @@
 // Display names never confer authority. Role IDs and codes are realm-local.
 const { defaultRoleNames, templatePermissions } = require("./roleTemplates");
+const { realmPermissionSQL } = require('./permissionApplicability');
 const BUILTIN_CODES = new Set(["owner", "admin", "moderator", "member"]);
 
 function roleTier(role) {
@@ -32,7 +33,7 @@ async function realmOwnerRoleID(client, realmID) {
 }
 /** Caller holds a transaction. Locking the realm serializes all seeding/writes. */
 async function ensureDefaultRoles(client, realmID) {
-  const { rows } = await client.query("SELECT id, type FROM community_realm WHERE id = $1 FOR UPDATE", [realmID]);
+  const { rows } = await client.query("SELECT id, type, parent_id FROM community_realm WHERE id = $1 FOR UPDATE", [realmID]);
   if (rows.length !== 1) throw new Error("Realm is unavailable for role creation");
   const result = {};
   for (const [code, name] of Object.entries(defaultRoleNames)) {
@@ -42,9 +43,11 @@ async function ensureDefaultRoles(client, realmID) {
     if (!role.is_default) throw new Error("Reserved role code has an invalid definition");
     if (inserted.rows.length && code !== "owner") {
       await client.query(`INSERT INTO entity_role_permissions (role_id, permission_id, created_at)
-        SELECT $1, id, NOW() FROM entity_permission_catalog
-        WHERE code = ANY($2::text[]) AND scope = 'realm' AND is_active = TRUE
-        ON CONFLICT (role_id, permission_id) DO NOTHING`, [role.id, templatePermissions(code, rows[0].type)]);
+        SELECT $1, pce.id, NOW() FROM entity_permission_catalog pce
+        JOIN community_realm realm ON realm.id = $3
+        WHERE pce.code = ANY($2::text[]) AND pce.scope = 'realm' AND pce.is_active = TRUE
+          AND ${realmPermissionSQL('pce', 'realm')}
+        ON CONFLICT (role_id, permission_id) DO NOTHING`, [role.id, templatePermissions(code, rows[0].type), realmID]);
     }
     result[code] = role;
   }

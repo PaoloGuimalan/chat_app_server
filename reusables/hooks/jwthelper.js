@@ -123,6 +123,7 @@ const jwtchecker = async (req, res, next) => {
           req.params.username = currentRow.username;
           req.params.deviceToken = deviceToken;
           req.params.entity_id = decode.entity;
+          req.authenticatedPersonalEntityID = currentRow.entity_id;
           next();
         } else {
           res.send({ status: false, message: "Cannot verify user!" });

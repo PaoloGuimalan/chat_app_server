@@ -12,7 +12,7 @@ function removal({ type = "community", actorTier = "owner", recipientAdmin = fal
   const query = async (sql, values) => {
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) { transactions.push(sql); open = sql === "BEGIN"; return { rows: [] }; }
     if (sql.includes("DELETE FROM community_member")) { deleted.push(values); return { rows: [] }; }
-    if (sql.includes("parent_id")) return { rows: [{ realm_id: "text-room" }, { realm_id: "voice-room" }] };
+    if (sql.includes("WHERE parent_id")) return { rows: [{ realm_id: "text-room" }, { realm_id: "voice-room" }] };
     if (sql.includes("SELECT cm.realm_id, cr.type")) return { rows: [{ realm_id: "text-room", type: "channel" }, { realm_id: "text-room", type: "channel" }, { realm_id: "voice-room", type: "voice" }] };
     if (sql.includes("SELECT 1 FROM community_realm")) return { rows: actorTier === "owner" ? [{}] : [] };
     if (sql.includes("FROM community_realm")) return { rows: [realm] };

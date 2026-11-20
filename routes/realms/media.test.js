@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function uploadRoute({ type = "community", allowed = true, mismatch = false } = {}) {
+function uploadRoute({ type = "community", allowed = true, mismatch = false, stalePermission = false } = {}) {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");
   const start = source.indexOf('router.post("/upload-media"');
   const end = source.indexOf('router.delete(', start);
@@ -19,9 +19,9 @@ function uploadRoute({ type = "community", allowed = true, mismatch = false } = 
     REALM_MEDIA_COLUMN: { profile: "profile", cover_photo: "cover_photo" },
     MediaUploadError,
     pool: { query: async () => ({ rows: [{ type, entity_id: "community" }] }) },
-    hasPermission: async (entity, permission, realm) => {
+    hasPermission: async (entity, permission, realm, options) => {
       operations.push({ permission, entity, realm });
-      return allowed;
+      return stalePermission ? !options?.fresh : allowed;
     },
     resolveUploadByID: async (options) => {
       operations.push({ resolve: { ...options, purposes: Array.from(options.purposes) } });
@@ -79,4 +79,11 @@ test("unauthorized and mismatched media never mutate a community or create posts
     assert.equal(response.body.status, false);
     assert.equal(app.operations.some(({ post, direct }) => post || direct), false);
   }
+});
+
+test('media mutation does not trust a stale cached authorization after revocation', async () => {
+  const app = uploadRoute({ stalePermission: true });
+  const response = await app.request();
+  assert.equal(response.code, 403);
+  assert.equal(app.operations.some(({ resolve, post, direct }) => resolve || post || direct), false);
 });

@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const router = express.Router();
 const { roleTierSQL } = require("../../reusables/models/roles");
+const { configurationCapabilities } = require('../../reusables/models/realmRolePolicy');
 const {
   LEGACY_REPLYING_TO_EXPR,
 } = require("../../reusables/hooks/replyTargets");
@@ -665,6 +666,9 @@ router.get(
         }
 
         formattedResult.chatHistory = chatHistory;
+
+        formattedResult.capabilities = await configurationCapabilities(entity_id, resolvedConversationID)
+          .catch(error => { console.error('Realm configuration hints unavailable:', error); return {}; });
 
         // Shared files are paged from /conversationfiles - see the single
         // branch above.

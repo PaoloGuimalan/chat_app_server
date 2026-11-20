@@ -4,10 +4,11 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const roles = require("../models/roles");
 
-function resolver({ memberRole = "11", owners = [], self = false, globalPermission = null, override = null, accountActive = true, entityType = null, owner = false, catalogActive = true } = {}) {
+function resolver({ memberRole = "11", owners = [], self = false, globalPermission = null, override = null, accountActive = true, entityType = null, owner = false, catalogActive = true, realmType = 'page', realmTypes = ['page'], parentID = null } = {}) {
   const cache = new Map();
   const pool = { query: async (sql) => {
-    if (sql.includes("SELECT code, scope")) return { rows: [{ code: entityType ? "module.test" : globalPermission || "realm.test", scope: entityType ? "entity_type" : globalPermission ? "global" : "realm", is_active: catalogActive }] };
+    if (sql.includes("SELECT code, scope")) return { rows: [{ code: entityType ? "module.test" : globalPermission || "realm.test", scope: entityType ? "entity_type" : globalPermission ? "global" : "realm", is_active: catalogActive, realm_types: realmTypes }] };
+    if (sql.includes('SELECT id, entity_id, type, parent_id')) return { rows: [{ id: 'realm', entity_id: self ? 'realm-entity' : 'other', type: realmType, parent_id: parentID, is_active: true }] };
     if (sql.includes("SELECT ep.effect")) return { rows: override == null ? [] : [{ effect: override }] };
     if (sql.includes("SELECT is_active FROM user_account")) return { rows: accountActive == null ? [] : [{ is_active: accountActive }] };
     if (sql.includes("SELECT 1 FROM community_realm")) return { rows: self ? [{}] : [] };
@@ -28,6 +29,7 @@ function resolver({ memberRole = "11", owners = [], self = false, globalPermissi
     if (name === "redis") return { createClient: () => ({ on() {}, async connect() {}, async get(k) { return cache.get(k); }, async set(k,v) { cache.set(k,v); } }) };
     if (name === "../database/postgres") return pool;
     if (name === "../models/roles") return roles;
+    if (name === "../models/permissionApplicability") return require(name);
     if (name === "../vars/redis") return {};
     throw new Error(name);
   } };
@@ -114,5 +116,14 @@ test("domain guards deny disabled capabilities but still report unknown codes",a
 test("cutover ignores a warm pre-approval catalog cache", async () => {
   const current = resolver({ memberRole: "11" });
   current.cache.set("permcache:catalog:v2", "{}");
+  current.cache.set("permcache:catalog:v3", "{}");
   assert.equal(await current.checker.hasPermission("actor", "realm.test", "realm"), true);
+});
+
+test('applicability precedes owner, self and explicit overrides, including fresh checks', async () => {
+  for (const options of [{ owner: true }, { self: true }, { memberRole: null, override: 'grant' }]) {
+    const { checker } = resolver({ ...options, realmType: 'community', realmTypes: ['page'] });
+    assert.equal(await checker.hasPermission(options.self ? 'realm-entity' : 'actor', 'realm.test', 'realm'), false);
+    assert.equal(await checker.hasPermission(options.self ? 'realm-entity' : 'actor', 'realm.test', 'realm', { fresh: true }), false);
+  }
 });

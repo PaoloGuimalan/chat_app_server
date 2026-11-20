@@ -1,31 +1,49 @@
 const { roleTier, roleTierSQL } = require("./roles");
+const { realmPermissionSQL } = require('./permissionApplicability');
 
 const ADMINISTRATION = new Set(["realm.roles.manage", "realm.permissions.manage", "realm.identity.act"]);
 const INTRINSIC = new Set(["realm.delete", "realm.ownership.transfer"]);
 const permission = (...args) => require("../hooks/permissionChecker").hasActivePermission(...args);
 const denied = (message, code) => Object.assign(new Error(message), { status: 403, code });
 
+/** Navigation hints only; every configuration write still rechecks authority. */
+async function configurationCapabilities(actorID, realmID, checkPermission = permission) {
+  const [can_manage_roles, can_manage_permissions] = await Promise.all([
+    checkPermission(actorID, 'realm.roles.manage', realmID),
+    checkPermission(actorID, 'realm.permissions.manage', realmID),
+  ]);
+  return { can_manage_roles, can_manage_permissions };
+}
+
 async function effectiveRolePermissions(client, role, realmID) {
   if (String(role.realm_id) !== String(realmID)) throw denied("The selected role belongs to another realm");
   if (roleTier(role) === "owner") {
-    const { rows } = await client.query("SELECT code FROM entity_permission_catalog WHERE scope = 'realm' AND is_active = TRUE");
+    const { rows } = await client.query(`SELECT pce.code FROM entity_permission_catalog pce
+      JOIN community_realm realm ON realm.id = $1
+      WHERE pce.scope = 'realm' AND pce.is_active = TRUE AND ${realmPermissionSQL('pce', 'realm')}`, [realmID]);
     return new Set(rows.map(row => row.code));
   }
   const { rows } = await client.query(
     `SELECT pce.code FROM entity_role_permissions rp
      JOIN entity_permission_catalog pce ON pce.id = rp.permission_id
      JOIN entity_role r ON r.id = rp.role_id
-     WHERE rp.role_id = $1 AND r.realm_id = $2 AND pce.scope = 'realm' AND pce.is_active = TRUE`, [role.id, realmID]);
+     JOIN community_realm realm ON realm.id = r.realm_id
+     WHERE rp.role_id = $1 AND r.realm_id = $2 AND pce.scope = 'realm' AND pce.is_active = TRUE
+       AND ${realmPermissionSQL('pce', 'realm')}`, [role.id, realmID]);
   const result = new Set(rows.map(row => row.code));
   return result;
 }
 
-async function lockedActorContext(client, actorID, realmID) {
+async function lockedActorContext(client, actorID, realmID, personalID) {
   const { rows: realms } = await client.query(
-    `SELECT id, entity_id, type, is_active FROM community_realm WHERE id = $1 AND is_active = TRUE FOR UPDATE`, [realmID],
+    `SELECT id, entity_id, type, parent_id, is_active FROM community_realm WHERE id = $1 AND is_active = TRUE FOR UPDATE`, [realmID],
   );
   if (!realms.length) throw denied("This realm is unavailable.");
   const realm = realms[0];
+  if (personalID !== undefined && String(realm.entity_id) === String(actorID)) {
+    if (!personalID) throw denied('Your personal membership is required to assign roles.');
+    actorID = personalID;
+  }
   let actorTier;
   if (realm.type !== "community" && String(realm.entity_id) === String(actorID)) actorTier = "owner";
   else {
@@ -38,7 +56,7 @@ async function lockedActorContext(client, actorID, realmID) {
     if (!rows.length) throw denied("Only current members can assign roles.");
     actorTier = rows[0].tier;
   }
-  return { realm, actorTier };
+  return { realm, actorTier, actorID };
 }
 
 async function assertTargetAccess(actorTier, target, actorID, realmID, client, checkPermission) {
@@ -50,10 +68,12 @@ async function assertTargetAccess(actorTier, target, actorID, realmID, client, c
 }
 
 /** Use a transaction client: the shared realm lock serializes all policy writes. */
-async function assertCanDelegateRole(client, { actorID, realmID, role, targetMemberID }, checkPermission = permission) {
+async function assertCanDelegateRole(client, { actorID, realmID, role, targetMemberID, personalID }, checkPermission = permission) {
   if (String(role.realm_id) !== String(realmID)) throw denied("The selected role belongs to another realm");
   if (roleTier(role) === "owner") throw denied("Use ownership transfer to change the realm owner.", "OWNERSHIP_TRANSFER");
-  const { realm, actorTier } = await lockedActorContext(client, actorID, realmID);
+  const context = await lockedActorContext(client, actorID, realmID, personalID);
+  const { realm, actorTier } = context;
+  actorID = context.actorID;
   const options = { client, fresh: true };
   if (!(await checkPermission(actorID, "realm.member.role.update", realmID, options))) throw denied("You cannot assign roles here.");
   let target = null;
@@ -98,10 +118,10 @@ async function assertCanRemoveMembers(client, { actorID, realmID, entityIDs }, c
   return { realm, actorTier };
 }
 
-async function assertCanTransferOwnership(client, { actorID, realmID }, checkPermission = permission) {
-  const context = await lockedActorContext(client, actorID, realmID);
-  if (context.actorTier !== "owner" || !(await checkPermission(actorID, "realm.ownership.transfer", realmID, { client, fresh: true }))) throw denied("Only the realm owner can transfer ownership.");
+async function assertCanTransferOwnership(client, { actorID, realmID, personalID }, checkPermission = permission) {
+  const context = await lockedActorContext(client, actorID, realmID, personalID);
+  if (context.actorTier !== "owner" || !(await checkPermission(context.actorID, "realm.ownership.transfer", realmID, { client, fresh: true }))) throw denied("Only the realm owner can transfer ownership.");
   return context;
 }
 
-module.exports = { assertCanDelegateRole, assertCanRemoveMembers, assertCanTransferOwnership, effectiveRolePermissions };
+module.exports = { assertCanDelegateRole, assertCanRemoveMembers, assertCanTransferOwnership, effectiveRolePermissions, configurationCapabilities };

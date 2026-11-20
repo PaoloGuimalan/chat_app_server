@@ -1,4 +1,5 @@
 const pool = require("../database/postgres");
+const { realmPermissionSQL } = require('./permissionApplicability');
 
 async function canActAsEntity(personalID, actingID, client = pool) {
   if (!personalID || !actingID) return false;
@@ -8,10 +9,11 @@ async function canActAsEntity(personalID, actingID, client = pool) {
     JOIN community_member member ON member.realm_id = realm.id AND member.entity_id = $1
     JOIN entity_role role ON role.id = member.role_id AND role.realm_id = realm.id
     WHERE realm.entity_id = $2 AND realm.is_active = TRUE
-      AND realm.type IN ('page','server','group','conference','channel','voice')
+      AND realm.type = 'page'
       AND EXISTS (
         SELECT 1 FROM entity_permission_catalog pc WHERE pc.code = 'realm.identity.act'
           AND pc.scope = 'realm' AND pc.is_active = TRUE
+          AND ${realmPermissionSQL('pc', 'realm')}
           AND ((role.code = 'owner' AND role.is_default = TRUE) OR COALESCE((SELECT ep.effect = 'grant' FROM entity_permission ep
             WHERE ep.entity_id = member.entity_id AND ep.realm_id = realm.id AND ep.permission_id = pc.id
               AND (ep.expires_at IS NULL OR ep.expires_at > NOW()) ORDER BY ep.id LIMIT 1),

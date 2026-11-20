@@ -3223,7 +3223,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
       entityID: alr,
     }));
 
-    if (!(await hasPermission(entityID, "realm.channel.create", serverID))) {
+    if (!(await hasPermission(entityID, "realm.channel.create", serverID, { fresh: true }))) {
       return res.status(403).send({
         status: false,
         message: "You are not allowed to create channels in this server.",

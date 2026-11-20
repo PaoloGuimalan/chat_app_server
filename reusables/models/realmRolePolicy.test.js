@@ -69,3 +69,41 @@ test("an explicit transfer grant does not turn a nonowner into an owner", async 
   const admin = fixture({ tier: "admin" });
   await assert.rejects(helpers.assertCanTransferOwnership(admin.client, { actorID: "actor", realmID: "realm" }, admin.checkPermission), error => error.status === 403);
 });
+
+test('own-page role assignment uses the verified personal manager instead of page Owner shortcuts', async () => {
+  const { assertCanDelegateRole } = await policy();
+  const seen = [];
+  const client = { async query(sql, values) {
+    if (sql.includes('FROM community_realm')) return { rows: [{ id: 'page', entity_id: 'page-entity', type: 'page' }] };
+    if (sql.includes('FROM community_member')) { seen.push(values[0]); return { rows: [{ tier: 'member' }] }; }
+    if (sql.includes('FROM entity_role_permissions')) return { rows: [] };
+    throw new Error(sql);
+  } };
+  const args = { actorID: 'page-entity', personalID: 'person', realmID: 'page', role: { id: 12, realm_id: 'page' } };
+  await assert.rejects(assertCanDelegateRole(client, args, async (actor, code) => {
+    assert.equal(actor, 'person');
+    return false;
+  }), /cannot assign/);
+  assert.deepEqual(seen, ['person']);
+});
+
+test('configuration entry hints follow current grants rather than a legacy admin tier', async () => {
+  const { configurationCapabilities } = await policy();
+  assert.equal(typeof configurationCapabilities, 'function');
+  const hints = await configurationCapabilities('custom-manager', 'channel', async (actor, code, realm) => {
+    assert.equal(actor, 'custom-manager'); assert.equal(realm, 'channel');
+    return code === 'realm.roles.manage';
+  });
+  assert.deepEqual(hints, { can_manage_roles: true, can_manage_permissions: false });
+});
+
+test('switched page delegates cannot transfer ownership through the page identity', async () => {
+  const { assertCanTransferOwnership } = await policy();
+  const client = { async query(sql) {
+    if (sql.includes('FROM community_realm')) return { rows: [{ id: 'page', entity_id: 'page-entity', type: 'page', is_active: true }] };
+    if (sql.includes('FROM community_member')) return { rows: [{ tier: 'member' }] };
+    throw new Error(sql);
+  } };
+  await assert.rejects(assertCanTransferOwnership(client,
+    { actorID: 'page-entity', personalID: 'delegate', realmID: 'page' }, async () => true), /Only the realm owner/);
+});
