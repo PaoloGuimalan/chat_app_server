@@ -120,6 +120,7 @@ const SaveConversation = async (
   messageDate = new Date(),
   messageType = "text",
   isDeleted = false,
+  lifecycleClient = pool,
 ) => {
   if (conversationType === "community") {
     return Promise.reject(new Error("Communities do not support messaging"));
@@ -127,7 +128,7 @@ const SaveConversation = async (
   if (!conversationID) {
     return Promise.reject(new Error("conversationID is required"));
   }
-  await assertMessagingTarget(pool, conversationID, sender, ...participant_ids);
+  await assertMessagingTarget(lifecycleClient, conversationID, sender, ...participant_ids);
 
   const normalizedPayload = {
     conversationID,

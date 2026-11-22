@@ -1,4 +1,5 @@
 const { createHash, randomUUID } = require("node:crypto");
+const { activeRealmSQL } = require('./realmAccess');
 const { INBOX_TYPES, memberHasAnyPermissionSQL, managementNoticeTypesSQL } = require('./communityNotificationPermissions');
 
 const INBOX = "community_admin_inbox";
@@ -146,7 +147,8 @@ function createCommunityPostNotifier({
        LEFT JOIN user_account u ON u.entity_id = p.entity_id
        LEFT JOIN community_realm author ON author.entity_id = p.entity_id
        LEFT JOIN bot_bot b ON b.entity_id = p.entity_id
-       WHERE p.post_id = $1 AND r.is_active = TRUE
+       WHERE p.post_id = $1 AND ${activeRealmSQL('r')}
+         AND (author.id IS NULL OR author.id=r.id OR ${activeRealmSQL('author')})
          AND p.deleted_at IS NULL AND p.is_archived = FALSE AND p.approval = $2
          AND ($3::uuid IS NULL OR EXISTS (
            SELECT 1 FROM community_approvals d WHERE d.id = $3

@@ -7,12 +7,40 @@ const permission = (...args) => require("../hooks/permissionChecker").hasActiveP
 const denied = (message, code) => Object.assign(new Error(message), { status: 403, code });
 
 /** Navigation hints only; every configuration write still rechecks authority. */
-async function configurationCapabilities(actorID, realmID, checkPermission = permission) {
+async function configurationCapabilities(actorID, realmID, checkPermission = permission, { client, personalID } = {}) {
   const [can_manage_roles, can_manage_permissions] = await Promise.all([
     checkPermission(actorID, 'realm.roles.manage', realmID),
     checkPermission(actorID, 'realm.permissions.manage', realmID),
   ]);
-  return { can_manage_roles, can_manage_permissions };
+  let principal = actorID;
+  let realm;
+  if (client) {
+    const { rows } = await client.query('SELECT id, entity_id, type, parent_id, is_active, deletion_requested_at FROM community_realm WHERE id = $1', [realmID]);
+    realm = rows[0];
+    if (realm?.type === 'page' && String(realm.entity_id) === String(actorID)) principal = personalID || null;
+  }
+  const [can_deactivate_realm, can_delete_realm, can_reactivate_realm] = await Promise.all(
+    ['deactivate', 'delete', 'reactivate'].map(action => principal ? checkPermission(principal, `realm.${action}`, realmID) : false));
+  const lifecycle = { can_deactivate_realm, can_delete_realm, can_reactivate_realm };
+  if (client && lifecycle.can_delete_realm) {
+    const { rows } = await client.query(`SELECT m.member_id FROM community_member m
+      JOIN entity_role r ON r.id = m.role_id AND r.realm_id = m.realm_id
+      WHERE m.realm_id = $1 AND m.entity_id = $2 AND r.code = 'owner' AND r.is_default = TRUE LIMIT 1`, [realmID, principal]);
+    lifecycle.can_delete_realm = rows.length > 0;
+  }
+  if (realm?.parent_id && ['group', 'channel', 'voice'].includes(realm.type) && principal) {
+    const { effectiveRealmAccess } = require('./realmAccess');
+    if ((await effectiveRealmAccess(client, realm)).allowed) {
+      const { rows } = await client.query(`SELECT m.member_id FROM community_member m
+        JOIN entity_role r ON r.id = m.role_id AND r.realm_id = m.realm_id
+        JOIN community_realm parent ON parent.id = m.realm_id
+        WHERE m.realm_id = $1 AND m.entity_id = $2 AND parent.type = 'server'
+          AND r.code = 'owner' AND r.is_default = TRUE LIMIT 1`, [realm.parent_id, principal]);
+      if (rows.length) Object.keys(lifecycle).forEach(key => { lifecycle[key] = true; });
+    }
+  }
+  return { can_manage_roles, can_manage_permissions, ...lifecycle,
+    can_manage: can_manage_roles || can_manage_permissions || lifecycle.can_deactivate_realm || lifecycle.can_delete_realm };
 }
 
 async function effectiveRolePermissions(client, role, realmID) {

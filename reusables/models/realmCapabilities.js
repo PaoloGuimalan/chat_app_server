@@ -1,4 +1,5 @@
 const canUseMessaging = (realmType) => realmType !== "community";
+const { effectiveRealmAccess, unavailable } = require('./realmAccess');
 
 // Accept realm IDs, entity IDs and slugs: message routes support all three.
 // Keeping this lookup independent of membership prevents community owners from
@@ -8,17 +9,19 @@ const assertMessagingTarget = async (client, ...identifiers) => {
   if (!ids.length) return;
 
   const { rows } = await client.query(
-    `SELECT type FROM community_realm
-     WHERE type = 'community'
-       AND (realm_id = ANY($1::text[]) OR entity_id = ANY($1::text[]) OR slug = ANY($1::text[])
+    `SELECT id, type, parent_id, is_active, deletion_requested_at FROM community_realm
+     WHERE (realm_id = ANY($1::text[]) OR entity_id = ANY($1::text[]) OR slug = ANY($1::text[])
          OR EXISTS (SELECT 1 FROM entity_connection c
            WHERE c.connection_id = ANY($1::text[])
              AND (c.action_by_id = community_realm.entity_id OR c.involved_entity_id = community_realm.entity_id)))
-     LIMIT 1`,
+     ORDER BY id FOR SHARE OF community_realm`,
     [ids],
   );
   if (rows.some((realm) => !canUseMessaging(realm.type))) {
     throw Object.assign(new Error("Communities do not support messaging"), { status: 403 });
+  }
+  for (const realm of rows) {
+    if (!(await effectiveRealmAccess(client, realm)).allowed) throw unavailable();
   }
 };
 

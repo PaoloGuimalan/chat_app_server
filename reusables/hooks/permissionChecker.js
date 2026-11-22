@@ -29,10 +29,11 @@
 
 const redis = require("redis");
 const pool = require("../database/postgres");
+const { effectiveRealmAccess } = require('../models/realmAccess');
 const { permissionApplies } = require("../models/permissionApplicability");
 const { REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD } = require("../vars/redis");
 
-const CATALOG_CACHE_KEY = "permcache:catalog:v4";
+const CATALOG_CACHE_KEY = "permcache:catalog:v5";
 const ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v3";
 const ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1";
 const CACHE_TTL_SECONDS = 60 * 60; // safety-net only; Django invalidates on write
@@ -259,9 +260,9 @@ async function hasPermission(entityId, permission, realmId = null, { client = po
   let role = null;
   if (realmId != null) {
     const { rows: realms } = await client.query(
-      `SELECT id, entity_id, type, parent_id, is_active FROM community_realm WHERE id = $1 LIMIT 1`, [realmId]);
+      `SELECT id, entity_id, type, parent_id, is_active, deletion_requested_at FROM community_realm WHERE id = $1 LIMIT 1`, [realmId]);
     const realm = realms[0];
-    if (!realm?.is_active || !permissionApplies(entry, realm)) return false;
+    if (!realm?.is_active || !permissionApplies(entry, realm) || !(await effectiveRealmAccess(client, realm)).allowed) return false;
     if (realm.type !== 'community' && String(realm.entity_id) === String(entityId)) return true;
     const { rows } = await client.query(
       `SELECT m.role_id, r.code, r.is_default FROM community_member m

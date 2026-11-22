@@ -20,6 +20,7 @@ function creation({
   canSubmit = true,
   canCreate = true,
   canPublish = true,
+  sourceAvailable = true,
 } = {}) {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");
   const start = source.indexOf("const createPostFromPayload =");
@@ -82,6 +83,12 @@ function creation({
   };
   const context = {
     ...communityPosts,
+    lockActiveRealmScopes: async (lockedClient, ids) => {
+      assert.equal(lockedClient, client);
+      assert.ok(queries.some(({ sql }) => sql === 'BEGIN'));
+      assert.ok(ids[0]);
+      if (!sourceAvailable) throw Object.assign(new Error('This realm is unavailable.'), { status: 403 });
+    },
     resolveCommunityPostApproval: (...args) => require('../../reusables/models/communityPublication').resolveCommunityPostApproval(...args, {
       checkPermission: async (_actor, code, _realm, options) => {
         assert.equal(options.client, client);
@@ -185,6 +192,20 @@ function creation({
     },
   };
 }
+
+test('unavailable author realm cannot create a post or publish side effects', async () => {
+  const app = creation({ sourceAvailable: false });
+  await assert.rejects(app.create(), /unavailable/);
+  assert.equal(app.queries.some(({ sql }) => sql.includes('INSERT INTO newsfeed_post (')), false);
+  assert.equal(app.queries.at(-1).sql, 'ROLLBACK');
+  assert.equal(app.deliveries.length, 0);
+});
+
+test('ordinary personal posts do not need an extra author-realm lookup', async () => {
+  const app = creation({ sourceAvailable: false });
+  await app.create({}, 'feed', { params: { entity_id: 'author', personal_entity_id: 'author', id: 'account' } });
+  assert.equal(app.queries.some(({ sql }) => sql.includes('INSERT INTO newsfeed_post (')), true);
+});
 
 test("community creation stores the actual owner, anonymous flag and destination tag atomically", async () => {
   const app = creation();

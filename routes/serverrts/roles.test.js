@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const { resolveRole, realmOwnerRoleID, roleTier, roleTierSQL } = require("../../reusables/models/roles");
 const { assertCanDelegateRole, assertCanTransferOwnership } = require("../../reusables/models/realmRolePolicy");
+const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
 
 function route(path, query) {
   let handler;
@@ -11,6 +12,7 @@ function route(path, query) {
   const transactions = [];
   const runQuery = async (sql, values) => {
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) { transactions.push(sql); return { rows: [] }; }
+    if (sql.includes('realm_id = ANY($1::text[])')) return { rows: [] }; // These fixture actors are personal entities.
     return query(sql, values);
   };
   const client = { query: runQuery, release() { leased = false; } };
@@ -20,7 +22,7 @@ function route(path, query) {
   const end = next < 0 ? source.indexOf("module.exports", start) : next;
   vm.runInNewContext(source.slice(start, end), {
     router: { put(_path, _jwt, callback) { handler = callback; } }, jwtchecker() {},
-    hasPermission: async () => true, resolveRole, realmOwnerRoleID, roleTier, roleTierSQL, assertCanDelegateRole, assertCanTransferOwnership,
+    hasPermission: async () => true, resolveRole, realmOwnerRoleID, roleTier, roleTierSQL, assertCanDelegateRole, assertCanTransferOwnership, assertMessagingTarget,
     pool: { async query(...args) { if (leased) poolReadsWhileLeased++; return runQuery(...args); }, getPool() { return { async connect() { leased = true; return client; } }; } }, publish() {}, console,
   });
   return async (body) => {

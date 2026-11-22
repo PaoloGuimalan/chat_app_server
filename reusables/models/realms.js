@@ -2,6 +2,7 @@ const pool = require("../database/postgres");
 const { AddNewMemberToContacts } = require("./messages");
 const Conversations = require("../../schema/messages/conversation");
 const { assertMessagingTarget, canUseMessaging } = require("./realmCapabilities");
+const { effectiveRealmAccess, unavailable } = require('./realmAccess');
 
 const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) => {
   if (forMessaging) await assertMessagingTarget(pool, realm_id, entity_id);
@@ -12,6 +13,7 @@ const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) 
 
   if (realm_row.length > 0) {
     const realm = realm_row[0];
+    if (!(await effectiveRealmAccess(pool, realm)).allowed) throw unavailable();
     if (forMessaging && !canUseMessaging(realm.type)) {
       throw new Error("Communities do not support messaging");
     }
@@ -25,7 +27,7 @@ const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) 
     // once switched to act as this exact realm, the lookup below would
     // always miss and wrongly deny access to its own conversation/realm.
     if (realm.entity_id === entity_id) {
-      return;
+      return realm;
     }
 
     const { rows: is_member } = await pool.query(
@@ -36,7 +38,7 @@ const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) 
     if (is_member.length <= 0) {
       throw new Error("You do not have access to this conversation");
     }
-    return;
+    return realm;
   }
 
   // Not a realm - this is a single/DM conversation. Some are backed by a
@@ -58,6 +60,7 @@ const isRealmMember = async (realm_id, entity_id, { forMessaging = true } = {}) 
   if (connectionRows.rows.length === 0 && mongoConversation === null) {
     throw new Error("You do not have access to this conversation");
   }
+  if (mongoConversation?.conversationType && !['single','user'].includes(mongoConversation.conversationType)) throw unavailable();
   if (forMessaging && mongoConversation) {
     if (!canUseMessaging(mongoConversation.conversationType)) {
       throw new Error("Communities do not support messaging");
@@ -75,7 +78,7 @@ const isRealmPublic = async (realm_id) => {
   if (realm_row.length > 0) {
     const realm = realm_row[0];
 
-    return !realm.is_private;
+    return (await effectiveRealmAccess(pool, realm)).allowed && !realm.is_private;
   }
 
   return false;

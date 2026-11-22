@@ -55,7 +55,9 @@ const world = () => {
   pg.query = async (sql) => {
     if (sql.includes("core_variable")) throw new Error("no table");
     if (sql.includes("FROM community_realm WHERE realm_id")) {
-      return { rows: [{ type: "group", entity_id: "page-entity", is_private: true }] };
+      return { rows: [{ id: 'conv1', realm_id: 'conv1', parent_id: null,
+        is_active: true, deletion_requested_at: null,
+        type: "group", entity_id: "page-entity", is_private: true }] };
     }
     if (sql.includes("FROM community_member")) return { rows: realmMember ? [{ member_id: 1 }] : [] };
     return { rows: [] };

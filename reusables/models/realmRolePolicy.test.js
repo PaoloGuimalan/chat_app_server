@@ -94,7 +94,38 @@ test('configuration entry hints follow current grants rather than a legacy admin
     assert.equal(actor, 'custom-manager'); assert.equal(realm, 'channel');
     return code === 'realm.roles.manage';
   });
-  assert.deepEqual(hints, { can_manage_roles: true, can_manage_permissions: false });
+  assert.equal(hints.can_manage_roles, true);
+  assert.equal(hints.can_manage_permissions, false);
+});
+
+test('lifecycle-only delegates receive management hints without role editing powers', async () => {
+  const { configurationCapabilities } = await policy();
+  const hints = await configurationCapabilities('delegate', 'realm', async (_actor, code) => code === 'realm.deactivate');
+  assert.equal(hints.can_deactivate_realm, true);
+  assert.equal(hints.can_delete_realm, false);
+  assert.equal(hints.can_manage, true);
+  assert.equal(hints.can_manage_roles, false);
+});
+
+test('own-page lifecycle hints use verified personal membership, not the page identity', async () => {
+  const { configurationCapabilities } = await policy();
+  const seen = [];
+  const client = { query: async () => ({ rows: [{ id: 'page', type: 'page', entity_id: 'page-entity', is_active: true }] }) };
+  const hints = await configurationCapabilities('page-entity', 'page', async (actor, code) => {
+    if (code === 'realm.delete') seen.push(actor);
+    return actor === 'page-entity';
+  }, { client, personalID: 'delegate' });
+  assert.equal(hints.can_delete_realm, false);
+  assert.deepEqual(seen, ['delegate']);
+});
+
+test('a manual delete grant cannot give a nonowner a destructive lifecycle hint', async () => {
+  const { configurationCapabilities } = await policy();
+  const client = { query: async sql => ({ rows: sql.includes('FROM community_member') ? [] : [{
+    id: 'realm', entity_id: 'realm-entity', type: 'community', is_active: true }] }) };
+  const hints = await configurationCapabilities('member', 'realm', async (_actor, code) => code === 'realm.delete', { client });
+  assert.equal(hints.can_delete_realm, false);
+  assert.equal(hints.can_manage, false);
 });
 
 test('switched page delegates cannot transfer ownership through the page identity', async () => {

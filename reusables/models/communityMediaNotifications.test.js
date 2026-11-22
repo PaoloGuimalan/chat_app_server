@@ -7,6 +7,7 @@ const { createHash } = require("node:crypto");
 function notifications({
   members = ["member", "admin"], existing = false,
   failMongoAt = 0, failRedisAt = 0, failPushAt = 0, pushReturnsFalse = false,
+  unavailable = false,
 } = {}) {
   const source = fs.readFileSync(require.resolve("./communityMediaNotifications"), "utf8");
   const start = source.indexOf("const notifyCommunityMediaUpdate =");
@@ -20,7 +21,12 @@ function notifications({
   let pushCalls = 0;
   const context = {
     createHash,
-    pool: { query: async (sql, values) => {
+    activeRealmSQL: require('./realmAccess').activeRealmSQL,
+    withActiveRealmWrite: async (_pool, _ids, callback) => {
+      if (unavailable) throw Object.assign(new Error('Unavailable'), { code: 'REALM_UNAVAILABLE' });
+      return callback(context.pool);
+    },
+    pool: { getPool: () => ({}), query: async (sql, values) => {
       assert.match(sql, /JOIN community_member/);
       assert.match(sql, /p\.entity_id = r\.entity_id/);
       assert.match(sql, /r\.is_active = TRUE/);
@@ -62,6 +68,14 @@ function notifications({
     }),
   };
 }
+
+test('a stale media notification does nothing once its community scope is unavailable', async () => {
+  const app = notifications({ unavailable: true });
+  await app.notify();
+  assert.equal(app.rows.length, 0);
+  assert.equal(app.events.length, 0);
+  assert.equal(app.pushes.length, 0);
+});
 
 test("media notifications address only freshly resolved members and identify the community", async () => {
   const app = notifications();

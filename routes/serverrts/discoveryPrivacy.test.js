@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const { activeRealmSQL } = require('../../reusables/models/realmAccess');
 
 test("discovering private servers never grants access to their roster", async () => {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");
@@ -16,6 +17,7 @@ test("discovering private servers never grants access to their roster", async ()
     let handler;
     let rosterReads = 0;
     const context = {
+      activeRealmSQL,
       router: {
         get: (_path, _auth, callback) => {
           handler = callback;

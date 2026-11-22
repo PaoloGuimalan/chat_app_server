@@ -7,6 +7,9 @@ const roles = require("../models/roles");
 function resolver({ memberRole = "11", owners = [], self = false, globalPermission = null, override = null, accountActive = true, entityType = null, owner = false, catalogActive = true, realmType = 'page', realmTypes = ['page'], parentID = null } = {}) {
   const cache = new Map();
   const pool = { query: async (sql) => {
+    if (sql.includes('WITH RECURSIVE')) return { rows: [
+      { start_id: 'realm', id: 'realm', parent_id: parentID, is_active: true },
+      ...(parentID ? [{ start_id: 'realm', id: parentID, parent_id: null, is_active: true }] : [])] };
     if (sql.includes("SELECT code, scope")) return { rows: [{ code: entityType ? "module.test" : globalPermission || "realm.test", scope: entityType ? "entity_type" : globalPermission ? "global" : "realm", is_active: catalogActive, realm_types: realmTypes }] };
     if (sql.includes('SELECT id, entity_id, type, parent_id')) return { rows: [{ id: 'realm', entity_id: self ? 'realm-entity' : 'other', type: realmType, parent_id: parentID, is_active: true }] };
     if (sql.includes("SELECT ep.effect")) return { rows: override == null ? [] : [{ effect: override }] };
@@ -29,6 +32,7 @@ function resolver({ memberRole = "11", owners = [], self = false, globalPermissi
     if (name === "redis") return { createClient: () => ({ on() {}, async connect() {}, async get(k) { return cache.get(k); }, async set(k,v) { cache.set(k,v); } }) };
     if (name === "../database/postgres") return pool;
     if (name === "../models/roles") return roles;
+    if (name === '../models/realmAccess') return require('../models/realmAccess');
     if (name === "../models/permissionApplicability") return require(name);
     if (name === "../vars/redis") return {};
     throw new Error(name);
@@ -43,6 +47,12 @@ test("duplicate-name roles do not share grants and use a per-realm identity cach
   assert.ok(first.cache.has("permcache:role_matrix:v3:realm"));
   const second = resolver({ memberRole: "12" });
   assert.equal(await second.checker.hasPermission("actor", "realm.test", "realm"), false);
+});
+
+test('a previously warm catalogue cannot hide newly deployed lifecycle permission checks', async () => {
+  const { checker, cache } = resolver();
+  cache.set('permcache:catalog:v4', '{}');
+  assert.equal(await checker.hasPermission('actor', 'realm.test', 'realm'), true);
 });
 
 test('fresh global authorization reads standing through the pinned client', async () => {

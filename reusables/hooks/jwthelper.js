@@ -123,6 +123,7 @@ const jwtchecker = async (req, res, next) => {
           req.params.username = currentRow.username;
           req.params.deviceToken = deviceToken;
           req.params.entity_id = decode.entity;
+          req.params.personal_entity_id = currentRow.entity_id;
           req.authenticatedPersonalEntityID = currentRow.entity_id;
           next();
         } else {
@@ -192,6 +193,7 @@ const jwtssechecker = (req, res, next) => {
             req.params.username = currentRow.username;
             req.params.deviceToken = deviceToken;
             req.params.entity_id = decode.entity;
+            req.params.personal_entity_id = currentRow.entity_id;
             // What this SSE stream is ABOUT, for the streams that are about
             // something. The notification stream is scoped by the identity
             // already resolved above and leaves this undefined; the

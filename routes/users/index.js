@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const router = express.Router();
 const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
+const { activeRealmSQL, withActiveRealmWrite } = require("../../reusables/models/realmAccess");
 const {
   notificationAudienceMatch,
   authorizedNotificationStream,
@@ -1615,7 +1616,7 @@ const deliverMessage = async (params, decodedToken) => {
   const messageID = await checkExistingMessageID(makeID(30));
   const conversationID = decodedToken.conversationID;
 
-  await isRealmMember(conversationID, entity_id);
+  const admittedRealm = await isRealmMember(conversationID, entity_id);
 
   const sender = entity_id;
   const receiversfetch = await GetAllReceivers(conversationID);
@@ -1719,6 +1720,7 @@ const deliverMessage = async (params, decodedToken) => {
   // with one catch before this was a function, answering "Error checking
   // message" for a failure in any of the three - kept as one unit here.
   try {
+    await withActiveRealmWrite(pool.getPool(), [conversationID, sender, ...receivers], async (lifecycleClient) => {
     await newMessage.save();
 
     // Context only - see queueMessageTagging. Never awaited: sending a
@@ -1754,7 +1756,9 @@ const deliverMessage = async (params, decodedToken) => {
       new Date(),
       messageType,
       false,
+      lifecycleClient,
     );
+    }, {requiredRealmIDs:[...(admittedRealm ? [conversationID] : []), ...(params.personal_entity_id && params.personal_entity_id !== sender ? [sender] : [])]});
   } catch (err) {
     console.log(err);
     err.saveFailed = true;
@@ -1971,6 +1975,7 @@ const cleanProfile = (profile) =>
  * channel is a realm with a parent server). Null when it is neither.
  */
 const conversationTypeOf = async (conversationID) => {
+  await assertMessagingTarget(pool, conversationID);
   const doc = await Conversations.findOne(
     { conversationID },
     { conversationType: 1 },
@@ -2211,7 +2216,7 @@ router.get("/sendPostTargets", jwtchecker, async (req, res) => {
           UNION ALL
           SELECT r.entity_id, r.slug AS handle, r.name
           FROM community_realm r
-          WHERE r.type = 'page' AND r.is_active = TRUE
+          WHERE r.type = 'page' AND ${activeRealmSQL("r")}
         ) people
         WHERE entity_id <> $1
           AND (name ILIKE $2 OR handle ILIKE $2)
@@ -2272,7 +2277,7 @@ router.get("/sendPostTargets", jwtchecker, async (req, res) => {
       SELECT r.realm_id, r.name, r.slug, r.profile, r.type, r.parent_id,
              s.name AS server_name, s.profile AS server_profile
       FROM community_member m
-      JOIN community_realm r ON r.realm_id = m.realm_id AND r.is_active = TRUE
+      JOIN community_realm r ON r.realm_id = m.realm_id AND ${activeRealmSQL("r")}
       LEFT JOIN community_realm s ON s.realm_id = r.parent_id
       WHERE m.entity_id = $1
         AND (r.type = 'group' OR r.parent_id IS NOT NULL)
@@ -2499,7 +2504,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
       }
 
       const { rows: group_rows } = await pool.query(
-        `SELECT 
+        `SELECT
               json_build_object(
                 '_id', cr.id,
                 'serverID', cr.parent_id,
@@ -2514,7 +2519,7 @@ router.get("/initConversationList", jwtchecker, async (req, res) => {
                 'privacy', cr.is_private,
                 'groupName', cr.name
               ) AS groupdetails,
-              
+
               CASE
                 WHEN cr.parent_id IS NOT NULL THEN
                   json_build_object(
@@ -2658,7 +2663,7 @@ router.get(
               COALESCE(ua.id::text, r.id::text, b.id::text) AS "userID",
               CASE
                 WHEN e.type = 'realm' THEN json_build_object(
-                  'firstName', r.name,
+                  'firstName', COALESCE(r.name, 'Deleted realm'),
                   'middleName', 'N/A',
                   'lastName', ''
                 )
@@ -2679,7 +2684,7 @@ router.get(
                 )
               END AS fullname,
               COALESCE(ua.profile, r.profile, b.profile, 'none') AS profile,
-              COALESCE(ua.is_active, r.is_active, b.is_active, TRUE) AS "isActivated",
+              COALESCE(ua.is_active, r.is_active, b.is_active, e.type <> 'realm') AS "isActivated",
               COALESCE(ua.is_verified, r.is_verified, b.is_verified, FALSE) AS "isVerified"
             FROM entity_entity e
             LEFT JOIN user_account ua ON ua.entity_id = e.id AND e.type = 'user'
@@ -2799,9 +2804,8 @@ const sendMessageInitForGC = async (
 
   const newMessage = new UserMessage(payload);
 
-  newMessage
-    .save()
-    .then(async () => {
+  return withActiveRealmWrite(pool.getPool(), [conversationID, sender, ...receivers], async (lifecycleClient) => {
+      await newMessage.save();
       await ChatHistory.updateMany(
         {
           conversationID: conversationID,
@@ -2825,6 +2829,7 @@ const sendMessageInitForGC = async (
         new Date(),
         messageType,
         false,
+        lifecycleClient,
       );
 
       receivers.map((rcvs, i) => {
@@ -2849,7 +2854,7 @@ const sendMessageInitForGC = async (
         body: content,
         messageId: messageID,
       });
-    })
+    }, {requiredRealmIDs: conversationType !== 'single' ? [conversationID] : []})
     .catch((err) => {
       console.log(err);
     });
@@ -3027,6 +3032,16 @@ const createRealmReusable = async (
   try {
     await client.query("BEGIN");
     transactionOpen = true;
+    if (parentRealmID) {
+      const { rows: parents } = await client.query(`SELECT id, type, is_active, deletion_requested_at
+        FROM community_realm WHERE id = $1 FOR SHARE`, [parentRealmID]);
+      if (parents.length !== 1 || parents[0].type !== 'server' || parents[0].is_active !== true || parents[0].deletion_requested_at != null) {
+        throw Object.assign(new Error('The parent server is unavailable.'), { status: 403 });
+      }
+      if (!(await hasPermission(entityID, 'realm.channel.create', parentRealmID, { client, fresh: true }))) {
+        throw Object.assign(new Error('You cannot create channels in this server.'), { status: 403 });
+      }
+    }
     const contactID = realmID ?? (await checkGroupID(`${makeID(20)}`));
     const privacy = privacyprop;
 
@@ -3233,7 +3248,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
     const serverMembers = await GetServerMembers(serverID, false);
 
     if (privacy) {
-      createRealmReusable(
+      await createRealmReusable(
         entityID,
         serverID,
         null,
@@ -3250,7 +3265,7 @@ router.post("/createchannel", jwtchecker, async (req, res) => {
         false,
       );
     } else {
-      createRealmReusable(
+      await createRealmReusable(
         entityID,
         serverID,
         null,
@@ -3645,6 +3660,7 @@ const saveFileMessage = async (
   onComplete,
   // { fileId, url, name, mime, kind, size, status } - see the message schema.
   attachment = null,
+  requiredRealmIDs = [],
 ) => {
   // const seeners = [entityID]; //Array
   const seeners = [entityID]; //Array
@@ -3676,9 +3692,8 @@ const saveFileMessage = async (
 
   const newMessage = new UserMessage(payload);
 
-  await newMessage
-    .save()
-    .then(async () => {
+  await withActiveRealmWrite(pool.getPool(), [conversationID, entityID, ...receivers], async (lifecycleClient) => {
+      await newMessage.save();
       // Context only - see queueMessageTagging.
       queueMessageTagging({
         messageID,
@@ -3710,9 +3725,10 @@ const saveFileMessage = async (
         new Date(),
         messageType,
         false,
+        lifecycleClient,
       );
-      onComplete(true);
-    })
+    }, {requiredRealmIDs:[...requiredRealmIDs,...(normalizedConversationType !== 'single' ? [conversationID] : [])]})
+    .then(() => onComplete(true))
     .catch((err) => {
       onComplete(false);
       console.log(err);
@@ -3725,10 +3741,11 @@ const sendUploadedFiles = async (params, body) => {
   if (!conversationID) throw new MediaUploadError("Missing conversationID");
   const isReply = body.isReply === true || body.isReply === "true";
   const replyingTo = sanitizeIncomingReplyingTo(body.replyingTo || "");
-  const conversationType = normalizeConversationType(body.conversationType);
+  let conversationType = normalizeConversationType(body.conversationType);
   const pendingIDs = Array.isArray(body.pendingIDs) ? body.pendingIDs : [];
 
-  await isRealmMember(conversationID, entity_id);
+  const admittedRealm = await isRealmMember(conversationID, entity_id);
+  if (admittedRealm) conversationType = normalizeConversationType(admittedRealm.type);
   const records = await resolveMessageUploads({
     accountID: id,
     conversationID,
@@ -3756,6 +3773,7 @@ const sendUploadedFiles = async (params, body) => {
         conversationType,
         resolve,
         attachmentFor(record),
+        [...(admittedRealm ? [conversationID] : []), ...(params.personal_entity_id && params.personal_entity_id !== entity_id ? [entity_id] : [])],
       ),
     );
     if (saved) {

@@ -194,6 +194,10 @@ async function removeParticipant(conversationID, clientID) {
   }
 }
 
+async function clearParticipants(conversationID) {
+  if (publisher) await publisher.del(`call:participants:${conversationID}`);
+}
+
 async function removeAllParticipants(conversationID) {
   if (publisher) {
     const key = `call:participants:${conversationID}`;
@@ -398,6 +402,7 @@ module.exports = {
   addParticipant,
   touchParticipants,
   removeParticipant,
+  clearParticipants,
   getAllParticipants,
   isUniqueNonce,
   bumpLock,

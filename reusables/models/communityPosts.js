@@ -1,5 +1,6 @@
 const communityError = (message, status = 400) =>
   Object.assign(new Error(message), { status, publicMessage: message });
+const { activeRealmSQL } = require('./realmAccess');
 
 const parseAnonymousFlag = (value) => {
   if (value === undefined) return false;
@@ -35,6 +36,7 @@ const resolveCommunityDestination = async (client, entityID, payload, kind) => {
      FROM community_realm r
      JOIN community_member m ON m.realm_id = r.id AND m.entity_id = $2
      WHERE r.entity_id = $1 AND r.type = 'community' AND r.is_active = TRUE
+       AND ${activeRealmSQL("r")}
      FOR SHARE OF r, m`,
     [destination.trim(), entityID],
   );
@@ -70,6 +72,7 @@ const loadCommunityMediaRealm = async (client, realmID, lock = false) => {
     `SELECT r.realm_id, r.entity_id, r.is_private, r.profile, r.cover_photo
      FROM community_realm r
      WHERE r.realm_id = $1 AND r.type = 'community' AND r.is_active = TRUE
+       AND ${activeRealmSQL("r")}
      ${lock ? "FOR UPDATE OF r" : ""}`,
     [realmID],
   );
@@ -81,7 +84,8 @@ const loadCommunityMediaRealm = async (client, realmID, lock = false) => {
 
 const loadPostCommunity = async (client, postID, viewerID) => {
   const { rows } = await client.query(
-    `SELECT r.entity_id, r.realm_id, r.is_private, r.is_active, p.approval,
+    `SELECT r.entity_id, r.realm_id, r.is_private,
+            (r.is_active AND ${activeRealmSQL("r")} ) AS is_active, p.approval,
             EXISTS (
               SELECT 1 FROM community_member m
               WHERE m.realm_id = r.id AND m.entity_id = $2
@@ -160,6 +164,7 @@ const communityAudienceSQL = (postAlias, viewerParam) => `(
     ${communityScopeSQL(postAlias)}
     AND (
       community.is_active = FALSE
+      OR NOT ${activeRealmSQL("community")}
       OR (community.is_private = TRUE AND NOT EXISTS (
         SELECT 1 FROM community_member community_member
         WHERE community_member.realm_id = community.id

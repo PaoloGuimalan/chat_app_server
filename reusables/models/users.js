@@ -405,7 +405,7 @@ const GetUsersWithConnectionIDs = async (connectionIDs) => {
             'userID', COALESCE(u.username, r.slug, b.handle),
             'fullname', CASE
               WHEN p.type = 'realm' THEN jsonb_build_object(
-                'firstName', r.name,
+                'firstName', COALESCE(r.name, 'Deleted realm'),
                 'middleName', '',
                 'lastName', ''
               )

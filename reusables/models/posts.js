@@ -7,6 +7,7 @@ const { isModerationServiceOnline } = require("../redis/pubsub");
 const cassandra = require("cassandra-driver");
 const { query: cassandraQuery } = require("../database/cassandra");
 const { communityAudienceSQL, communityScopeSQL } = require("./communityPosts");
+const { activeRealmSQL } = require('./realmAccess');
 
 const checkPostIDExisting = async (currentID) => {
   const { rows } = await pool.query(
@@ -272,11 +273,16 @@ const ordinaryPostVisibleToSQL = (postAlias, viewerParam) => `(
 )`;
 
 const postVisibleToSQL = (postAlias, viewerParam) => `(
+  NOT EXISTS (SELECT 1 FROM entity_entity realm_author
+    WHERE realm_author.id = ${postAlias}.entity_id AND realm_author.type = 'realm'
+      AND NOT EXISTS (SELECT 1 FROM community_realm available_author
+        WHERE available_author.entity_id = realm_author.id AND ${activeRealmSQL("available_author")} ))
+  AND (
   ${communityAudienceSQL(postAlias, viewerParam)}
   OR (
     NOT EXISTS (${communityScopeSQL(postAlias)})
     AND ${ordinaryPostVisibleToSQL(postAlias, viewerParam)}
-  )
+  ))
 )`;
 
 const CanEntityViewPost = async (postID, entityID) => {

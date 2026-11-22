@@ -131,6 +131,7 @@ app.get("/", (req, res) => {
   // 2. Connect Redis (required for pub/sub SSE delivery)
   await connect_redis();
   listen_sub(POD_NAME, webRTCEvents);
+  listen_sub('realm_lifecycle', webRTCEvents);
   registerSelf();
 
   // 3. Connect databases

@@ -79,6 +79,7 @@ const {
   stop_listen,
 } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { lockActiveRealmScopes } = require("../../reusables/models/realmAccess");
 const { resolveCommunityPostApproval } = require("../../reusables/models/communityPublication");
 const {
   loadPostCommunity,
@@ -551,6 +552,11 @@ const createPostFromPayload = async ({
 
     try {
       await client.query("BEGIN");
+      // The existing destination query below already locks the community.
+      // Only acting-as-page posts need the additional source scope lock.
+      if (!trustedCommunityMedia && entityID !== params.personal_entity_id) {
+        await lockActiveRealmScopes(client, [entityID, community?.realm_id]);
+      }
       community = trustedCommunityMedia
         ? await loadCommunityMediaRealm(client, trustedCommunityMedia.realmID, true)
         : await resolveCommunityDestination(client, entityID, decodeToken, kind);

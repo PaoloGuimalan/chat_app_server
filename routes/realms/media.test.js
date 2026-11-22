@@ -2,6 +2,42 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const { withActiveRealmWrite } = require('../../reusables/models/realmAccess');
+
+function mediaMutation(active) {
+  const source = fs.readFileSync(require.resolve('./index'), 'utf8');
+  const start = source.indexOf('const applyRealmMedia =');
+  const end = source.indexOf('// { realm_id', start);
+  const events = [], attachments = [];
+  const current = { url: 'https://storage/old.jpg' };
+  const client = { async query(sql, params) {
+    events.push(sql);
+    if (sql.includes('WITH RECURSIVE')) return { rows: [{ lookup_id: 'realm', start_id: 'realm', id: 'realm', parent_id: null, is_active: active }] };
+    if (sql.includes(' AS url ')) return { rows: [{ ...current }] };
+    if (sql.startsWith('UPDATE')) current.url = params[0];
+    return { rows: [] };
+  }, release() {} };
+  const context = { REALM_MEDIA_COLUMN: { profile: 'profile', cover_photo: 'cover_photo' },
+    withActiveRealmWrite, pool: { query: (...args) => client.query(...args), getPool: () => ({ connect: async () => client }) },
+    attachRecords: async records => { attachments.push(...records); }, publishRelease: () => events.push('publish') };
+  vm.runInNewContext(source.slice(start, end) + '\nthis.apply = applyRealmMedia;', context);
+  return { events, current, attachments, apply: () => context.apply('realm', 'profile', { fileDetails: { data: 'https://storage/new.jpg' } }) };
+}
+
+test('realm media finishing after deactivation cannot update its profile or attachments', async () => {
+  const fixture = mediaMutation(false);
+  await assert.rejects(fixture.apply(), /unavailable/i);
+  assert.equal(fixture.current.url, 'https://storage/old.jpg');
+  assert.equal(fixture.attachments.length, 0);
+});
+
+test('realm media publishes release only after the guarded profile transaction commits', async () => {
+  const fixture = mediaMutation(true);
+  assert.equal(await fixture.apply(), 'https://storage/new.jpg');
+  assert.equal(fixture.attachments.length, 1);
+  assert.ok(fixture.events.includes('COMMIT'));
+  assert.ok(fixture.events.indexOf('COMMIT') < fixture.events.indexOf('publish'));
+});
 
 function uploadRoute({ type = "community", allowed = true, mismatch = false, stalePermission = false } = {}) {
   const source = fs.readFileSync(require.resolve("./index"), "utf8");

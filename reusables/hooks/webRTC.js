@@ -6,9 +6,14 @@ const {
   publish,
   removeParticipant,
   touchParticipants,
+  clearParticipants,
+  publish_pub,
 } = require("../redis/pubsub");
 const rs = require("../redis/roomState");
 const pipeManager = require("./pipeManager");
+const pool = require('../database/postgres');
+const { realmAccess, withActiveRealmWrite, withRealmScopeRead } = require('../models/realmAccess');
+const { disposeLocalRoom, createRealmLifecycleController, createRoomRegistry, guardRealmAction, personalConversation } = require('../models/realmLifecycleEvents');
 
 const POD_NAME = process.env.POD_NAME || process.env.HOSTNAME || "podless";
 
@@ -215,6 +220,7 @@ function getNextWorker() {
 // via roomState.js so it survives pod restarts and is visible across pods.
 
 const nativeRooms = new Map(); // conversationID -> { router, transports, producers }
+const createNativeRoom = createRoomRegistry(nativeRooms);
 
 // Stale room cleanup — evict in-process state + Redis state after TTL
 const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
@@ -281,6 +287,29 @@ const DISCONNECT_GRACE_MS = 20 * 1000;
 
 // "conversationID|clientId" -> Timeout
 const disconnectTimers = new Map();
+
+async function closeRoomForLifecycle(conversationID) {
+  return withRealmScopeRead(pool.getPool(), [conversationID], async client => {
+    const state = await realmAccess(client, conversationID);
+    if (state.allowed) return; // A delayed event cannot close a restored call.
+    return disposeLocalRoom(conversationID, {
+    rooms: nativeRooms, roomState: rs, clearParticipants,
+    cleanupPipes: pipeManager.cleanupPipesForRoom,
+    clearTimers(id) {
+      clearTimeout(emptyRoomTimers.get(id)); emptyRoomTimers.delete(id);
+      for (const [key, timer] of disconnectTimers) {
+        if (key.startsWith(`${id}|`)) { clearTimeout(timer); disconnectTimers.delete(key); }
+      }
+    },
+    });
+  });
+}
+
+const lifecycleController = createRealmLifecycleController({ client: pool, rooms: nativeRooms,
+  closeLocal: closeRoomForLifecycle, roomState: rs, relay: publish_pub, podName: POD_NAME });
+const lifecycleSweep = setInterval(() => lifecycleController.sweep()
+  .catch(error => console.error('[realm lifecycle] room sweep failed:', error.message)), 30_000);
+lifecycleSweep.unref?.();
 
 const disconnectKey = (conversationID, clientId) =>
   `${conversationID}|${clientId}`;
@@ -442,20 +471,23 @@ async function getOrCreateNativeRoom(conversationID) {
   // Ensure workers are initialized before creating any router
   if (!workersReady) await workersReadyPromise;
 
-  if (!nativeRooms.has(conversationID)) {
+  return createNativeRoom(conversationID, () => withActiveRealmWrite(pool.getPool(), [conversationID], async client => {
+    const access = await realmAccess(client, conversationID);
+    if (!access.found && !await personalConversation(client,conversationID)) throw require('../models/realmAccess').unavailable();
     const worker = getNextWorker();
     const router = await worker.createRouter({ mediaCodecs });
-    nativeRooms.set(conversationID, {
+    const room = {
       router,
       transports: new Map(),
       producers: new Map(),
-    });
+      realmID: access.found ? access.chain[0] : null,
+    };
     // Record which pod owns this room's router so other pods can relay correctly
     await rs
       .setRoomPod(conversationID, POD_NAME)
       .catch((err) => console.error("[roomState] setRoomPod error:", err));
-  }
-  return nativeRooms.get(conversationID);
+    return room;
+  }));
 }
 
 function scheduleRoomCleanup(conversationID) {
@@ -1349,25 +1381,40 @@ function webRTCEvents(event, message) {
         .handlePipeEvent(event, message)
         .catch((err) => console.error(`${event} error:`, err));
       break;
+    case 'realm-lifecycle-relay':
+      if (typeof message?.realm_id === 'string') lifecycleController.onEvent(message.realm_id)
+        .catch(error => console.error('[realm lifecycle] relay failed:', error.message));
+      break;
     default:
       break;
   }
 }
 
+const admissionEvents = new Set(['join-room-relay', 'create-transport-relay', 'transport-connect-relay',
+  'produce-relay', 'consume-relay', 'participant-status-relay']);
+function guardedWebRTCEvents(event, message) {
+  if (!admissionEvents.has(event)) return webRTCEvents(event, message);
+  return guardRealmAction(pool, message.conversationID, () => webRTCEvents(event, message))
+    .catch(error => console.error('[realm lifecycle] call admission denied:', error.message));
+}
+const admit = fn => (...args) => guardRealmAction(pool, args[0], () => fn(...args));
+
 module.exports = {
   workers,
   nativeRooms,
   workersReadyPromise,
-  webRTCEvents,
+  webRTCEvents: guardedWebRTCEvents,
   evictClientSession,
-  joinRoom,
-  createTransport,
-  transportConnect,
-  produce,
-  consume,
+  joinRoom: admit(joinRoom),
+  createTransport: admit(createTransport),
+  transportConnect: admit(transportConnect),
+  produce: admit(produce),
+  consume: admit(consume),
   closeProducer,
   leaveRoom,
-  participantStatus,
+  participantStatus: admit(participantStatus),
+  closeRoomForLifecycle,
+  closeRealmRooms: lifecycleController.closeRealmRooms,
   CAMERA_ENCODINGS,
   SCREENSHARE_ENCODINGS,
 };

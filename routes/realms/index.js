@@ -13,6 +13,7 @@ const {
   SyncConversationParticipants,
 } = require("../../reusables/models/messages");
 const { isRealmMember } = require("../../reusables/models/realms");
+const { withActiveRealmWrite } = require('../../reusables/models/realmAccess');
 const {
   GetSenderDetails,
   GetEntityHandles,
@@ -32,18 +33,15 @@ const REALM_MEDIA_COLUMN = { profile: "profile", cover_photo: "cover_photo" };
  */
 const applyRealmMedia = async (realm_id, media_type, upload) => {
   const column = REALM_MEDIA_COLUMN[media_type];
-  const { rows: before } = await pool.query(
-    `SELECT ${column} AS url FROM community_realm WHERE realm_id = $1`,
-    [realm_id],
-  );
   const url = upload.fileDetails.data;
-  await pool.query(`UPDATE community_realm SET ${column} = $1 WHERE realm_id = $2`, [
-    url,
-    realm_id,
-  ]);
   const target = { type: "realm_media", id: String(realm_id) };
-  attachRecords([upload], target);
-  const previous = before[0]?.url;
+  const previous = await withActiveRealmWrite(pool.getPool(), [realm_id], async client => {
+    const { rows: before } = await client.query(
+      `SELECT ${column} AS url FROM community_realm WHERE realm_id = $1`, [realm_id]);
+    await client.query(`UPDATE community_realm SET ${column} = $1 WHERE realm_id = $2`, [url, realm_id]);
+    await attachRecords([upload], target);
+    return before[0]?.url;
+  });
   if (previous && previous !== url) {
     publishRelease([{ target, urls: [previous] }]);
   }

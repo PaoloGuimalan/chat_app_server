@@ -40,6 +40,7 @@ const {
 const producer = require("../../reusables/rabbitmq/producer");
 const { publish, getAllParticipants } = require("../../reusables/redis/pubsub");
 const pool = require("../../reusables/database/postgres");
+const { blockedConversationIDs } = require('../../reusables/models/conversationAvailability');
 const {
   formatConnectionData,
   formatToDesiredStructure,
@@ -590,7 +591,7 @@ router.get(
         try {
           await isRealmMember(resolvedConversationID, entity_id);
         } catch (err) {
-          if (!isConferenceRealm) {
+          if (!isConferenceRealm || err.code === 'REALM_UNAVAILABLE') {
             throw err;
           }
           // Conferences show a lobby before the caller has joined/accepted an
@@ -667,7 +668,8 @@ router.get(
 
         formattedResult.chatHistory = chatHistory;
 
-        formattedResult.capabilities = await configurationCapabilities(entity_id, resolvedConversationID)
+        formattedResult.capabilities = await configurationCapabilities(entity_id, resolvedConversationID, undefined,
+          { client: pool, personalID: req.authenticatedPersonalEntityID || null })
           .catch(error => { console.error('Realm configuration hints unavailable:', error); return {}; });
 
         // Shared files are paged from /conversationfiles - see the single
@@ -1178,8 +1180,16 @@ router.get("/archives", jwtchecker, async (req, res) => {
     const entityID = req.params.entity_id;
     const page = req.headers["page"];
     const range = req.headers["range"];
+    const archiveIDs=await ChatHistory.distinct('conversationID',{entityID,isArchived:true});
+    const archiveMetadata=await Conversations.aggregate([
+      {$match:{conversationID:{$in:archiveIDs}}},{$project:{conversationID:1,conversationType:1}},
+    ]);
+    const metadataByID=new Map(archiveMetadata.map(row=>[String(row.conversationID),row]));
+    const candidates=archiveIDs.map(id=>metadataByID.get(String(id))||{conversationID:id});
+    const blocked=await blockedConversationIDs(pool,candidates);
 
     await UserMessage.aggregate([
+      {$match:{conversationID:{$nin:blocked}}},
       {
         $lookup: {
           from: "chat_history",
@@ -1467,6 +1477,10 @@ router.get("/conversations", jwtchecker, async (req, res) => {
         match.conversationType = { $in: typeArray };
       }
     }
+
+    const candidates=await Conversations.aggregate([{$match:match},{$project:{conversationID:1,conversationType:1}}]);
+    const blocked=await blockedConversationIDs(pool,candidates);
+    match.conversationID={$nin:blocked};
 
     const result_raw = await Conversations.aggregate([
       {

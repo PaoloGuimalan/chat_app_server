@@ -1,5 +1,6 @@
 const pool = require("../database/postgres");
 const { realmPermissionSQL } = require('./permissionApplicability');
+const { activeRealmSQL } = require('./realmAccess');
 
 async function canActAsEntity(personalID, actingID, client = pool) {
   if (!personalID || !actingID) return false;
@@ -9,6 +10,7 @@ async function canActAsEntity(personalID, actingID, client = pool) {
     JOIN community_member member ON member.realm_id = realm.id AND member.entity_id = $1
     JOIN entity_role role ON role.id = member.role_id AND role.realm_id = realm.id
     WHERE realm.entity_id = $2 AND realm.is_active = TRUE
+      AND ${activeRealmSQL("realm")}
       AND realm.type = 'page'
       AND EXISTS (
         SELECT 1 FROM entity_permission_catalog pc WHERE pc.code = 'realm.identity.act'

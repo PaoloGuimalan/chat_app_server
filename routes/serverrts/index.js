@@ -10,6 +10,7 @@ const makeID = require("../../reusables/hooks/makeID");
 const { jwtchecker, createJWT } = require("../../reusables/hooks/jwthelper");
 const router = express.Router();
 const { assertMessagingTarget } = require("../../reusables/models/realmCapabilities");
+const { activeRealmSQL } = require('../../reusables/models/realmAccess');
 const {
   LEGACY_REPLYING_TO_EXPR,
 } = require("../../reusables/hooks/replyTargets");
@@ -89,6 +90,7 @@ router.get("/publicservers", jwtchecker, async (req, res) => {
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.entity_id != $1
+    AND ${activeRealmSQL("cr")}
         AND cr.type = 'server' AND cr.is_private = false
     GROUP BY cr.id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
@@ -114,7 +116,7 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `
-    SELECT 
+    SELECT
         cr.id,
         cr.entity_id,
         cr.realm_id,
@@ -149,6 +151,7 @@ router.get("/initserverlist", jwtchecker, async (req, res) => {
     FROM community_realm cr
     JOIN community_member cm ON cr.realm_id = cm.realm_id
     WHERE cm.entity_id = $1
+        AND ${activeRealmSQL("cr")}
         AND cr.type = 'server'
     GROUP BY cr.id, cr.entity_id, cr.realm_id, cr.name, cr.profile, cr.created_by_id, cr.is_private, cr.type;
     `,
@@ -179,6 +182,9 @@ router.get(
     const entityID = req.params.entity_id;
     const conversationID = req.params.conversationID;
     const parent_realm = req.params.parent_realm;
+
+    try { await assertMessagingTarget(pool, conversationID, parent_realm); }
+    catch (error) { return res.status(error.status || 503).send({ status: false, message: 'This realm is unavailable.' }); }
 
     await UserMessage.aggregate([
       {
@@ -381,7 +387,7 @@ router.get(
           return;
         }
 
-        details_result.groupdetails.capabilities = await configurationCapabilities(entityID, conversationID)
+        details_result.groupdetails.capabilities = await configurationCapabilities(entityID, conversationID, undefined, { client: pool })
           .catch(error => { console.error('Channel configuration hints unavailable:', error); return {}; });
 
         const encodedResult = jwt.sign(
@@ -419,6 +425,9 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   const entityID = req.params.entity_id;
   const serverID = req.params.serverID;
 
+  try { await assertMessagingTarget(pool, serverID); }
+  catch (error) { return res.status(error.status || 503).send({ status: false, message: 'This realm is unavailable.' }); }
+
   // A page's own entity can never appear as a Member row of its own realm
   // (community_member only ever holds personal accounts) - so once switched
   // to act as this exact server, the Member lookup below would always miss
@@ -444,7 +453,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
   }
 
   const { rows } = await pool.query(
-    `SELECT 
+    `SELECT
     json_build_object(
       '_id', cr.id,
       'entityID', cr.entity_id,
@@ -517,7 +526,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
         )
         FROM community_realm pcr
         LEFT JOIN user_account ppua ON pcr.created_by_id = ppua.entity_id
-        WHERE pcr.parent_id = cr.realm_id
+        WHERE pcr.parent_id = cr.realm_id AND ${activeRealmSQL("pcr")}
       ), '[]'::jsonb),
       -- Members are ENTITIES: a page can be a member of a server/channel.
       -- This used to INNER JOIN user_account, which dropped every realm
@@ -578,7 +587,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     )
   FROM community_realm cr
   LEFT JOIN user_account pua ON cr.created_by_id = pua.entity_id
-  WHERE cr.realm_id = $2;`,
+  WHERE cr.realm_id = $2 AND ${activeRealmSQL("cr")} ;`,
     [entityID, serverID],
   );
 
@@ -599,7 +608,7 @@ router.get("/initserverchannels/:serverID", jwtchecker, async (req, res) => {
     console.error("[initserverchannels] can_create_channel check failed:", err);
     return false;
   });
-  deconstructedData.capabilities = await configurationCapabilities(entityID, serverID)
+  deconstructedData.capabilities = await configurationCapabilities(entityID, serverID, undefined, { client: pool })
     .catch(error => { console.error('Server configuration hints unavailable:', error); return {}; });
 
   UserMessage.aggregate([
@@ -847,7 +856,8 @@ router.get("/getservermembers/:serverID", jwtchecker, async (req, res) => {
           WHERE m.realm_id = r.id AND m.entity_id = $2
         )) AS has_access
        FROM community_realm r
-       WHERE r.realm_id = $1 AND r.type = 'server' AND r.is_active = true`,
+       WHERE r.realm_id = $1 AND r.type = 'server' AND r.is_active = true
+         AND ${activeRealmSQL("r")} `,
       [serverID, entityID],
     );
     if (!rows.length || (rows[0].is_private && !rows[0].has_access)) {
@@ -1038,6 +1048,9 @@ router.put("/transfer-realm-ownership", jwtchecker, async (req, res) => {
       return;
     }
 
+    // A page must still exist and be active before taking ownership. The
+    // shared page lock also makes concurrent page deletion see this transfer.
+    await assertMessagingTarget(client, entityID, targetRows[0].entity_id);
     const ownerRoleID = await realmOwnerRoleID(client, realm_id);
     if (ownerRoleID == null) {
       return res.status(400).send({ status: false, message: "Realm has ambiguous owner role definitions." });
