@@ -3198,14 +3198,18 @@ const createRealmReusable = async (
       const creatorHandle =
         rows.filter((mp) => mp.entity_id === entityID)[0]?.username ?? "";
 
-      sendMessageInitForGC(
+      await sendMessageInitForGC(
         contactID,
         entityID,
         creatorHandle,
         allReceivers,
         `created the ${type === "group" ? "group chat" : type}`,
         type,
-      );
+      ).catch((error) => {
+        // The realm is committed. A failed system notice must not crash the
+        // process or report a persisted realm as a failed creation.
+        console.log("Failed to announce realm creation:", error);
+      });
     }
   } catch (ex) {
     if (transactionOpen) await client.query("ROLLBACK");
@@ -3313,7 +3317,7 @@ router.post(
         entityID: alr,
       }));
 
-      createRealmReusable(
+      await createRealmReusable(
         entityID,
         null,
         serverID,
@@ -3330,8 +3334,11 @@ router.post(
         false,
       );
 
-      defaultchannellist.map((mp) => {
-        createRealmReusable(
+      // Each channel checks the parent under a database lock. Commit the server
+      // first, and handle creation failures in this request rather than leaving
+      // rejected background promises to terminate the realtime process.
+      for (const mp of defaultchannellist) {
+        await createRealmReusable(
           entityID,
           serverID,
           null,
@@ -3347,8 +3354,8 @@ router.post(
           null,
           false,
         );
-      });
-      res.send({ status: true, message: `You created a Group Chat` });
+      }
+      res.send({ status: true, message: `You created a Server` });
     } catch (ex) {
       res.send({ status: false, message: "Group token encountered an error!" });
       console.log(ex);

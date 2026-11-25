@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const { ensureDefaultRoles } = require("../../reusables/models/roles");
 
-function creation({ failGrants = false, failBegin = false, parentActive = null } = {}) {
+function creation({ failGrants = false, failBegin = false, parentActive = null, failNotice = false, type = 'page' } = {}) {
   const events = [], roles = new Map();
   let hasRealm = false, released = false, create;
   const client = { release() { assert.equal(released, false); released = true; events.push("release"); }, async query(sql, values) {
@@ -36,16 +36,24 @@ function creation({ failGrants = false, failBegin = false, parentActive = null }
     validateProfilePath: async () => {}, assertMessagingTarget: async () => {}, hasPermission: async () => true,
     uuidv4: () => "id", console: { log() {} },
     CreateEntity: async (type, pinned) => { assert.equal(pinned, client); assert.equal(events[0], "BEGIN"); return "entity"; },
-    sendMessageInitForGC() { assert.equal(released, true); }, publish() { assert.equal(released, true); } };
+    async sendMessageInitForGC() { assert.equal(released, true); if (failNotice) throw new Error('notice failed'); }, publish() { assert.equal(released, true); } };
   vm.runInNewContext(block + "\nthis.create = createRealmReusable;", context);
   create = () => context.create("actor", parentActive === null ? null : 'parent', "realm", "Realm", null, null, "", "actor",
-    [{ entityID: "actor" }, { entityID: "member" }], false, "page", null, "slug", false);
+    [{ entityID: "actor" }, { entityID: "member" }], false, type, null, "slug", false);
   return { create, events };
 }
 
 test("realm creation seeds realm roles and memberships in one pinned transaction", async () => {
   const f = creation(); await f.create();
   assert.deepEqual(f.events, ["BEGIN", "realm", "owner", "admin", "member", "members", "COMMIT", "release"]);
+});
+
+test('a failed post-commit channel notice is handled without failing committed creation', async () => {
+  const f = creation({ type: 'channel', parentActive: true, failNotice: true });
+  await f.create();
+  assert.ok(f.events.includes('COMMIT'));
+  assert.ok(!f.events.includes('ROLLBACK'));
+  assert.equal(f.events.at(-1), 'release');
 });
 
 test('channel creation rechecks parent state inside its transaction before inserting anything', async () => {
@@ -81,3 +89,30 @@ for (const failure of ["failGrants", "failBegin"]) {
     if (failure === "failGrants") assert.ok(f.events.includes("ROLLBACK"));
   });
 }
+
+test('server creation commits its parent before creating default channels and replying', async () => {
+  const source = fs.readFileSync(require.resolve('./index'), 'utf8');
+  const start = source.lastIndexOf('router.post(', source.indexOf('"/createserver"'));
+  const end = source.indexOf('router.post("/createconference"', start);
+  let handler, finishParent, sent;
+  const calls = [];
+  const parent = new Promise(resolve => { finishParent = resolve; });
+  vm.runInNewContext(source.slice(start, end), {
+    router: { post(_path, _auth, _permission, fn) { handler = fn; } },
+    jwtchecker() {}, requiresPermission: () => () => {}, JWT_SECRET: 'fixture',
+    jwt: { verify: () => ({ otherUsers: [], groupName: 'Server', privacy: true }) },
+    checkGroupID: async () => 'server', makeID: () => 'id', console: { log() {} },
+    createRealmReusable: async (...args) => {
+      calls.push(args[10]);
+      if (args[10] === 'server') await parent;
+    },
+  });
+  const request = handler({ params: { entity_id: 'actor' }, body: { token: 'fixture' } },
+    { send(value) { sent = value; } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['server']);
+  assert.equal(sent, undefined);
+  finishParent(); await request;
+  assert.deepEqual(calls, ['server', 'channel', 'channel', 'channel']);
+  assert.equal(sent.status, true);
+});
